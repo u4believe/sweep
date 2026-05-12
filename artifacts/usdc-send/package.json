@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --config vite.config.ts --host 0.0.0.0",
-    "build": "vite build --config vite.config.ts",
+    "dev": "NODE_OPTIONS='--max-old-space-size=1024' vite --config vite.config.ts --host 0.0.0.0",
+    "build": "NODE_OPTIONS='--max-old-space-size=1024' vite build --config vite.config.ts",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

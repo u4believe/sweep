@@ -26,9 +26,9 @@
 import { Router, type IRouter } from "express";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
-import { db, usersTable, otpCodesTable, escrowsTable, escrowBalancesTable, chainTransactionsTable } from "@workspace/db";
+import { db, usersTable, otpCodesTable, subscriptionPassportsTable } from "@workspace/db";
 import { hashEmail } from "../lib/escrow.js";
-import { eq, and, gt, sql } from "drizzle-orm";
+import { eq, and, gt, ne, sql } from "drizzle-orm";
 import { requireAuth, requireEmailVerified } from "../lib/auth.js";
 import { sendSecurityOtpEmail } from "../lib/email.js";
 import { logger } from "../lib/logger.js";
@@ -45,7 +45,7 @@ const BCRYPT_ROUNDS = 10;
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function generateOtp(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(crypto.randomInt(100000, 1000000));
 }
 
 async function issueOtp(userId: number, type: string): Promise<string> {
@@ -165,6 +165,11 @@ router.post("/txn-password/set", requireAuth, requireEmailVerified, async (req, 
     const transactionPasswordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     await db.update(usersTable).set({ transactionPasswordHash }).where(eq(usersTable.id, userId));
 
+    // Suspend any active passport — security profile changed, re-verify before next use
+    await db.update(subscriptionPassportsTable)
+      .set({ status: "suspended" })
+      .where(and(eq(subscriptionPassportsTable.userId, userId), ne(subscriptionPassportsTable.status, "revoked")));
+
     res.json({ success: true, message: "Transaction password set successfully." });
   } catch (err: any) {
     logger.error({ err }, "[security/txn-password/set]");
@@ -199,6 +204,42 @@ router.post("/pak/request-otp", requireAuth, async (req, res) => {
     res.json({ sent: true, message: "Verification code sent to your email." });
   } catch (err: any) {
     logger.error({ err }, "[security/pak/request-otp]");
+    res.status(500).json({ error: "Internal server error", message: err.message });
+  }
+});
+
+// ── POST /api/security/pak/generate-first ────────────────────────────────────
+// First-time PAK generation — no OTP required. Only works when no PAK exists.
+// Email is already verified at this point (requireEmailVerified enforced).
+
+router.post("/pak/generate-first", requireAuth, requireEmailVerified, async (req, res) => {
+  try {
+    const { userId } = (req as any).user;
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (!user) { res.status(404).json({ error: "Not found", message: "User not found" }); return; }
+
+    if (user.pakHash) {
+      res.status(409).json({ error: "Conflict", message: "A PAK already exists. Use regenerate instead." });
+      return;
+    }
+
+    const pak       = generatePak();
+    const pakHash   = await bcrypt.hash(pak, BCRYPT_ROUNDS);
+    const pakPrefix = pak.slice(0, 3);
+    const pakSuffix = pak.slice(-4);
+
+    await db.update(usersTable)
+      .set({ pakHash, pakPrefix, pakSuffix, pakCreatedAt: new Date(), pakCopiedAt: null })
+      .where(eq(usersTable.id, userId));
+
+    res.json({
+      success: true,
+      pak,
+      pakPreview: maskPak(pakPrefix, pakSuffix),
+      message: "PAK generated. Copy it now — it will not be shown again.",
+    });
+  } catch (err: any) {
+    logger.error({ err }, "[security/pak/generate-first]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
 });
@@ -415,6 +456,11 @@ router.post("/change-txn-password/confirm", requireAuth, async (req, res) => {
 
     const transactionPasswordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
     await db.update(usersTable).set({ transactionPasswordHash }).where(eq(usersTable.id, userId));
+
+    // Suspend any active passport — old TXN password verification is now stale
+    await db.update(subscriptionPassportsTable)
+      .set({ status: "suspended" })
+      .where(and(eq(subscriptionPassportsTable.userId, userId), ne(subscriptionPassportsTable.status, "revoked")));
 
     res.json({ success: true, message: "Transaction password updated successfully." });
   } catch (err: any) {

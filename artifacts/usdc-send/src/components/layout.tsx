@@ -24,9 +24,9 @@ export function Navbar() {
       className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-md border-b border-border/50 transition-all duration-300"
     >
       <div className="w-full px-4 sm:px-6">
-        <div className="flex justify-between items-center h-20">
+        <div className="flex justify-between items-center h-28">
           <Link href="/landing" className="flex items-center group">
-            <img src="/EPEE4721.JPG" alt="SEND" className="h-16 w-auto object-contain" />
+            <img src="/Sweep_logo_exact.svg" alt="Sweep" className="h-24 w-auto object-contain" />
           </Link>
 
           <div className="flex items-center gap-4">
@@ -50,10 +50,10 @@ export function Navbar() {
                   </div>
                   <button
                     onClick={handleLogout}
-                    className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors"
-                    title="Log out"
+                    aria-label="Log out"
+                    className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
                   >
-                    <LogOut className="w-5 h-5" />
+                    <LogOut className="w-5 h-5" aria-hidden />
                   </button>
                 </div>
               </>
@@ -78,7 +78,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen flex flex-col">
       <Navbar />
-      <main className="flex-1 pt-20">
+      <main className="flex-1 pt-28">
         {children}
       </main>
     </div>

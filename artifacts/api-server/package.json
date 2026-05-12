@@ -6,10 +6,13 @@
   "scripts": {
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
-    "start": "fuser -k 3001/tcp 2>/dev/null; set -a && . ./.env && set +a && node --enable-source-maps ./dist/index.mjs",
+    "start": "fuser -k 3001/tcp 2>/dev/null; set -a && . ./.env && set +a && NODE_OPTIONS='--max-old-space-size=4096' node ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@circle-fin/adapter-circle-wallets": "^1.0.0",
+    "@circle-fin/adapter-viem-v2": "^1.8.2",
+    "@circle-fin/app-kit": "^1.0.0",
     "@circle-fin/developer-controlled-wallets": "^10.2.0",
     "@types/nodemailer": "^7.0.11",
     "@workspace/api-zod": "workspace:*",
@@ -21,11 +24,14 @@
     "drizzle-orm": "catalog:",
     "ethers": "^6.16.0",
     "express": "^5",
+    "express-rate-limit": "^8.5.1",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "nodemailer": "^8.0.3",
     "pino": "^9",
-    "pino-http": "^10"
+    "pino-http": "^10",
+    "resend": "^6.12.3",
+    "viem": "^2.48.0"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",

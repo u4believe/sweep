@@ -44,6 +44,10 @@ export default defineConfig({
         target: `http://localhost:${apiPort}`,
         changeOrigin: true,
       },
+      "/v1": {
+        target: `http://localhost:${apiPort}`,
+        changeOrigin: true,
+      },
     },
   },
   preview: {
@@ -52,6 +56,10 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       "/api": {
+        target: `http://localhost:${apiPort}`,
+        changeOrigin: true,
+      },
+      "/v1": {
         target: `http://localhost:${apiPort}`,
         changeOrigin: true,
       },

@@ -1,4 +1,19 @@
+/**
+ * Admin routes — protected by ADMIN_SECRET header.
+ *
+ *   GET  /api/admin/treasury          — Platform treasury balance (ARC-TESTNET)
+ *   GET  /api/admin/bridge-jobs       — Bridge job ledger (paginated)
+ *   POST /api/admin/bridge-jobs/:id/retry — Manually requeue a failed job
+ *   POST /api/admin/withdraw          — Send USDC from treasury to any address
+ *   GET  /api/admin/blocked-ips       — List currently blocked IPs
+ *   GET  /api/admin/ip-stats/:ip      — Violation history for a specific IP
+ *   POST /api/admin/unblock-ip        — Manually lift a block
+ */
+
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { db, bridgeJobsTable } from "@workspace/db";
+import { eq, desc } from "drizzle-orm";
 import {
   circleTransferUsdc,
   getWalletUsdcBalance,
@@ -7,67 +22,110 @@ import {
   probeGasStationStatus,
   isGasStationEnabled,
   PRIMARY_BLOCKCHAIN,
-  PRIMARY_USDC_ADDRESS,
-  type SupportedBlockchain,
-  SUPPORTED_BLOCKCHAINS,
 } from "../lib/circle.js";
-import { cctpBridgeToTreasury, getTreasuryBalancesAllChains } from "../lib/cctp.js";
+import { getBlockedIps, getIpStats, unblockIp } from "../lib/threatMonitor.js";
 
 const router: IRouter = Router();
 
-// ─── Admin auth middleware ────────────────────────────────────────────────────
+// ─── Admin auth ───────────────────────────────────────────────────────────────
+
 function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   const adminSecret = process.env.ADMIN_SECRET;
-  if (!adminSecret) {
-    res.status(503).json({ error: "Admin not configured", message: "ADMIN_SECRET env var is not set" });
+  if (!adminSecret || adminSecret.length < 20) {
+    res.status(503).json({ error: "Admin not configured", message: "ADMIN_SECRET env var is not set or too short" });
     return;
   }
   const token = (req.headers.authorization ?? "").replace("Bearer ", "");
-  if (!token || token !== adminSecret) {
+  const hashA = createHmac("sha256", "admin-verify").update(adminSecret).digest();
+  const hashB = createHmac("sha256", "admin-verify").update(token).digest();
+  if (!token || !timingSafeEqual(hashA, hashB)) {
     res.status(401).json({ error: "Unauthorized", message: "Invalid or missing admin secret" });
     return;
   }
   next();
 }
 
-// ─── GET /api/admin/balance ───────────────────────────────────────────────────
-// Returns platform wallet USDC balance via Circle DCW.
-router.get("/balance", requireAdmin, async (req, res) => {
+// ─── GET /api/admin/treasury ──────────────────────────────────────────────────
+router.get("/treasury", requireAdmin, async (req, res) => {
   try {
-    const walletId  = getPlatformWalletId();
-    const address   = getPlatformWalletAddress();
+    const payoutWalletId = getPlatformWalletId();
+    const payoutAddress  = getPlatformWalletAddress();
 
-    if (!walletId || !address) {
-      res.status(503).json({ error: "Not configured", message: "CIRCLE_PLATFORM_WALLET_ID / CIRCLE_PLATFORM_WALLET_ADDRESS not set" });
-      return;
-    }
-
-    const [usdcBalance] = await Promise.all([
-      getWalletUsdcBalance(walletId),
-      probeGasStationStatus(),
+    const [payoutBalance] = await Promise.all([
+      payoutWalletId ? getWalletUsdcBalance(payoutWalletId) : Promise.resolve("0"),
+      probeGasStationStatus().catch(() => {}),
     ]);
 
     res.json({
-      walletId,
-      walletAddress:   address,
-      blockchain:      PRIMARY_BLOCKCHAIN,
-      usdcBalance,
-      gasStation:      isGasStationEnabled() ? "enabled" : "disabled",
+      treasury: {
+        chain:    PRIMARY_BLOCKCHAIN,
+        walletId: payoutWalletId,
+        address:  payoutAddress,
+        balance:  payoutBalance,
+        note:     "All user withdrawals are paid from this Circle DCW wallet",
+      },
+      gasStation: isGasStationEnabled() ? "enabled" : "disabled",
     });
   } catch (err: any) {
-    req.log.error({ err }, "[admin] Balance check error");
+    req.log.error({ err }, "[admin] Treasury error");
+    res.status(500).json({ error: "Internal server error", message: err.message });
+  }
+});
+
+// ─── GET /api/admin/bridge-jobs ───────────────────────────────────────────────
+router.get("/bridge-jobs", requireAdmin, async (req, res) => {
+  try {
+    const limit  = Math.min(parseInt(String(req.query.limit  ?? "50"), 10), 200);
+    const offset = parseInt(String(req.query.offset ?? "0"),  10);
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+
+    const jobs = status
+      ? await db.select().from(bridgeJobsTable)
+          .where(eq(bridgeJobsTable.status, status))
+          .orderBy(desc(bridgeJobsTable.createdAt))
+          .limit(limit).offset(offset)
+      : await db.select().from(bridgeJobsTable)
+          .orderBy(desc(bridgeJobsTable.createdAt))
+          .limit(limit).offset(offset);
+
+    res.json({ jobs, limit, offset });
+  } catch (err: any) {
+    req.log.error({ err }, "[admin] Bridge jobs error");
+    res.status(500).json({ error: "Internal server error", message: err.message });
+  }
+});
+
+// ─── POST /api/admin/bridge-jobs/:id/retry ────────────────────────────────────
+router.post("/bridge-jobs/:id/retry", requireAdmin, async (req, res) => {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (isNaN(id)) {
+      res.status(400).json({ error: "Validation error", message: "Invalid job id" });
+      return;
+    }
+
+    const [job] = await db.select().from(bridgeJobsTable)
+      .where(eq(bridgeJobsTable.id, id)).limit(1);
+
+    if (!job) {
+      res.status(404).json({ error: "Not found", message: `Bridge job ${id} not found` });
+      return;
+    }
+
+    await db.update(bridgeJobsTable)
+      .set({ status: "pending", attempts: 0, lastError: null, updatedAt: new Date() })
+      .where(eq(bridgeJobsTable.id, id));
+
+    req.log.info({ jobId: id }, "[admin] Bridge job manually requeued");
+    res.json({ success: true, jobId: id, message: "Job requeued — bridge worker will pick it up shortly" });
+  } catch (err: any) {
+    req.log.error({ err }, "[admin] Retry bridge job error");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
 });
 
 // ─── POST /api/admin/withdraw ─────────────────────────────────────────────────
-// Sends USDC from the platform wallet to any address — for revenue withdrawal.
-//
-// Usage:
-//   curl -X POST http://localhost:3001/api/admin/withdraw \
-//     -H "Authorization: Bearer <ADMIN_SECRET>" \
-//     -H "Content-Type: application/json" \
-//     -d '{"destinationAddress":"0x...","amount":"100"}'
+// Sends USDC from the ARC-TESTNET treasury to any address.
 router.post("/withdraw", requireAdmin, async (req, res) => {
   try {
     const { destinationAddress, amount } = req.body as { destinationAddress?: string; amount?: string };
@@ -93,18 +151,18 @@ router.post("/withdraw", requireAdmin, async (req, res) => {
       platformAddress,
       destinationAddress,
       PRIMARY_BLOCKCHAIN,
-      PRIMARY_USDC_ADDRESS,
+      "",
       numAmount.toFixed(6),
     );
 
-    req.log.info({ txId, destinationAddress, amount: numAmount }, "[admin] Revenue withdrawal initiated");
+    req.log.info({ txId, destinationAddress, amount: numAmount }, "[admin] Withdrawal initiated");
 
     res.json({
       txId,
       destinationAddress,
-      amount: numAmount.toFixed(6),
+      amount:     numAmount.toFixed(6),
       blockchain: PRIMARY_BLOCKCHAIN,
-      message: `Initiated transfer of ${numAmount.toFixed(6)} USDC to ${destinationAddress} on ${PRIMARY_BLOCKCHAIN}`,
+      message:    `Initiated transfer of ${numAmount.toFixed(6)} USDC to ${destinationAddress} on ${PRIMARY_BLOCKCHAIN}`,
     });
   } catch (err: any) {
     req.log.error({ err }, "[admin] Withdraw error");
@@ -112,95 +170,45 @@ router.post("/withdraw", requireAdmin, async (req, res) => {
   }
 });
 
-// ─── GET /api/admin/treasury-balances ────────────────────────────────────────
-// Returns the USDC balance of the platform treasury on every supported chain.
-// Reads directly from on-chain ERC-20 contracts — no Circle API call needed.
-router.get("/treasury-balances", requireAdmin, async (req, res) => {
-  try {
-    const balances = await getTreasuryBalancesAllChains();
-    res.json({ balances, primaryChain: PRIMARY_BLOCKCHAIN });
-  } catch (err: any) {
-    req.log.error({ err }, "[admin] Treasury balances error");
-    res.status(500).json({ error: "Internal server error", message: err.message });
-  }
+// ─── GET /api/admin/blocked-ips ──────────────────────────────────────────────
+router.get("/blocked-ips", requireAdmin, (_req, res) => {
+  res.json({ blocked: getBlockedIps() });
 });
 
-// ─── POST /api/admin/cctp-bridge ─────────────────────────────────────────────
-// Consolidates USDC from a non-primary treasury chain to BASE-SEPOLIA (or any
-// specified destination) using Circle CCTP v1.
-//
-// Body: { sourceChain: "ETH-SEPOLIA" | "MATIC-AMOY", amount: "10.5" }
-//       destChain defaults to PRIMARY_BLOCKCHAIN (BASE-SEPOLIA)
-//
-// This is a long-running operation (~1–3 min) — the endpoint kicks it off
-// asynchronously and returns immediately with a jobId to track in logs.
-//
-// Prerequisites:
-//   - CIRCLE_PLATFORM_WALLET_ID_<SOURCE_CHAIN> must be set (e.g. CIRCLE_PLATFORM_WALLET_ID_ETH_SEPOLIA)
-//   - CIRCLE_PLATFORM_WALLET_ID_<DEST_CHAIN>   must be set
-//   - CIRCLE_PLATFORM_WALLET_ADDRESS must be set (shared on-chain address)
-//   - Gas Station must be enabled (CIRCLE_GAS_STATION_ENABLED=true) or gas-funded wallets
-//
-// Usage:
-//   curl -X POST http://localhost:3001/api/admin/cctp-bridge \
-//     -H "Authorization: Bearer <ADMIN_SECRET>" \
-//     -H "Content-Type: application/json" \
-//     -d '{"sourceChain":"ETH-SEPOLIA","amount":"10"}'
-router.post("/cctp-bridge", requireAdmin, async (req, res) => {
-  const { sourceChain, destChain: destChainParam, amount } = req.body as {
-    sourceChain?: string;
-    destChain?:   string;
-    amount?:      string;
-  };
-
-  if (!sourceChain || !(SUPPORTED_BLOCKCHAINS as readonly string[]).includes(sourceChain)) {
-    res.status(400).json({
-      error: "Validation error",
-      message: `sourceChain must be one of: ${SUPPORTED_BLOCKCHAINS.join(", ")}`,
-    });
+// ─── GET /api/admin/ip-stats/:ip ─────────────────────────────────────────────
+router.get("/ip-stats/:ip", requireAdmin, (req, res) => {
+  const ip    = req.params.ip;
+  const stats = getIpStats(ip);
+  if (!stats) {
+    res.status(404).json({ error: "Not found", message: "No record for this IP" });
     return;
   }
-
-  const destChain = (destChainParam ?? PRIMARY_BLOCKCHAIN) as SupportedBlockchain;
-  if (!(SUPPORTED_BLOCKCHAINS as readonly string[]).includes(destChain)) {
-    res.status(400).json({
-      error: "Validation error",
-      message: `destChain must be one of: ${SUPPORTED_BLOCKCHAINS.join(", ")}`,
-    });
-    return;
-  }
-
-  if (sourceChain === destChain) {
-    res.status(400).json({ error: "Validation error", message: "sourceChain and destChain must be different" });
-    return;
-  }
-
-  const numAmount = parseFloat(amount ?? "");
-  if (isNaN(numAmount) || numAmount <= 0) {
-    res.status(400).json({ error: "Validation error", message: "amount must be a positive number" });
-    return;
-  }
-
-  const jobId = `cctp-${Date.now()}`;
-  req.log.info({ jobId, sourceChain, destChain, amount: numAmount }, "[admin/cctp] Bridge job started");
-
-  // Return immediately — bridge takes ~1–3 min to complete
+  const now = Date.now();
   res.json({
-    jobId,
-    sourceChain,
-    destChain,
-    amount: numAmount.toFixed(6),
-    message: `CCTP bridge started (jobId: ${jobId}). Monitor server logs for progress.`,
+    ip,
+    blocked:          stats.blockUntil > now,
+    blockUntil:       stats.blockUntil > now ? new Date(stats.blockUntil).toISOString() : null,
+    retryAfterSec:    stats.blockUntil > now ? Math.ceil((stats.blockUntil - now) / 1_000) : 0,
+    blockCount:       stats.blockCount,
+    recentViolations: stats.violations.length,
+    reqCount:         stats.reqCount,
   });
+});
 
-  // Run bridge in background
-  cctpBridgeToTreasury(sourceChain as SupportedBlockchain, destChain, numAmount.toFixed(6))
-    .then((result) => {
-      req.log.info({ jobId, ...result }, "[admin/cctp] Bridge completed successfully");
-    })
-    .catch((err: any) => {
-      req.log.error({ jobId, sourceChain, destChain, amount: numAmount, err: err?.message }, "[admin/cctp] Bridge failed");
-    });
+// ─── POST /api/admin/unblock-ip ──────────────────────────────────────────────
+router.post("/unblock-ip", requireAdmin, (req, res) => {
+  const { ip } = req.body as { ip?: string };
+  if (!ip?.trim()) {
+    res.status(400).json({ error: "Validation error", message: "ip is required" });
+    return;
+  }
+  const removed = unblockIp(ip.trim());
+  if (!removed) {
+    res.status(404).json({ error: "Not found", message: "No active block for this IP" });
+    return;
+  }
+  req.log.info({ ip }, "[admin] IP manually unblocked");
+  res.json({ success: true, message: `Block lifted for ${ip}` });
 });
 
 export default router;

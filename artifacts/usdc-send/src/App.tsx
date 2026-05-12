@@ -7,6 +7,11 @@ import Landing from "./pages/landing";
 import Login from "./pages/login";
 import Register from "./pages/register";
 import Dashboard from "./pages/dashboard";
+import Subscribe from "./pages/subscribe";
+import DeveloperPortal from "./pages/developer-portal";
+import DeveloperAuth from "./pages/developer-auth";
+import DeveloperDashboard from "./pages/developer-dashboard";
+import Pay from "./pages/pay";
 import NotFound from "./pages/not-found";
 
 // Wire up the auth token so every generated API hook includes Authorization: Bearer
@@ -36,6 +41,12 @@ function Router() {
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/login" component={Login} />
       <Route path="/register" component={Register} />
+      <Route path="/subscribe/:merchantId" component={Subscribe} />
+      <Route path="/pay/:merchantId" component={Pay} />
+      <Route path="/developer" component={DeveloperPortal} />
+      <Route path="/developer/login" component={DeveloperAuth} />
+      <Route path="/developer/reset-password" component={DeveloperAuth} />
+      <Route path="/developer/dashboard" component={DeveloperDashboard} />
       <Route component={NotFound} />
     </Switch>
   );

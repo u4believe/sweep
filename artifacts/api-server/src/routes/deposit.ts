@@ -1,32 +1,74 @@
 import { Router, type IRouter } from "express";
-import { db, usersTable, depositsTable, virtualAccountsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { db, usersTable, depositsTable, virtualAccountsTable, bridgeJobsTable } from "@workspace/db";
+import { eq, and, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import {
   createCircleWireBankAccount,
   getCircleWireDepositInstructions,
   createMockWireDeposit,
-  circleTransferUsdc,
   getPlatformWalletAddress,
-  PRIMARY_USDC_ADDRESS,
-  type SupportedBlockchain,
+  SUPPORTED_SOURCE_CHAINS,
+  type SourceChain,
 } from "../lib/circle.js";
-
-const CIRCLE_CHAIN_MAP: Record<string, SupportedBlockchain> = {
-  "BASE-SEPOLIA": "BASE-SEPOLIA",
-};
+import { triggerBridgeWorker } from "../lib/bridgeWorker.js";
+import { sendDepositConfirmedEmail } from "../lib/email.js";
 
 const router: IRouter = Router();
 
+// ─── GET /api/deposit/addresses ───────────────────────────────────────────────
+// Returns all chain-specific USDC deposit wallet addresses for the user.
+// Frontend shows one address per chain so users know where to send from.
+router.get("/addresses", requireAuth, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const [dbUser] = await db
+      .select({
+        circleWalletAddress:      usersTable.circleWalletAddress,
+        circleWalletAddressesJson: (usersTable as any).circleWalletAddressesJson,
+      })
+      .from(usersTable)
+      .where(eq(usersTable.id, user.userId))
+      .limit(1);
+
+    if (!dbUser) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    // Build per-chain address map
+    let addresses: Record<string, string> = {};
+
+    if ((dbUser as any).circleWalletAddressesJson) {
+      try {
+        addresses = JSON.parse((dbUser as any).circleWalletAddressesJson);
+      } catch { /* fall through */ }
+    }
+
+    // Backfill primary address for BASE-SEPOLIA if multi-chain map is missing
+    if (Object.keys(addresses).length === 0 && dbUser.circleWalletAddress) {
+      addresses = { "BASE-SEPOLIA": dbUser.circleWalletAddress };
+    }
+
+    // Return in consistent order
+    const ordered: Record<string, string> = {};
+    for (const chain of SUPPORTED_SOURCE_CHAINS) {
+      if (addresses[chain]) ordered[chain] = addresses[chain];
+    }
+
+    res.json({ addresses: ordered });
+  } catch (error: any) {
+    req.log.error({ err: error }, "[deposit] Addresses error");
+    res.status(500).json({ error: "Internal server error", message: error.message });
+  }
+});
+
 // ─── GET /api/deposit/wire/instructions ──────────────────────────────────────
 // Returns Circle's wire deposit instructions for the authenticated user.
-// Creates a unique wire bank account (and tracking reference) on first call,
-// then reuses it on subsequent calls.
 router.get("/wire/instructions", requireAuth, async (req, res) => {
   try {
     const user = (req as any).user;
 
-    // Reuse existing wire account if already created for this user
     const [existing] = await db
       .select()
       .from(virtualAccountsTable)
@@ -41,9 +83,8 @@ router.get("/wire/instructions", requireAuth, async (req, res) => {
 
     if (existing) {
       wireAccountId = existing.providerRef!;
-      trackingRef   = existing.accountNumber; // accountNumber stores trackingRef
+      trackingRef   = existing.accountNumber;
     } else {
-      // First time — create a wire bank account for this user
       const wire = await createCircleWireBankAccount(user.userId);
       wireAccountId = wire.id;
       trackingRef   = wire.trackingRef;
@@ -51,18 +92,17 @@ router.get("/wire/instructions", requireAuth, async (req, res) => {
       await db.insert(virtualAccountsTable).values({
         userId:        user.userId,
         provider:      "circle-wire",
-        accountNumber: trackingRef,         // unique ref user includes in wire memo
+        accountNumber: trackingRef,
         accountName:   "ARC Finance",
         bankName:      "Circle / JPMorgan Chase",
         bankCode:      null,
-        providerRef:   wireAccountId,       // Circle wire bank account ID
+        providerRef:   wireAccountId,
         currency:      "USD",
       });
 
-      req.log.info({ userId: user.userId, trackingRef, wireAccountId }, "[deposit] Circle wire account created");
+      req.log.info({ userId: user.userId, trackingRef, wireAccountId }, "[deposit] Wire account created");
     }
 
-    // Always fetch fresh instructions from Circle (bank details may change)
     const instructions = await getCircleWireDepositInstructions(wireAccountId);
 
     res.json({
@@ -77,9 +117,12 @@ router.get("/wire/instructions", requireAuth, async (req, res) => {
 });
 
 // ─── POST /api/deposit/wire/mock ──────────────────────────────────────────────
-// Sandbox only: simulate an incoming wire payment for the authenticated user.
-// Body: { amount: "100.00" }
+// Sandbox only: simulate an incoming wire payment.
 router.post("/wire/mock", requireAuth, async (req, res) => {
+  if (process.env["NODE_ENV"] === "production") {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
   try {
     const user = (req as any).user;
     const { amount } = req.body;
@@ -99,23 +142,26 @@ router.post("/wire/mock", requireAuth, async (req, res) => {
       .limit(1);
 
     if (!wireAccount) {
-      res.status(400).json({ error: "No wire account", message: "Load wire instructions first to create your deposit account" });
+      res.status(400).json({
+        error:   "No wire account",
+        message: "Load wire instructions first to create your deposit account",
+      });
       return;
     }
 
     const instructions = await getCircleWireDepositInstructions(wireAccount.providerRef!);
 
     await createMockWireDeposit(
-      wireAccount.accountNumber,                    // trackingRef
-      instructions.beneficiaryBank.accountNumber,   // Circle's account number
+      wireAccount.accountNumber,
+      instructions.beneficiaryBank.accountNumber,
       parseFloat(amount).toFixed(2),
     );
 
     req.log.info({ userId: user.userId, amount }, "[deposit] Mock wire deposit initiated");
     res.json({
-      message:   "Mock wire deposit submitted. Circle processes in batches — your balance will be credited within 15 minutes.",
-      amount:    parseFloat(amount).toFixed(2),
-      currency:  "USD",
+      message:  "Mock wire deposit submitted. Circle processes in batches — your balance will be credited within 15 minutes.",
+      amount:   parseFloat(amount).toFixed(2),
+      currency: "USD",
     });
   } catch (error: any) {
     req.log.error({ err: error }, "[deposit] Mock wire error");
@@ -123,33 +169,56 @@ router.post("/wire/mock", requireAuth, async (req, res) => {
   }
 });
 
+// ─── GET /api/deposit/circle/webhook ─────────────────────────────────────────
+// Circle sends a GET request to validate the endpoint URL when saving it.
+router.get("/circle/webhook", (_req, res) => {
+  res.status(200).json({ ok: true });
+});
+
 // ─── POST /api/deposit/circle/webhook ────────────────────────────────────────
-// Handles two event types from Circle:
-//   1. "payments"            — wire (fiat) deposits credited to the Circle account
-//   2. "transactions.inbound"— USDC on-chain deposits to a user's Circle DCW wallet
+// Handles two Circle notification types:
+//   "payments"             — wire (fiat) deposits
+//   "transactions.inbound" — USDC on-chain deposits to a user's DCW wallet
+//
+// Security: The webhook URL must include ?token=<CIRCLE_WEBHOOK_SECRET>.
+// Set CIRCLE_WEBHOOK_SECRET in .env and configure the same token in the Circle
+// dashboard webhook URL. Without this, any caller can fake deposits.
 router.post("/circle/webhook", async (req, res) => {
-  // Always respond 200 immediately — Circle retries if no 200 within 5 s
+  const webhookSecret = process.env["CIRCLE_WEBHOOK_SECRET"];
+  if (webhookSecret) {
+    const providedToken = typeof req.query["token"] === "string" ? req.query["token"] : "";
+    const hashA = createHmac("sha256", "webhook-verify").update(webhookSecret).digest();
+    const hashB = createHmac("sha256", "webhook-verify").update(providedToken).digest();
+    if (!timingSafeEqual(hashA, hashB)) {
+      console.warn("[circle/webhook] Rejected: invalid or missing token");
+      // Return 200 to prevent Circle retry storms if this is a misconfiguration
+      res.status(200).json({ received: false });
+      return;
+    }
+  }
+
+  // Respond 200 immediately — Circle retries if no 200 within 5 s
   res.status(200).json({ received: true });
 
   try {
     const { notificationType, notification } = req.body ?? {};
-    console.info(`[circle/webhook] notificationType=${notificationType} body=${JSON.stringify(req.body).slice(0, 400)}`);
+    console.info(
+      `[circle/webhook] type=${notificationType} body=${JSON.stringify(req.body).slice(0, 400)}`,
+    );
 
-    // ── Wire (fiat) payment ───────────────────────────────────────────────────
+    // ── Wire (fiat) payment ───────────────────────────────────────────────
     if (notificationType === "payments") {
       const payment = notification?.payment ?? notification;
       if (!payment) return;
 
       const { id: paymentId, type, status, trackingRef, amount } = payment;
-      console.info(`[circle/webhook] Payment: type=${type} status=${status} trackingRef=${trackingRef} amount=${JSON.stringify(amount)}`);
-
       if (type !== "wire" || status !== "paid") return;
       if (!trackingRef || !amount?.amount) return;
 
       const amountUsd = parseFloat(amount.amount);
       if (amountUsd <= 0) return;
 
-      // Idempotency — skip if we already credited this payment
+      // Idempotency
       if (paymentId) {
         const [dup] = await db
           .select({ id: depositsTable.id })
@@ -159,7 +228,6 @@ router.post("/circle/webhook", async (req, res) => {
         if (dup) return;
       }
 
-      // Resolve user by their unique trackingRef
       const [wireAccount] = await db
         .select({ userId: virtualAccountsTable.userId })
         .from(virtualAccountsTable)
@@ -170,18 +238,13 @@ router.post("/circle/webhook", async (req, res) => {
         .limit(1);
 
       if (!wireAccount) {
-        console.warn(`[circle/webhook] No wire account found for trackingRef=${trackingRef}`);
+        console.warn(`[circle/webhook] No wire account for trackingRef=${trackingRef}`);
         return;
       }
 
-      const [dbUser] = await db
-        .select({ claimedBalance: usersTable.claimedBalance })
-        .from(usersTable)
-        .where(eq(usersTable.id, wireAccount.userId))
-        .limit(1);
-
-      const newBalance = (parseFloat(dbUser?.claimedBalance ?? "0") + amountUsd).toFixed(6);
-      await db.update(usersTable).set({ claimedBalance: newBalance }).where(eq(usersTable.id, wireAccount.userId));
+      await db.update(usersTable)
+        .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${amountUsd}` })
+        .where(eq(usersTable.id, wireAccount.userId));
 
       await db.insert(depositsTable).values({
         userId:           wireAccount.userId,
@@ -193,42 +256,71 @@ router.post("/circle/webhook", async (req, res) => {
         creditedAt:       new Date(),
       });
 
-      console.info(`[circle/webhook] Credited $${amountUsd} USD wire deposit to user ${wireAccount.userId}`);
+      console.info(`[circle/webhook] Credited $${amountUsd} wire to user ${wireAccount.userId}`);
+
+      const [wireUserEmail] = await db
+        .select({ email: usersTable.email })
+        .from(usersTable)
+        .where(eq(usersTable.id, wireAccount.userId))
+        .limit(1);
+      if (wireUserEmail) {
+        sendDepositConfirmedEmail(wireUserEmail.email, amountUsd.toFixed(2), "bank", "Circle Wire Transfer").catch(() => {});
+      }
       return;
     }
 
-    // ── USDC on-chain inbound ─────────────────────────────────────────────────
+    // ── USDC on-chain inbound ─────────────────────────────────────────────
     if (notificationType !== "transactions.inbound") return;
     if (!notification) return;
 
     const { id: txId, walletId, amounts, blockchain, txHash, state, destinationAddress } = notification;
-    console.info(`[circle/webhook] Inbound: state=${state} walletId=${walletId} address=${destinationAddress} amount=${amounts?.[0]} chain=${blockchain}`);
+    console.info(
+      `[circle/webhook] Inbound: state=${state} walletId=${walletId} address=${destinationAddress} amount=${amounts?.[0]} chain=${blockchain}`,
+    );
 
-    if (state !== "COMPLETED") return;
+    if (state !== "COMPLETED" && state !== "COMPLETE") return;
     if (!amounts?.length) return;
 
     const amount = String(amounts[0] ?? "0");
     if (!amount || parseFloat(amount) <= 0) return;
 
-    let dbUser: { id: number; claimedBalance: string } | undefined;
+    // Resolve user by walletId or destination address.
+    // circleWalletId stores only the PRIMARY (BASE-SEPOLIA) wallet ID.
+    // For Arc (and any non-primary chain) deposits, the wallet ID only appears
+    // in circleWalletIdsJson — so we must search that JSON too.
+    let dbUser: { id: number } | undefined;
 
     if (walletId) {
-      const [byWalletId] = await db
-        .select({ id: usersTable.id, claimedBalance: usersTable.claimedBalance })
+      // 1. Primary wallet ID match (BASE-SEPOLIA)
+      const [byPrimary] = await db
+        .select({ id: usersTable.id })
         .from(usersTable)
         .where(eq(usersTable.circleWalletId, walletId))
         .limit(1);
-      dbUser = byWalletId;
+      dbUser = byPrimary;
+
+      // 2. Search circleWalletIdsJson for non-primary chain wallet IDs (e.g. ARC-TESTNET)
+      //    The JSON is a map of chain→walletId; a LIKE search on the UUID is safe
+      //    because UUIDs contain only hex chars and hyphens (no SQL wildcards).
+      if (!dbUser) {
+        const [byJson] = await db
+          .select({ id: usersTable.id })
+          .from(usersTable)
+          .where(sql`${usersTable.circleWalletIdsJson} LIKE ${"%" + walletId + "%"}`)
+          .limit(1);
+        dbUser = byJson;
+      }
     }
 
     if (!dbUser && destinationAddress) {
-      const { sql } = await import("drizzle-orm");
-      const [byAddress] = await db
-        .select({ id: usersTable.id, claimedBalance: usersTable.claimedBalance })
+      // 3. Destination address match — works because SCA wallets share the same
+      //    on-chain address across all chains (same CREATE2 derivation).
+      const [byAddr] = await db
+        .select({ id: usersTable.id })
         .from(usersTable)
         .where(sql`lower(${usersTable.circleWalletAddress}) = lower(${destinationAddress})`)
         .limit(1);
-      dbUser = byAddress;
+      dbUser = byAddr;
     }
 
     if (!dbUser) {
@@ -238,16 +330,18 @@ router.post("/circle/webhook", async (req, res) => {
 
     const idempotencyRef = txId ?? txHash ?? "";
     if (idempotencyRef) {
-      const existing = await db
+      const [dup] = await db
         .select({ id: depositsTable.id })
         .from(depositsTable)
         .where(eq(depositsTable.depositReference, idempotencyRef))
         .limit(1);
-      if (existing.length > 0) return;
+      if (dup) return;
     }
 
-    const newBalance = (parseFloat(dbUser.claimedBalance ?? "0") + parseFloat(amount)).toFixed(6);
-    await db.update(usersTable).set({ claimedBalance: newBalance }).where(eq(usersTable.id, dbUser.id));
+    // Credit balance atomically
+    await db.update(usersTable)
+      .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })
+      .where(eq(usersTable.id, dbUser.id));
 
     await db.insert(depositsTable).values({
       userId:           dbUser.id,
@@ -260,16 +354,47 @@ router.post("/circle/webhook", async (req, res) => {
       creditedAt:       new Date(),
     });
 
-    console.info(`[circle/webhook] Credited ${amount} USDC to user ${dbUser.id} from ${blockchain} (id: ${txId})`);
+    console.info(`[circle/webhook] Credited ${amount} USDC to user ${dbUser.id} from ${blockchain}`);
 
-    // Sweep on-chain USDC deposits to the platform treasury
-    const circleChain = blockchain ? CIRCLE_CHAIN_MAP[blockchain.toUpperCase()] : undefined;
-    if (circleChain && destinationAddress) {
+    const [cryptoUserEmail] = await db
+      .select({ email: usersTable.email })
+      .from(usersTable)
+      .where(eq(usersTable.id, dbUser.id))
+      .limit(1);
+    if (cryptoUserEmail) {
+      sendDepositConfirmedEmail(cryptoUserEmail.email, parseFloat(amount).toFixed(2), "crypto", `${blockchain ?? "Circle"} USDC`).catch(() => {});
+    }
+
+    // Enqueue bridge job to sweep USDC to Arc treasury.
+    // depositIndexer handles on-chain detection; webhook is the fast path.
+    const sourceChain = (blockchain?.toUpperCase() as SourceChain | undefined);
+    if (sourceChain && destinationAddress) {
       const platformAddress = getPlatformWalletAddress();
-      if (platformAddress && destinationAddress.toLowerCase() !== platformAddress.toLowerCase()) {
-        circleTransferUsdc(destinationAddress, platformAddress, circleChain, PRIMARY_USDC_ADDRESS, parseFloat(amount).toFixed(6))
-          .then(() => console.info(`[circle/webhook] Swept ${amount} USDC to ${circleChain} treasury`))
-          .catch((e: any) => console.warn(`[circle/webhook] Sweep failed: ${e?.message}`));
+      // Don't bridge if the destination IS the platform treasury (it's already there).
+      if (!platformAddress || destinationAddress.toLowerCase() !== platformAddress.toLowerCase()) {
+        try {
+          const [existingJob] = await db
+            .select({ id: bridgeJobsTable.id })
+            .from(bridgeJobsTable)
+            .where(eq(bridgeJobsTable.txHash, txHash ?? idempotencyRef))
+            .limit(1);
+
+          if (!existingJob) {
+            await db.insert(bridgeJobsTable).values({
+              userId:            dbUser.id,
+              sourceChain,
+              userWalletAddress: destinationAddress,
+              amount:            parseFloat(amount).toFixed(6),
+              txHash:            txHash ?? null,
+              status:            "pending",
+            });
+            console.info(`[circle/webhook] Bridge job enqueued for ${amount} USDC on ${sourceChain}`);
+            // Kick the bridge worker immediately so the sweep doesn't wait for its poll interval
+            triggerBridgeWorker();
+          }
+        } catch (e: any) {
+          console.warn(`[circle/webhook] Bridge job insert failed: ${e?.message}`);
+        }
       }
     }
   } catch (err: any) {

@@ -1,12 +1,13 @@
 import { Router, type IRouter } from "express";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import bcrypt from "bcrypt";
-import { db, usersTable, otpCodesTable } from "@workspace/db";
+import { db, usersTable, otpCodesTable, escrowsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
 import { generateToken, requireAuth } from "../lib/auth.js";
 import { hashEmail } from "../lib/escrow.js";
-import { createUserCircleWallet } from "../lib/circle.js";
+import { createUserCircleWallet, ensureArcTestnetWallet } from "../lib/circle.js";
 import { sendOtpEmail, sendVerificationEmail } from "../lib/email.js";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomInt } from "node:crypto";
 import {
   RegisterUserBody,
   LoginUserBody,
@@ -14,8 +15,37 @@ import {
 
 const router: IRouter = Router();
 
+// ─── Rate limiters ────────────────────────────────────────────────────────────
+
+const loginLimiter = rateLimit({
+  windowMs:         15 * 60 * 1000,
+  max:              10,
+  keyGenerator:     (req) => ipKeyGenerator(req),
+  standardHeaders:  true,
+  legacyHeaders:    false,
+  message:          { error: "Too many requests", message: "Too many login attempts. Try again in 15 minutes." },
+});
+
+const otpLimiter = rateLimit({
+  windowMs:         10 * 60 * 1000,
+  max:              5,
+  keyGenerator:     (req) => String((req.body as any)?.userId ?? ipKeyGenerator(req)),
+  standardHeaders:  true,
+  legacyHeaders:    false,
+  message:          { error: "Too many requests", message: "Too many verification attempts. Try again in 10 minutes." },
+});
+
+const resendLimiter = rateLimit({
+  windowMs:         10 * 60 * 1000,
+  max:              3,
+  keyGenerator:     (req) => String((req.body as any)?.userId ?? ipKeyGenerator(req)),
+  standardHeaders:  true,
+  legacyHeaders:    false,
+  message:          { error: "Too many requests", message: "Too many resend attempts. Try again in 10 minutes." },
+});
+
 function generateOtp(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(randomInt(100000, 1000000));
 }
 
 async function issueOtp(userId: number, type: "register" | "login"): Promise<string> {
@@ -61,9 +91,9 @@ router.post("/register", async (req, res) => {
     // Provision Circle wallet in background
     (async () => {
       try {
-        const { walletId, address, walletIdsJson } = await createUserCircleWallet(user.id);
+        const { walletId, address, walletIdsJson, walletAddressesJson } = await createUserCircleWallet(user.id);
         await db.update(usersTable)
-          .set({ circleWalletId: walletId, circleWalletAddress: address, circleWalletIdsJson: walletIdsJson } as any)
+          .set({ circleWalletId: walletId, circleWalletAddress: address, circleWalletIdsJson: walletIdsJson, circleWalletAddressesJson: walletAddressesJson } as any)
           .where(eq(usersTable.id, user.id));
       } catch (e: any) {
         console.warn(`[Circle] Wallet provisioning failed for user ${user.id}:`, e?.message || e);
@@ -73,10 +103,8 @@ router.post("/register", async (req, res) => {
     const appUrl = process.env.APP_URL?.replace(/\/$/, "") || `http://localhost:${process.env.PORT || 3001}`;
     const verificationUrl = `${appUrl}/api/auth/verify-email?token=${verificationToken}`;
 
+    await sendVerificationEmail(normalizedEmail, verificationUrl);
     res.status(201).json({ requiresEmailVerification: true, email: normalizedEmail });
-    sendVerificationEmail(normalizedEmail, verificationUrl).catch((e) =>
-      req.log.error({ err: e }, "Failed to send verification email"),
-    );
   } catch (error: any) {
     req.log.error({ err: error }, "Registration error");
     res.status(500).json({ error: "Internal server error", message: error.message });
@@ -137,28 +165,29 @@ router.post("/resend-verification", async (req, res) => {
     const normalizedEmail = email.toLowerCase().trim();
     const [user] = await db.select().from(usersTable).where(eq(usersTable.email, normalizedEmail)).limit(1);
 
+    if (user && !(user as any).emailVerified) {
+      const verificationToken = randomUUID();
+      await db.update(usersTable)
+        .set({ emailVerificationToken: verificationToken } as any)
+        .where(eq(usersTable.id, user.id));
+
+      const appUrl = process.env.APP_URL?.replace(/\/$/, "") || `http://localhost:${process.env.PORT || 3001}`;
+      const verificationUrl = `${appUrl}/api/auth/verify-email?token=${verificationToken}`;
+      await sendVerificationEmail(normalizedEmail, verificationUrl);
+    }
+
     // Always return success to avoid email enumeration
     res.json({ success: true, message: "If that email exists and is unverified, a new link has been sent." });
-
-    if (!user || (user as any).emailVerified) return;
-
-    const verificationToken = randomUUID();
-    await db.update(usersTable)
-      .set({ emailVerificationToken: verificationToken } as any)
-      .where(eq(usersTable.id, user.id));
-
-    const appUrl = process.env.APP_URL?.replace(/\/$/, "") || `http://localhost:${process.env.PORT || 3001}`;
-    const verificationUrl = `${appUrl}/api/auth/verify-email?token=${verificationToken}`;
-    sendVerificationEmail(normalizedEmail, verificationUrl).catch(console.error);
   } catch (error: any) {
     req.log.error({ err: error }, "Resend verification error");
+    res.status(500).json({ error: "Internal server error", message: error.message });
   }
 });
 
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
 // Step 1: validates credentials, sends OTP.
 // Returns { requiresOtp: true, userId } — JWT issued after verify-otp.
-router.post("/login", async (req, res) => {
+router.post("/login", loginLimiter, async (req, res) => {
   try {
     const parsed = LoginUserBody.safeParse(req.body);
     if (!parsed.success) {
@@ -190,21 +219,36 @@ router.post("/login", async (req, res) => {
     if (!user.circleWalletAddress) {
       (async () => {
         try {
-          const { walletId, address, walletIdsJson } = await createUserCircleWallet(user.id);
+          const { walletId, address, walletIdsJson, walletAddressesJson } = await createUserCircleWallet(user.id);
           await db.update(usersTable)
-            .set({ circleWalletId: walletId, circleWalletAddress: address, circleWalletIdsJson: walletIdsJson } as any)
+            .set({ circleWalletId: walletId, circleWalletAddress: address, circleWalletIdsJson: walletIdsJson, circleWalletAddressesJson: walletAddressesJson } as any)
             .where(eq(usersTable.id, user.id));
         } catch (e: any) {
           console.warn(`[Circle] Wallet backfill failed for user ${user.id}:`, e?.message || e);
         }
       })();
+    } else {
+      // Backfill Arc Testnet wallet if missing (existing users pre-dating dual-chain provisioning)
+      (async () => {
+        try {
+          const result = await ensureArcTestnetWallet(
+            user.circleWalletIdsJson as string | null,
+            (user as any).circleWalletAddressesJson as string | null,
+          );
+          if (result) {
+            await db.update(usersTable)
+              .set({ circleWalletIdsJson: result.idsJson, circleWalletAddressesJson: result.addrsJson } as any)
+              .where(eq(usersTable.id, user.id));
+          }
+        } catch (e: any) {
+          console.warn(`[Circle] Arc wallet backfill failed for user ${user.id}:`, e?.message || e);
+        }
+      })();
     }
 
     const code = await issueOtp(user.id, "login");
+    await sendOtpEmail(normalizedEmail, code, "login");
     res.json({ requiresOtp: true, userId: user.id });
-    sendOtpEmail(normalizedEmail, code, "login").catch((e) =>
-      req.log.error({ err: e }, "Failed to send login OTP email"),
-    );
   } catch (error: any) {
     req.log.error({ err: error }, "Login error");
     res.status(500).json({ error: "Internal server error", message: error.message });
@@ -213,7 +257,7 @@ router.post("/login", async (req, res) => {
 
 // ─── POST /api/auth/verify-otp ────────────────────────────────────────────────
 // Step 2 (both flows): verifies OTP, issues JWT.
-router.post("/verify-otp", async (req, res) => {
+router.post("/verify-otp", otpLimiter, async (req, res) => {
   try {
     const { userId, code, type } = req.body as { userId?: unknown; code?: unknown; type?: unknown };
 
@@ -229,21 +273,16 @@ router.post("/verify-otp", async (req, res) => {
       .where(
         and(
           eq(otpCodesTable.userId, userId),
+          eq(otpCodesTable.code, code.trim()),
           eq(otpCodesTable.type, type),
           eq(otpCodesTable.used, false),
           gt(otpCodesTable.expiresAt, now),
         )
       )
-      .orderBy(otpCodesTable.createdAt)
       .limit(1);
 
     if (!otp) {
-      res.status(401).json({ error: "Invalid code", message: "OTP is invalid or has expired. Please request a new one." });
-      return;
-    }
-
-    if (otp.code !== code.trim()) {
-      res.status(401).json({ error: "Invalid code", message: "Incorrect verification code. Please try again." });
+      res.status(401).json({ error: "Invalid code", message: "Incorrect verification code or it has expired. Please try again." });
       return;
     }
 
@@ -253,6 +292,29 @@ router.post("/verify-otp", async (req, res) => {
     if (!user) {
       res.status(404).json({ error: "Not found", message: "User not found" });
       return;
+    }
+
+    // Auto-credit any pending escrows sent to this email before they registered
+    if (type === "register") {
+      try {
+        const { hashEmail } = await import("../lib/escrow.js");
+        const emailHash = hashEmail(user.email);
+        const pendingEscrows = await db.select().from(escrowsTable)
+          .where(and(eq(escrowsTable.emailHash, emailHash), eq(escrowsTable.status, "pending")));
+        if (pendingEscrows.length > 0) {
+          const total = pendingEscrows.reduce((s, e) => s + parseFloat(e.amount), 0);
+          const newBalance = (parseFloat(user.claimedBalance ?? "0") + total).toFixed(6);
+          await db.update(usersTable).set({ claimedBalance: newBalance }).where(eq(usersTable.id, user.id));
+          for (const e of pendingEscrows) {
+            await db.update(escrowsTable)
+              .set({ status: "claimed", recipientUserId: user.id, claimedAt: new Date() })
+              .where(eq(escrowsTable.id, e.id));
+          }
+          req.log.info({ userId: user.id, total, count: pendingEscrows.length }, "[register] Auto-credited pending escrows");
+        }
+      } catch (e: any) {
+        req.log.warn({ err: e.message }, "[register] Auto-credit pending escrows failed (non-fatal)");
+      }
     }
 
     const token = generateToken({ userId: user.id, email: user.email });
@@ -276,7 +338,7 @@ router.post("/verify-otp", async (req, res) => {
 
 // ─── POST /api/auth/resend-otp ────────────────────────────────────────────────
 // Resend OTP for a pending verification.
-router.post("/resend-otp", async (req, res) => {
+router.post("/resend-otp", resendLimiter, async (req, res) => {
   try {
     const { userId, type } = req.body as { userId?: unknown; type?: unknown };
 
@@ -292,10 +354,8 @@ router.post("/resend-otp", async (req, res) => {
     }
 
     const code = await issueOtp(userId, type);
+    await sendOtpEmail(user.email, code, type);
     res.json({ success: true, message: "A new verification code has been sent to your email." });
-    sendOtpEmail(user.email, code, type).catch((e) =>
-      req.log.error({ err: e }, "Failed to resend OTP email"),
-    );
   } catch (error: any) {
     req.log.error({ err: error }, "Resend OTP error");
     res.status(500).json({ error: "Internal server error", message: error.message });
@@ -315,12 +375,29 @@ router.get("/me", requireAuth, async (req, res) => {
     if (!dbUser.circleWalletAddress) {
       (async () => {
         try {
-          const { walletId, address, walletIdsJson } = await createUserCircleWallet(dbUser.id);
+          const { walletId, address, walletIdsJson, walletAddressesJson } = await createUserCircleWallet(dbUser.id);
           await db.update(usersTable)
-            .set({ circleWalletId: walletId, circleWalletAddress: address, circleWalletIdsJson: walletIdsJson } as any)
+            .set({ circleWalletId: walletId, circleWalletAddress: address, circleWalletIdsJson: walletIdsJson, circleWalletAddressesJson: walletAddressesJson } as any)
             .where(eq(usersTable.id, dbUser.id));
         } catch (e: any) {
           console.warn(`[Circle] Wallet backfill failed for user ${dbUser.id}:`, e?.message || e);
+        }
+      })();
+    } else {
+      // Backfill Arc Testnet wallet if missing (existing users pre-dating dual-chain provisioning)
+      (async () => {
+        try {
+          const result = await ensureArcTestnetWallet(
+            dbUser.circleWalletIdsJson as string | null,
+            (dbUser as any).circleWalletAddressesJson as string | null,
+          );
+          if (result) {
+            await db.update(usersTable)
+              .set({ circleWalletIdsJson: result.idsJson, circleWalletAddressesJson: result.addrsJson } as any)
+              .where(eq(usersTable.id, dbUser.id));
+          }
+        } catch (e: any) {
+          console.warn(`[Circle] Arc wallet backfill failed for user ${dbUser.id}:`, e?.message || e);
         }
       })();
     }
@@ -359,6 +436,30 @@ router.get("/me", requireAuth, async (req, res) => {
   } catch (error: any) {
     req.log.error({ err: error }, "Get current user error");
     res.status(500).json({ error: "Internal server error", message: error.message });
+  }
+});
+
+// ─── POST /api/auth/test-email ────────────────────────────────────────────────
+// Dev/admin tool — sends a test email and reports the exact SMTP result.
+// Requires auth so it can't be hit by anonymous callers.
+router.post("/test-email", requireAuth, async (req, res) => {
+  const { to } = req.body as { to?: unknown };
+  if (typeof to !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    res.status(400).json({ error: "Validation error", message: "to (valid email) is required" });
+    return;
+  }
+
+  try {
+    await sendOtpEmail(to, "123456", "login");
+    res.json({ success: true, message: `Test email sent successfully to ${to}` });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: "SMTP error",
+      message: err.message ?? String(err),
+      code: err.code,
+      command: err.command,
+    });
   }
 });
 

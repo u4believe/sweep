@@ -9,3 +9,6 @@ export * from "./otp_codes";
 export * from "./recurring_transfers";
 export * from "./deposits";
 export * from "./virtual_accounts";
+export * from "./bridge_jobs";
+export * from "./subscriptions";
+export * from "./developer";

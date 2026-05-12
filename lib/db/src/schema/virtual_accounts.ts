@@ -5,7 +5,7 @@ export const virtualAccountsTable = pgTable("virtual_accounts", {
   userId: integer("user_id").notNull(),
 
   // Which provider generated this account
-  provider: text("provider").notNull(), // paystack | flutterwave | monnify
+  provider: text("provider").notNull(), // circle-wire | (future on-ramp providers)
 
   // Account details shown to the user
   accountNumber: text("account_number").notNull(),
@@ -13,10 +13,7 @@ export const virtualAccountsTable = pgTable("virtual_accounts", {
   bankName:      text("bank_name").notNull(),
   bankCode:      text("bank_code"),
 
-  // Provider-side reference IDs for webhook lookup
-  // Paystack:     customer_code (CUS_xxxx)
-  // Flutterwave:  account_number (same as accountNumber, but stored for clarity)
-  // Monnify:      accountReference
+  // Provider-side reference ID for webhook lookup (e.g. Circle wire account ID)
   providerRef:   text("provider_ref"),
 
   currency: text("currency").notNull().default("NGN"),

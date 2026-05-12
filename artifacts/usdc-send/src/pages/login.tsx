@@ -97,7 +97,10 @@ export default function Login() {
       if (!res.ok) throw new Error(json.message ?? "Verification failed");
       localStorage.setItem("token", json.token);
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      window.location.href = import.meta.env.BASE_URL || "/";
+      const next = new URLSearchParams(window.location.search).get("next");
+      window.location.href = next
+        ? (import.meta.env.BASE_URL || "").replace(/\/$/, "") + next
+        : import.meta.env.BASE_URL || "/";
     } catch (err: any) {
       setError(err.message ?? "Incorrect code. Please try again.");
     } finally {
@@ -143,7 +146,7 @@ export default function Login() {
                 animate={{ y: [0, -4, 0] }}
                 transition={{ repeat: Infinity, duration: 4, ease: "easeInOut" }}
               >
-                <img src="/EPEE4721.JPG" alt="SEND" className="h-10 w-auto cursor-pointer" />
+                <img src="/Sweep_logo_exact.svg" alt="Sweep" className="h-10 w-auto cursor-pointer" />
               </motion.div>
             </Link>
           </div>

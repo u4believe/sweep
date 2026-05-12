@@ -1,90 +1,83 @@
 import { Router, type IRouter } from "express";
-import { db, usersTable, withdrawalsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import { db, usersTable, withdrawalsTable, escrowsTable } from "@workspace/db";
+import { eq, and, sql, ne } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
-import { ethers } from "ethers";
 import { requireAuth, requireEmailVerified } from "../lib/auth.js";
+import { hashEmail, parseUsdcAmount } from "../lib/escrow.js";
 import {
   circleTransferUsdc,
   getPlatformWalletAddress,
-  getPlatformWalletIdForChain,
   initiateWireTransfer,
-  PRIMARY_BLOCKCHAIN,
-  PRIMARY_USDC_ADDRESS,
-  SUPPORTED_BLOCKCHAINS,
-  type SupportedBlockchain,
+  resolveCircleOnChainTxHash,
 } from "../lib/circle.js";
 import { WithdrawCryptoBody, WithdrawFiatBodySecure } from "@workspace/api-zod";
-
-// ─── Multi-chain treasury balance lookup ─────────────────────────────────────
-// CCTP cross-chain bridging is not functional on these testnet deployments, so
-// withdrawals fall through to the first chain treasury that has enough USDC.
-// Order: PRIMARY_BLOCKCHAIN first, then remaining chains.
-
-const CHAIN_RPC_URLS: Record<string, string> = {
-  "ETH-SEPOLIA":  process.env.ETH_SEPOLIA_RPC_URL  ?? "https://ethereum-sepolia-rpc.publicnode.com",
-  "BASE-SEPOLIA": process.env.BASE_SEPOLIA_RPC_URL  ?? "https://sepolia.base.org",
-  "MATIC-AMOY":   process.env.POLYGON_AMOY_RPC_URL  ?? "https://rpc-amoy.polygon.technology/",
-};
-
-const CHAIN_USDC_ADDRESSES: Record<string, string> = {
-  "ETH-SEPOLIA":  (process.env.ETH_SEPOLIA_USDC_ADDRESS  ?? "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238").toLowerCase(),
-  "BASE-SEPOLIA": (process.env.BASE_USDC_ADDRESS          ?? "0x036CbD53842c5426634e7929541eC2318f3dCF7e").toLowerCase(),
-  "MATIC-AMOY":   (process.env.POLYGON_AMOY_USDC_ADDRESS  ?? "0x41e94eb019c0762f9bfcf9fb1e58725bfb0e7582").toLowerCase(),
-};
-
-const ERC20_BALANCE_ABI = ["function balanceOf(address) view returns (uint256)"];
-
-async function getOnChainBalance(chain: string, address: string): Promise<number> {
-  try {
-    const provider = new ethers.JsonRpcProvider(CHAIN_RPC_URLS[chain]);
-    const contract = new ethers.Contract(CHAIN_USDC_ADDRESSES[chain], ERC20_BALANCE_ABI, provider);
-    const raw: bigint = await contract.balanceOf(address);
-    return parseFloat(ethers.formatUnits(raw, 6));
-  } catch {
-    return 0;
-  }
-}
-
-/**
- * Find the first chain treasury with enough USDC to cover the withdrawal amount.
- * PRIMARY_BLOCKCHAIN is checked first. Returns null if no chain has enough.
- */
-async function findSourceChain(amount: number): Promise<SupportedBlockchain | null> {
-  const platformAddress = getPlatformWalletAddress();
-  if (!platformAddress) return null;
-
-  // Check primary chain first, then all others
-  const orderedChains: SupportedBlockchain[] = [
-    PRIMARY_BLOCKCHAIN,
-    ...SUPPORTED_BLOCKCHAINS.filter((c) => c !== PRIMARY_BLOCKCHAIN),
-  ];
-
-  for (const chain of orderedChains) {
-    // Skip chains where the platform wallet ID isn't configured — can't send without it
-    if (!getPlatformWalletIdForChain(chain)) continue;
-
-    const balance = await getOnChainBalance(chain, platformAddress);
-    if (balance >= amount) {
-      return chain;
-    }
-  }
-  return null;
-}
+import {
+  sendWithdrawalCryptoEmail,
+  sendWithdrawalFiatEmail,
+  sendTransferSentEmail,
+  sendTransferReceivedEmail,
+} from "../lib/email.js";
 
 const router: IRouter = Router();
 
-// ─── Helper: load user balance ───────────────────────────────────────────────
-async function loadUserBalance(userId: number) {
-  const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-  return {
-    dbUser,
-    claimedBalance: parseFloat(dbUser?.claimedBalance ?? "0"),
-  };
+const WITHDRAWAL_FEE = 0.10; // $0.10 USDC flat fee per external crypto withdrawal
+
+const withdrawalLimiter = rateLimit({
+  windowMs:        60 * 1000,
+  max:             3,
+  keyGenerator:    (req) => String((req as any).user?.userId ?? ipKeyGenerator(req)),
+  standardHeaders: true,
+  legacyHeaders:   false,
+  message:         { error: "Too many requests", message: "Too many withdrawal attempts. Please wait a minute." },
+});
+
+// Atomically deduct `amount` from a user's claimedBalance only if the balance
+// is sufficient. Returns the new balance string, or null if the update matched
+// zero rows (balance too low, or a concurrent request already deducted it).
+async function atomicDeduct(userId: number, amount: number): Promise<string | null> {
+  const result = await db
+    .update(usersTable)
+    .set({
+      claimedBalance: sql`${usersTable.claimedBalance} - ${amount}`,
+    })
+    .where(
+      and(
+        eq(usersTable.id, userId),
+        sql`${usersTable.claimedBalance} >= ${amount}`,
+      ),
+    )
+    .returning({ newBalance: usersTable.claimedBalance });
+  return result[0]?.newBalance ?? null;
+}
+
+// Atomically restore `amount` to a user's claimedBalance.
+async function atomicRestore(userId: number, amount: number): Promise<void> {
+  await db
+    .update(usersTable)
+    .set({
+      claimedBalance: sql`${usersTable.claimedBalance} + ${amount}`,
+    })
+    .where(eq(usersTable.id, userId));
 }
 
 // ─── POST /api/withdraw/crypto ────────────────────────────────────────────────
-router.post("/crypto", requireAuth, requireEmailVerified, async (req, res) => {
+// Sends USDC from the Arc Testnet platform treasury to the user's wallet.
+// Arc Testnet is the primary treasury — all deposits land here and all
+// withdrawals are sent from here via Circle DCW.
+//
+// Idempotency / crash-safety design:
+//   1. Validate inputs and transaction password.
+//   2. Atomic DB deduction — single UPDATE WHERE balance >= total; fails if
+//      balance is insufficient OR a concurrent request already deducted.
+//   3. Insert withdrawal record as "processing" with a stored idempotencyKey
+//      BEFORE calling Circle. If the server crashes after this point, the
+//      reconciliation worker (withdrawalReconciliationWorker.ts) will replay
+//      the Circle call with the same key and settle the record.
+//   4. Call Circle. On success → mark "completed". On error → mark "failed"
+//      and atomically restore the balance.
+router.post("/crypto", requireAuth, requireEmailVerified, withdrawalLimiter, async (req, res) => {
   try {
     const user = (req as any).user;
     const parsed = WithdrawCryptoBody.safeParse(req.body);
@@ -95,16 +88,15 @@ router.post("/crypto", requireAuth, requireEmailVerified, async (req, res) => {
 
     const { walletAddress, amount } = parsed.data;
     const withdrawAmount = parseFloat(amount);
-    const WITHDRAWAL_FEE = 0.10; // $0.10 USDC flat fee per external withdrawal
-    const totalDeducted = withdrawAmount + WITHDRAWAL_FEE;
+    const totalDeducted  = withdrawAmount + WITHDRAWAL_FEE;
 
     if (withdrawAmount <= 0) {
       res.status(400).json({ error: "Invalid amount", message: "Amount must be positive" });
       return;
     }
 
-    const { dbUser, claimedBalance } = await loadUserBalance(user.userId);
-
+    // Transaction password check (reads user row — before the atomic deduct)
+    const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.userId)).limit(1);
     if (dbUser?.transactionPasswordHash) {
       const txnPwd = typeof req.body.transactionPassword === "string" ? req.body.transactionPassword : "";
       if (!txnPwd) {
@@ -118,78 +110,151 @@ router.post("/crypto", requireAuth, requireEmailVerified, async (req, res) => {
       }
     }
 
-    if (totalDeducted > claimedBalance) {
-      res.status(400).json({
-        error: "Insufficient balance",
-        message: `You need at least $${totalDeducted.toFixed(2)} (amount + $${WITHDRAWAL_FEE.toFixed(2)} fee). Available: $${claimedBalance.toFixed(2)}.`,
-      });
-      return;
-    }
-
-    // ── Resolve source wallet ────────────────────────────────────────────────
-    // Gas Station is NOT active — only the platform treasury wallet has ETH to
-    // pay gas fees. User wallets hold deposited USDC but cannot pay gas.
-    // The treasury is funded by the sweep worker (user USDC swept → treasury).
     const platformAddress = getPlatformWalletAddress();
     if (!platformAddress) {
-      res.status(503).json({ error: "Not configured", message: "Platform treasury wallet is not configured." });
+      res.status(503).json({ error: "Not configured", message: "CIRCLE_PLATFORM_WALLET_ADDRESS is not set" });
       return;
     }
 
-    const sourceChain = await findSourceChain(withdrawAmount);
-    if (!sourceChain) {
-      res.status(400).json({
-        error: "Insufficient treasury balance",
-        message: `Platform treasury does not have enough USDC to cover $${withdrawAmount.toFixed(2)}. Please try a smaller amount or contact support.`,
+    // ── Internal transfer: destination is another platform user's wallet ───────
+    // Skip the on-chain Circle transfer entirely and credit the recipient directly.
+    // This is instant, fee-free, and doesn't depend on chain RPC availability.
+    const [internalRecipient] = await db
+      .select({ id: usersTable.id, email: usersTable.email, claimedBalance: usersTable.claimedBalance })
+      .from(usersTable)
+      .where(
+        and(
+          sql`lower(${usersTable.circleWalletAddress}) = lower(${walletAddress})`,
+          ne(usersTable.id, user.userId),
+        ),
+      )
+      .limit(1);
+
+    if (internalRecipient) {
+      // No withdrawal fee for internal platform transfers
+      const internalNewBalance = await atomicDeduct(user.userId, withdrawAmount);
+      if (internalNewBalance === null) {
+        res.status(400).json({
+          error: "Insufficient balance",
+          message: `You need at least $${withdrawAmount.toFixed(2)} for this transfer.`,
+        });
+        return;
+      }
+
+      // Use SQL increment — safe against concurrent transfers to the same recipient
+      const [updatedRecipient] = await db.update(usersTable)
+        .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${withdrawAmount}` })
+        .where(eq(usersTable.id, internalRecipient.id))
+        .returning({ newBalance: usersTable.claimedBalance });
+
+      const senderEmail  = dbUser?.email ?? user.email;
+      const recipientBal = updatedRecipient?.newBalance ?? "0";
+
+      // Record in escrowsTable so both sender and recipient see it in history
+      await db.insert(escrowsTable).values({
+        senderAddress:   senderEmail,
+        recipientEmail:  internalRecipient.email,
+        emailHash:       hashEmail(internalRecipient.email),
+        amount:          withdrawAmount.toFixed(6),
+        amountWei:       parseUsdcAmount(withdrawAmount.toFixed(6)).toString(),
+        status:          "claimed",
+        recipientUserId: internalRecipient.id,
+        claimedAt:       new Date(),
+        txHash:          null,
+      });
+
+      sendTransferSentEmail(senderEmail, internalRecipient.email, amount, internalNewBalance).catch(() => {});
+      sendTransferReceivedEmail(internalRecipient.email, senderEmail, amount, recipientBal).catch(() => {});
+
+      req.log.info(
+        { from: user.userId, to: internalRecipient.id, amount },
+        "[withdraw] Internal platform transfer completed",
+      );
+
+      res.json({
+        success:        true,
+        internal:       true,
+        recipientEmail: internalRecipient.email,
+        amount,
+        newBalance:     internalNewBalance,
+        message:        `$${withdrawAmount.toFixed(2)} transferred to ${internalRecipient.email}`,
       });
       return;
     }
 
-    const sourceAddress = platformAddress;
+    // ── 1. Atomic deduction ───────────────────────────────────────────────────
+    // Single UPDATE WHERE balance >= total. If two requests arrive simultaneously
+    // only one can match — PostgreSQL row-level locking serialises them.
+    const newBalance = await atomicDeduct(user.userId, totalDeducted);
+    if (newBalance === null) {
+      res.status(400).json({
+        error: "Insufficient balance",
+        message: `You need at least $${totalDeducted.toFixed(2)} (amount + $${WITHDRAWAL_FEE.toFixed(2)} fee).`,
+      });
+      return;
+    }
 
-    const usdcAddress = CHAIN_USDC_ADDRESSES[sourceChain] ?? PRIMARY_USDC_ADDRESS;
+    // ── 2. Pre-insert withdrawal record as "processing" ───────────────────────
+    // Written before the Circle call so the reconciliation worker can recover
+    // if the server crashes between the deduction and the Circle response.
+    const idempotencyKey = randomUUID();
+    const [withdrawal] = await db.insert(withdrawalsTable).values({
+      userId:         user.userId,
+      amount,
+      type:           "crypto",
+      destination:    walletAddress,
+      status:         "processing",
+      idempotencyKey,
+    }).returning({ id: withdrawalsTable.id });
 
-    // Deduct amount + fee optimistically — roll back if transfer fails
-    const newBalance = (claimedBalance - totalDeducted).toFixed(6);
-    await db.update(usersTable).set({ claimedBalance: newBalance }).where(eq(usersTable.id, user.userId));
-
-    let txHash: string | undefined;
+    // ── 3. Circle transfer ────────────────────────────────────────────────────
+    let txHash: string;
     try {
       txHash = await circleTransferUsdc(
-        sourceAddress,
+        platformAddress,
         walletAddress,
-        sourceChain,
-        usdcAddress,
+        "ARC-TESTNET",
+        "",
         amount,
+        idempotencyKey,
       );
-      req.log.info({ txHash, amount, walletAddress, blockchain: sourceChain, source: "treasury" }, "[withdraw] Circle USDC transfer initiated");
+      req.log.info({ txHash, amount, walletAddress }, "[withdraw] Circle USDC transfer initiated");
     } catch (chainError: any) {
-      await db.update(usersTable).set({ claimedBalance: claimedBalance.toFixed(6) }).where(eq(usersTable.id, user.userId));
-      req.log.error({ err: chainError.message, amount, walletAddress, sourceChain }, "[withdraw] Transfer failed — balance restored");
+      // Circle failed — restore balance and mark the record failed
+      await atomicRestore(user.userId, totalDeducted);
+      await db.update(withdrawalsTable)
+        .set({ status: "failed" })
+        .where(eq(withdrawalsTable.id, withdrawal.id));
+      req.log.error({ err: chainError.message, amount, walletAddress }, "[withdraw] Transfer failed — balance restored");
       res.status(502).json({ error: "Transfer failed", message: chainError.message });
       return;
     }
 
-    // The $0.10 fee was already deducted from claimedBalance above.
-    // It stays as platform revenue in the DB — no second on-chain transaction needed.
+    // ── 4. Resolve real on-chain hash ─────────────────────────────────────────
+    // `txHash` from Circle is their internal UUID. The actual 0x… blockchain hash
+    // is set once the tx is confirmed (usually a few seconds). Try to fetch it now;
+    // the reconciliation worker will retry for any that are still pending.
+    const onChainHash = await resolveCircleOnChainTxHash(txHash).catch(() => null);
 
-    await db.insert(withdrawalsTable).values({
-      userId: user.userId,
-      amount,
-      type: "crypto",
-      destination: walletAddress,
-      status: "completed",
-      txHash: txHash ?? null,
-      completedAt: new Date(),
-    });
+    await db.update(withdrawalsTable)
+      .set({
+        status:           "completed",
+        circleTransferId: txHash,
+        txHash:           onChainHash ?? null,
+        completedAt:      new Date(),
+      })
+      .where(eq(withdrawalsTable.id, withdrawal.id));
+
+    sendWithdrawalCryptoEmail(dbUser.email, amount, WITHDRAWAL_FEE.toFixed(2), walletAddress).catch(() => {});
 
     res.json({
-      txHash: txHash ?? null,
+      txHash:      onChainHash ?? txHash,
+      circleTxId:  txHash,
       amount,
-      fee: WITHDRAWAL_FEE.toFixed(2),
+      fee:         WITHDRAWAL_FEE.toFixed(2),
       newBalance,
-      blockchain: sourceChain,
-      message: `Withdrew ${withdrawAmount.toFixed(2)} USDC to ${walletAddress} on ${sourceChain}`,
+      blockchain:  "ARC-TESTNET",
+      message:     `Withdrew ${withdrawAmount.toFixed(2)} USDC to ${walletAddress} on ARC-TESTNET`,
     });
   } catch (error: any) {
     req.log.error({ err: error }, "[withdraw] Crypto withdrawal error");
@@ -198,7 +263,7 @@ router.post("/crypto", requireAuth, requireEmailVerified, async (req, res) => {
 });
 
 // ─── POST /api/withdraw/fiat ──────────────────────────────────────────────────
-router.post("/fiat", requireAuth, requireEmailVerified, async (req, res) => {
+router.post("/fiat", requireAuth, requireEmailVerified, withdrawalLimiter, async (req, res) => {
   try {
     const user = (req as any).user;
     const parsed = WithdrawFiatBodySecure.safeParse(req.body);
@@ -215,7 +280,8 @@ router.post("/fiat", requireAuth, requireEmailVerified, async (req, res) => {
       return;
     }
 
-    const { claimedBalance } = await loadUserBalance(user.userId);
+    const [fiatUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.userId)).limit(1);
+    const claimedBalance = parseFloat(fiatUser?.claimedBalance ?? "0");
 
     if (withdrawAmount > claimedBalance) {
       res.status(400).json({
@@ -237,14 +303,18 @@ router.post("/fiat", requireAuth, requireEmailVerified, async (req, res) => {
 
     req.log.info({ transferId, status, amount }, "[withdraw] Circle payout initiated");
 
+    const fiatDestination = `Bank ****${bankAccountNumber.slice(-4)} (routing: ${routingNumber})`;
+
     await db.insert(withdrawalsTable).values({
-      userId: user.userId,
+      userId:           user.userId,
       amount,
-      type: "fiat",
-      destination: `Bank ****${bankAccountNumber.slice(-4)} (routing: ${routingNumber})`,
-      status: "pending",
+      type:             "fiat",
+      destination:      fiatDestination,
+      status:           "pending",
       circleTransferId: transferId,
     });
+
+    sendWithdrawalFiatEmail(fiatUser.email, amount, fiatDestination).catch(() => {});
 
     res.json({
       transferId,
@@ -252,7 +322,7 @@ router.post("/fiat", requireAuth, requireEmailVerified, async (req, res) => {
       status,
       newBalance,
       estimatedArrival: "1–3 business days",
-      message: `Initiated $${withdrawAmount.toFixed(2)} USD wire transfer via Circle`,
+      message:          `Initiated $${withdrawAmount.toFixed(2)} USD wire transfer via Circle`,
     });
   } catch (error: any) {
     req.log.error({ err: error }, "[withdraw] Fiat withdrawal error");

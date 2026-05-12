@@ -19,7 +19,7 @@ export default function Register() {
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
 
-  const handleRegister = async (e: React.FormEvent) => {
+  const handleRegister = async (e: { preventDefault(): void }) => {
     e.preventDefault();
     if (!name || !email || !password) { setError("All fields are required."); return; }
     if (password.length < 8) { setError("Password must be at least 8 characters."); return; }
@@ -73,7 +73,7 @@ export default function Register() {
           <div className="flex justify-center mb-8">
             <Link href="/landing">
               <motion.div animate={{ y: [0, -4, 0] }} transition={{ repeat: Infinity, duration: 4, ease: "easeInOut" }}>
-                <img src="/EPEE4721.JPG" alt="SEND" className="h-10 w-auto cursor-pointer" />
+                <img src="/Sweep_logo_exact.svg" alt="Sweep" className="h-10 w-auto cursor-pointer" />
               </motion.div>
             </Link>
           </div>

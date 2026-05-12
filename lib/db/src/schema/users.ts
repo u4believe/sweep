@@ -12,8 +12,13 @@ export const usersTable = pgTable("users", {
   circleWalletId: text("circle_wallet_id"),
   circleWalletAddress: text("circle_wallet_address"),
   // JSON map of blockchain → Circle wallet ID for multi-chain deposit support
-  // e.g. {"MATIC-AMOY":"uuid","BASE-SEPOLIA":"uuid","ETH-SEPOLIA":"uuid"}
+  // e.g. {"BASE-SEPOLIA":"uuid","ETH-SEPOLIA":"uuid","MATIC-AMOY":"uuid","ARB-SEPOLIA":"uuid","AVAX-FUJI":"uuid"}
   circleWalletIdsJson: text("circle_wallet_ids_json"),
+
+  // JSON map of blockchain → on-chain wallet address (may differ per chain)
+  // e.g. {"BASE-SEPOLIA":"0x...","ETH-SEPOLIA":"0x...","MATIC-AMOY":"0x..."}
+  // Used by depositIndexer to build per-chain address→userId lookup maps.
+  circleWalletAddressesJson: text("circle_wallet_addresses_json"),
   claimedBalance: decimal("claimed_balance", { precision: 20, scale: 6 }).notNull().default("0"),
 
   // ── Transaction password ───────────────────────────────────────────────────

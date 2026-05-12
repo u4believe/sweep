@@ -8,9 +8,15 @@ export const withdrawalsTable = pgTable("withdrawals", {
   amount: decimal("amount", { precision: 20, scale: 6 }).notNull(),
   type: text("type").notNull(), // crypto, fiat
   destination: text("destination").notNull(), // wallet address or bank account
-  status: text("status").notNull().default("pending"), // pending, completed, failed
+  // status lifecycle: processing → completed | failed
+  // "processing" is written before the Circle call; the reconciliation worker
+  // uses it to detect and recover from server crashes mid-withdrawal.
+  status: text("status").notNull().default("pending"), // pending, processing, completed, failed
   txHash: text("tx_hash"),
   circleTransferId: text("circle_transfer_id"),
+  // Stored before calling Circle so the reconciliation worker can replay the
+  // same request idempotently and determine whether Circle processed it.
+  idempotencyKey: text("idempotency_key"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   completedAt: timestamp("completed_at"),
 });

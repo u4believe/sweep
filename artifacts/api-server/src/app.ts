@@ -4,8 +4,9 @@ import helmet from "helmet";
 import pinoHttp from "pino-http";
 import path from "path";
 import { fileURLToPath } from "url";
-import router from "./routes";
+import router, { v1Router } from "./routes";
 import { logger } from "./lib/logger";
+import { threatMiddleware } from "./lib/threatMonitor.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -67,10 +68,14 @@ app.use(
   }),
 );
 
+// ─── IP threat monitoring ─────────────────────────────────────────────────────
+// Tracks 401/403/429/404-probe responses per IP and progressively blocks
+// repeat offenders (1 min → 15 min → 2 h → 24 h).
+app.use(threatMiddleware);
+
 // ─── Body parsing ─────────────────────────────────────────────────────────────
 // The `verify` callback captures the raw body buffer on every request.
-// Webhook signature validators (Paystack, Monnify) read req.rawBody to verify
-// HMAC integrity before the parsed JSON is used.
+// Webhook signature validators read req.rawBody to verify HMAC integrity before the parsed JSON is used.
 app.use(
   express.json({
     limit: "64kb",
@@ -83,6 +88,7 @@ app.use(express.urlencoded({ extended: true, limit: "64kb" }));
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use("/api", router);
+app.use("/v1",  v1Router);
 
 // ─── Serve frontend static files ─────────────────────────────────────────────
 // Serves the built usdc-send app. All non-API routes fall through to index.html

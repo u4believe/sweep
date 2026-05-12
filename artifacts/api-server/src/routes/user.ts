@@ -1,8 +1,9 @@
 import { Router, type IRouter } from "express";
-import { db, usersTable, depositsTable, withdrawalsTable, escrowsTable } from "@workspace/db";
+import { db, depositsTable, withdrawalsTable, escrowsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import { hashEmail } from "../lib/escrow.js";
+import { resolveCircleOnChainTxHash } from "../lib/circle.js";
 
 const router: IRouter = Router();
 
@@ -52,23 +53,48 @@ router.get("/history", requireAuth, async (req, res) => {
 
     // ── Map deposits → unified format ────────────────────────────────────────
     const depositEntries = deposits.map((d) => ({
-      id:        `dep-${d.id}`,
-      category:  "deposit" as const,
-      currency:  d.type === "bank" ? "USD" : "USDC",
-      direction: "in" as const,
-      amount:    d.amount,
-      status:    d.status,
-      network:   d.source,          // e.g. "Base Sepolia USDC" or "Bank transfer"
-      txHash:    d.txHash ?? null,
-      // For on-chain deposits we have the txHash but not the sender address —
-      // the sender is whoever submitted the on-chain Transfer. Surface the hash
-      // so the user can look it up on a block explorer.
+      id:          `dep-${d.id}`,
+      category:    "deposit" as const,
+      currency:    d.type === "bank" ? "USD" : "USDC",
+      direction:   "in" as const,
+      amount:      d.amount,
+      status:      d.status,
+      network:     d.source,
+      txHash:      d.txHash ?? null,
       fromAddress: null,
       toAddress:   null,
       description: d.source,
       createdAt:   d.createdAt,
       completedAt: d.creditedAt ?? null,
     }));
+
+    // ── Resolve on-chain hashes for crypto withdrawals (fire-and-forget) ───────
+    // Two cases that need resolution:
+    //   (a) New style: circleTransferId set, txHash null → freshly-completed withdrawal
+    //   (b) Old style: txHash contains a Circle UUID (pre-fix), circleTransferId null
+    // Non-blocking — response is not delayed.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const pendingHashResolution = withdrawals
+      .filter((w) => {
+        if (w.type !== "crypto") return false;
+        if (!w.txHash && w.circleTransferId) return true;               // case (a)
+        if (w.txHash && UUID_RE.test(w.txHash) && !w.circleTransferId) return true; // case (b)
+        return false;
+      })
+      .map(async (w) => {
+        try {
+          const circleId = w.circleTransferId ?? w.txHash!; // either source
+          const hash = await resolveCircleOnChainTxHash(circleId);
+          if (hash) {
+            await db.update(withdrawalsTable)
+              .set({ txHash: hash, circleTransferId: circleId })
+              .where(eq(withdrawalsTable.id, w.id));
+            w.txHash = hash;
+            w.circleTransferId = circleId;
+          }
+        } catch { /* non-fatal */ }
+      });
+    void Promise.allSettled(pendingHashResolution);
 
     // ── Map withdrawals → unified format ─────────────────────────────────────
     const withdrawalEntries = withdrawals.map((w) => ({
@@ -78,10 +104,9 @@ router.get("/history", requireAuth, async (req, res) => {
       direction:   "out" as const,
       amount:      w.amount,
       status:      w.status,
-      network:     w.type === "crypto" ? "On-chain" : "Bank transfer",
+      network:     w.type === "crypto" ? "Arc Testnet" : "Bank transfer",
       txHash:      w.txHash ?? null,
       fromAddress: null,
-      // destination is a wallet address (crypto) or bank details string (fiat)
       toAddress:   w.destination,
       description: w.type === "crypto"
         ? `Sent to ${w.destination}`
@@ -98,7 +123,7 @@ router.get("/history", requireAuth, async (req, res) => {
       direction:   "out" as const,
       amount:      e.amount,
       status:      e.status,
-      network:     "Arc Platform",
+      network:     "Sweep",
       txHash:      e.txHash ?? null,
       fromAddress: e.senderAddress,
       toAddress:   e.recipientEmail,
@@ -114,7 +139,7 @@ router.get("/history", requireAuth, async (req, res) => {
       direction:   "in" as const,
       amount:      e.amount,
       status:      e.status,
-      network:     "Arc Platform",
+      network:     "Sweep",
       txHash:      e.txHash ?? null,
       fromAddress: e.senderAddress,
       toAddress:   e.recipientEmail,

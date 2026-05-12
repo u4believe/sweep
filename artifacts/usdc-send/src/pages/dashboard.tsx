@@ -7,7 +7,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { motion, AnimatePresence, useMotionValue, animate } from "framer-motion";
 import {
-  Wallet,
   DollarSign,
   ArrowDownLeft,
   ArrowUpRight,
@@ -24,6 +23,8 @@ import {
   Send,
   Mail,
   Repeat,
+  CreditCard,
+  Banknote,
   Trash2,
   CalendarDays,
   Plus,
@@ -37,19 +38,27 @@ import {
   PlusCircle,
   QrCode,
   Landmark,
-  LayoutDashboard,
   LogOut,
   ChevronLeft,
   ChevronRight,
   ChevronDown,
+  ChevronUp,
   Menu,
   Home,
+  Users,
+  XCircle,
+  ShieldOff,
+  Search,
+  Zap,
+  Star,
+  GripVertical,
+  Tag,
+  List,
+  Layers,
 } from "lucide-react";
 import {
   useGetCurrentUser,
   useGetUserBalance,
-  useGetPendingEscrows,
-  useGetEscrowHistory,
   useWithdrawCrypto,
 } from "@workspace/api-client-react";
 import { useQuery } from "@tanstack/react-query";
@@ -58,18 +67,24 @@ import { AppLayout, Navbar } from "@/components/layout";
 import { fadeUp, scaleIn, staggerContainer, fadeIn } from "@/lib/motion";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
-const ARC_EXPLORER = "https://explorer.arc.io/tx/";
-
 // Block explorer URLs — keys are substrings matched against the network field
-// (network can be "Base Sepolia USDC", "Polygon Amoy USDC", etc.)
 const EXPLORER_BASE: Array<{ match: string; url: string }> = [
-  { match: "base sepolia",      url: "https://sepolia.basescan.org/tx/" },
-  { match: "ethereum sepolia",  url: "https://sepolia.etherscan.io/tx/" },
-  { match: "polygon amoy",      url: "https://amoy.polygonscan.com/tx/" },
+  { match: "base sepolia",       url: "https://sepolia.basescan.org/tx/" },
+  { match: "ethereum sepolia",   url: "https://sepolia.etherscan.io/tx/" },
+  { match: "polygon amoy",       url: "https://amoy.polygonscan.com/tx/" },
+  { match: "arc",                url: "https://testnet.arcscan.app/tx/" },
+  { match: "arb-sepolia",        url: "https://sepolia.arbiscan.io/tx/" },
+  { match: "arbitrum sepolia",   url: "https://sepolia.arbiscan.io/tx/" },
+  { match: "avax-fuji",          url: "https://testnet.snowtrace.io/tx/" },
+  { match: "avalanche fuji",     url: "https://testnet.snowtrace.io/tx/" },
 ];
 
+// Only show explorer links for real on-chain hashes (0x + 64 hex chars).
+// Circle transaction IDs are UUIDs and synthetic bsync-* hashes are not real hashes.
+const isOnChainHash = (h: string) => /^0x[0-9a-fA-F]{64}$/.test(h);
+
 function getExplorerUrl(network: string, txHash: string): string | null {
-  if (!txHash) return null;
+  if (!txHash || !isOnChainHash(txHash)) return null;
   const lower = network.toLowerCase();
   const entry = EXPLORER_BASE.find((e) => lower.includes(e.match));
   return entry ? entry.url + txHash : null;
@@ -99,8 +114,6 @@ interface FullBalance {
   usdBalance: string;
   usdEquivalent: string;
 }
-
-type ClaimStep = "idle" | "processing" | "success" | "error";
 
 // ─── Animated counter ─────────────────────────────────────────────────────────
 
@@ -161,28 +174,9 @@ function InlineError({ message }: { message: string }) {
   );
 }
 
-// ─── Claim step progress ──────────────────────────────────────────────────────
-
-function ClaimProgress({ step }: { step: ClaimStep }) {
-  return (
-    <div className="flex items-center gap-3 my-4">
-      <motion.div
-        animate={{ rotate: step === "processing" ? 360 : 0 }}
-        transition={{ repeat: step === "processing" ? Infinity : 0, duration: 1, ease: "linear" }}
-      >
-        <Loader2 className={cn("w-4 h-4", step === "processing" ? "text-primary" : "text-green-500")} />
-      </motion.div>
-      <span className="text-sm font-medium text-primary">
-        {step === "processing" && "Claiming your funds via Circle…"}
-        {step === "success" && "Claimed successfully!"}
-      </span>
-    </div>
-  );
-}
-
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
-type ActivePage = "dashboard" | "send-usd" | "send-usdc" | "fund" | "recurring" | "security";
+type ActivePage = "dashboard" | "send-usd" | "send-usdc" | "fund" | "recurring" | "subscription-create" | "subscription-pay" | "subscription-my" | "security";
 
 interface SidebarItemProps {
   icon: React.ReactNode;
@@ -251,7 +245,7 @@ function SendSubMenu({ activePage, onNavigate, collapsed }: SendMenuProps) {
         <span className="shrink-0 w-5 h-5 flex items-center justify-center">
           <Send className="w-4 h-4" />
         </span>
-        <span className="truncate flex-1 text-left">Send</span>
+        <span className="truncate flex-1 text-left">Sweep</span>
         <ChevronDown className={cn("w-4 h-4 transition-transform shrink-0", open && "rotate-180")} />
       </button>
 
@@ -268,6 +262,121 @@ function SendSubMenu({ activePage, onNavigate, collapsed }: SendMenuProps) {
             <div className="ml-4 mt-1 space-y-0.5 border-l border-border pl-3">
               <SidebarItem icon={<Mail className="w-4 h-4" />} label="Send USD" active={activePage === "send-usd"} onClick={() => onNavigate("send-usd")} collapsed={false} />
               <SidebarItem icon={<ArrowUpRight className="w-4 h-4" />} label="Send USDC" active={activePage === "send-usdc"} onClick={() => onNavigate("send-usdc")} collapsed={false} />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function PaymentSubMenu({ activePage, onNavigate, collapsed }: SendMenuProps) {
+  const isPaymentActive = activePage === "recurring";
+  const [open, setOpen] = useState(isPaymentActive);
+
+  useEffect(() => {
+    if (isPaymentActive) setOpen(true);
+  }, [activePage]);
+
+  if (collapsed) {
+    return (
+      <SidebarItem icon={<Repeat className="w-4 h-4" />} label="Recurring" active={activePage === "recurring"} onClick={() => onNavigate("recurring")} collapsed />
+    );
+  }
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all",
+          isPaymentActive ? "text-primary" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+        )}
+      >
+        <span className="shrink-0 w-5 h-5 flex items-center justify-center">
+          <Banknote className="w-4 h-4" />
+        </span>
+        <span className="truncate flex-1 text-left">Payment</span>
+        <ChevronDown className={cn("w-4 h-4 transition-transform shrink-0", open && "rotate-180")} />
+      </button>
+
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="payment-sub"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="ml-4 mt-1 space-y-0.5 border-l border-border pl-3">
+              <SidebarItem icon={<Repeat className="w-4 h-4" />} label="Recurring" active={activePage === "recurring"} onClick={() => onNavigate("recurring")} collapsed={false} />
+
+              {/* P2P — coming soon */}
+              <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground/50 cursor-not-allowed select-none">
+                <span className="shrink-0 w-5 h-5 flex items-center justify-center">
+                  <ArrowUpRight className="w-4 h-4" />
+                </span>
+                <span className="truncate flex-1">P2P</span>
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-600 border border-amber-200 shrink-0">Soon</span>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function SubscriptionSubMenu({ activePage, onNavigate, collapsed }: SendMenuProps) {
+  const isSubscriptionActive = activePage === "subscription-create" || activePage === "subscription-pay" || activePage === "subscription-my";
+  const [open, setOpen] = useState(isSubscriptionActive);
+
+  useEffect(() => {
+    if (isSubscriptionActive) setOpen(true);
+  }, [activePage]);
+
+  if (collapsed) {
+    return (
+      <>
+        <SidebarItem icon={<Plus className="w-4 h-4" />}         label="Create Subscription" active={activePage === "subscription-create"} onClick={() => onNavigate("subscription-create")} collapsed />
+        <SidebarItem icon={<ArrowUpRight className="w-4 h-4" />} label="Pay Subscription"    active={activePage === "subscription-pay"}    onClick={() => onNavigate("subscription-pay")}    collapsed />
+        <SidebarItem icon={<Users className="w-4 h-4" />}        label="My Subscriptions"   active={activePage === "subscription-my"}     onClick={() => onNavigate("subscription-my")}     collapsed />
+      </>
+    );
+  }
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all",
+          isSubscriptionActive ? "text-primary" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+        )}
+      >
+        <span className="shrink-0 w-5 h-5 flex items-center justify-center">
+          <CreditCard className="w-4 h-4" />
+        </span>
+        <span className="truncate flex-1 text-left">Subscription</span>
+        <ChevronDown className={cn("w-4 h-4 transition-transform shrink-0", open && "rotate-180")} />
+      </button>
+
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="subscription-sub"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="ml-4 mt-1 space-y-0.5 border-l border-border pl-3">
+              <SidebarItem icon={<Plus className="w-4 h-4" />}         label="Create Subscription" active={activePage === "subscription-create"} onClick={() => onNavigate("subscription-create")} collapsed={false} />
+              <SidebarItem icon={<ArrowUpRight className="w-4 h-4" />} label="Pay Subscription"    active={activePage === "subscription-pay"}    onClick={() => onNavigate("subscription-pay")}    collapsed={false} />
+              <SidebarItem icon={<Users className="w-4 h-4" />}        label="My Subscriptions"   active={activePage === "subscription-my"}     onClick={() => onNavigate("subscription-my")}     collapsed={false} />
             </div>
           </motion.div>
         )}
@@ -315,14 +424,6 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
           onClick={() => setLocation("/landing")}
           collapsed={collapsed}
         />
-        <SidebarItem
-          icon={<LayoutDashboard className="w-4 h-4" />}
-          label="Dashboard"
-          active={activePage === "dashboard"}
-          onClick={() => onNavigate("dashboard")}
-          collapsed={collapsed}
-        />
-
         <SendSubMenu activePage={activePage} onNavigate={onNavigate} collapsed={collapsed} />
 
         <SidebarItem
@@ -333,13 +434,9 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
           collapsed={collapsed}
         />
 
-        <SidebarItem
-          icon={<Repeat className="w-4 h-4" />}
-          label="Recurring"
-          active={activePage === "recurring"}
-          onClick={() => onNavigate("recurring")}
-          collapsed={collapsed}
-        />
+        <PaymentSubMenu activePage={activePage} onNavigate={onNavigate} collapsed={collapsed} />
+
+        <SubscriptionSubMenu activePage={activePage} onNavigate={onNavigate} collapsed={collapsed} />
 
         <SidebarItem
           icon={<LockKeyhole className="w-4 h-4" />}
@@ -506,23 +603,14 @@ export default function Dashboard() {
   const [mobileOpen,       setMobileOpen]       = useState(false);
   const [fundMethod,       setFundMethod]       = useState<"crypto" | "bank">("crypto");
 
-  const [claimStep, setClaimStep]       = useState<ClaimStep>("idle");
-  const [claimError, setClaimError]     = useState<string | null>(null);
-  const [claimTxHash, setClaimTxHash]   = useState<string | null>(null);
-  const [claimTotal, setClaimTotal]     = useState<string | null>(null);
-
   const { data: user, isLoading: isUserLoading, isError: isUserError } =
-    useGetCurrentUser({ query: { retry: false } });
+    useGetCurrentUser({ query: { retry: false } as any });
   const { data: balance, refetch: refetchBalance } =
-    useGetUserBalance({ query: { enabled: !!user } });
+    useGetUserBalance({ query: { enabled: !!user, refetchInterval: 5_000, refetchOnWindowFocus: true } as any });
   const bal = balance as FullBalance | undefined;
-  const { data: pending, refetch: refetchPending } =
-    useGetPendingEscrows({ query: { enabled: !!user } });
-  const { data: history } =
-    useGetEscrowHistory({ query: { enabled: !!user } });
 
   // Unified transaction history (deposits + withdrawals + escrow)
-  const { data: txHistory } = useQuery({
+  const { data: txHistory, error: txHistoryError, isError: isTxHistoryError, isLoading: isTxHistoryLoading } = useQuery({
     queryKey: ["/api/user/history"],
     enabled: !!user,
     staleTime: 0,                   // always consider data stale — refetch eagerly
@@ -533,8 +621,12 @@ export default function Dashboard() {
       const res = await fetch(`${BASE}/api/user/history`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
       });
-      if (!res.ok) throw new Error("Failed to fetch history");
-      return res.json() as Promise<{ transactions: UnifiedTx[]; total: number }>;
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(`${res.status}: ${(body as any).message ?? res.statusText}`);
+      }
+      const data = await res.json() as { transactions: UnifiedTx[]; total: number };
+      return data;
     },
   });
 
@@ -585,48 +677,6 @@ export default function Dashboard() {
     return <AccountSetupWizard user={user} onComplete={() => queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] })} />;
   }
 
-  // Wallet-free server-side claim — uses the platform's Circle-managed backend wallet.
-  // No MetaMask or browser extension required.
-  const handleClaim = async () => {
-    setClaimError(null);
-    setClaimTxHash(null);
-    setClaimTotal(null);
-    setClaimStep("processing");
-    try {
-      const jwt = localStorage.getItem("token");
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
-      const res = await fetch(`${BASE}/api/escrow/claim/auto`, {
-        method: "POST",
-        headers,
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Claim failed");
-      }
-      const data = await res.json();
-      setClaimTotal(data.totalClaimed);
-      if (data.txHash) setClaimTxHash(data.txHash);
-      setClaimStep("success");
-      refetchBalance();
-      refetchPending();
-      queryClient.invalidateQueries({ queryKey: ["/api/escrow/history"] });
-      invalidateHistory();
-    } catch (err: any) {
-      setClaimError(err?.message ?? "Claim failed. Please try again.");
-      setClaimStep("error");
-    }
-  };
-
-  const handleClaimReset = () => {
-    setClaimStep("idle");
-    setClaimError(null);
-    setClaimTxHash(null);
-    setClaimTotal(null);
-  };
-
-  const hasPending  = Number(pending?.totalPendingAmount ?? 0) > 0;
-  const isClaiming  = claimStep === "processing";
   const circleWallet = (user as any)?.circleWalletAddress as string | undefined;
 
   return (
@@ -678,11 +728,14 @@ export default function Dashboard() {
               <Menu className="w-5 h-5" />
             </button>
             <span className="font-semibold text-foreground text-sm">
-              {activePage === "dashboard" ? "Dashboard" :
-               activePage === "send-usd"  ? "Send USD"  :
-               activePage === "send-usdc" ? "Send USDC" :
-               activePage === "fund"      ? "Fund"      :
-               activePage === "recurring" ? "Recurring" : "Security"}
+              {activePage === "dashboard"          ? "Dashboard"           :
+               activePage === "send-usd"           ? "Send USD"            :
+               activePage === "send-usdc"          ? "Send USDC"           :
+               activePage === "fund"               ? "Fund"                :
+               activePage === "recurring"          ? "Recurring"           :
+               activePage === "subscription-create" ? "Create Subscription" :
+               activePage === "subscription-pay"   ? "Pay Subscription"    :
+               activePage === "subscription-my"    ? "My Subscriptions"    : "Security"}
             </span>
           </div>
 
@@ -745,59 +798,13 @@ export default function Dashboard() {
                     whileHover={{ y: -4, transition: { type: "spring", stiffness: 400, damping: 20 } }}
                     className="glass-panel p-6 rounded-3xl relative overflow-hidden"
                   >
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2 text-muted-foreground text-sm font-medium">
-                        <Clock className="w-4 h-4" /> Pending Escrow
-                      </div>
-                      <AnimatePresence>
-                        {hasPending && claimStep === "idle" && (
-                          <motion.button initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }}
-                            whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-                            onClick={handleClaim} disabled={isClaiming}
-                            className="px-3 py-1.5 bg-primary text-primary-foreground text-xs font-bold rounded-lg shadow-lg shadow-primary/20 flex items-center gap-1.5 disabled:opacity-70"
-                          >
-                            <ShieldCheck className="w-3.5 h-3.5" /> Claim All
-                          </motion.button>
-                        )}
-                        {claimStep === "success" && (
-                          <motion.button initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={handleClaimReset}
-                            className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                          >Done</motion.button>
-                        )}
-                      </AnimatePresence>
+                    <div className="flex items-center gap-2 mb-4 text-muted-foreground text-sm font-medium">
+                      <ArrowUpRight className="w-4 h-4" /> Recent Transfers
                     </div>
                     <div className="text-4xl lg:text-5xl font-display font-bold text-foreground tracking-tight mb-1">
-                      {pending ? <AnimatedAmount value={String(pending.totalPendingAmount)} /> : "$0.00"}
+                      {bal ? <AnimatedAmount value={bal.claimedBalance} /> : "$0.00"}
                     </div>
-                    <div className="text-muted-foreground text-xs mb-2">{pending?.escrows?.length || 0} transfer(s) awaiting claim</div>
-                    {isClaiming && <ClaimProgress step={claimStep} />}
-                    <AnimatePresence>
-                      {claimStep === "success" && (
-                        <motion.div initial={{ opacity: 0, scale: 0.9, height: 0 }} animate={{ opacity: 1, scale: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
-                          className="mt-3 p-3 rounded-xl bg-green-50 border border-green-200 overflow-hidden"
-                        >
-                          <div className="flex items-center gap-2 text-green-700 font-semibold text-sm mb-1">
-                            <CheckCircle2 className="w-4 h-4" />
-                            {claimTotal ? `${claimTotal} USD claimed!` : "Claimed successfully!"}
-                          </div>
-                          {claimTxHash && (
-                            <div className="flex items-center gap-1 text-xs text-green-600 font-mono truncate">
-                              <span className="truncate">{claimTxHash}</span>
-                              <CopyButton text={claimTxHash} />
-                              <a href={`${ARC_EXPLORER}${claimTxHash}`} target="_blank" rel="noopener noreferrer">
-                                <ExternalLink className="w-3 h-3 opacity-60 hover:opacity-100" />
-                              </a>
-                            </div>
-                          )}
-                        </motion.div>
-                      )}
-                      {claimStep === "error" && claimError && (
-                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-2">
-                          <InlineError message={claimError} />
-                          <button onClick={handleClaimReset} className="mt-2 text-sm text-primary hover:underline">Try again</button>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                    <div className="text-muted-foreground text-xs">Available to send or withdraw</div>
                   </motion.div>
                 </div>
 
@@ -840,7 +847,18 @@ export default function Dashboard() {
                     ) : null}
                   </div>
                   <div className="p-4">
-                    {!txHistory?.transactions?.length ? (
+                    {isTxHistoryError ? (
+                      <motion.div variants={scaleIn} className="text-center py-16 text-red-500">
+                        <AlertCircle className="w-10 h-10 mx-auto mb-3 opacity-60" />
+                        <p className="text-sm font-medium">Failed to load transactions</p>
+                        <p className="text-xs mt-1 opacity-70">{(txHistoryError as Error)?.message ?? "Unknown error"}</p>
+                      </motion.div>
+                    ) : isTxHistoryLoading || !txHistory ? (
+                      <motion.div variants={scaleIn} className="text-center py-16 text-muted-foreground">
+                        <Loader2 className="w-8 h-8 mx-auto mb-3 opacity-40 animate-spin" />
+                        <p className="text-sm">Loading transactions…</p>
+                      </motion.div>
+                    ) : !txHistory.transactions?.length ? (
                       <motion.div variants={scaleIn} className="text-center py-16 text-muted-foreground">
                         <Clock className="w-10 h-10 mx-auto mb-3 opacity-20" />
                         <p className="text-sm">No transactions yet</p>
@@ -877,7 +895,7 @@ export default function Dashboard() {
                                 <div className="min-w-0 flex-1">
                                   <div className="flex items-center gap-2">
                                     <p className="font-semibold text-foreground text-sm">{label}</p>
-                                    <span className="text-xs px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground">{tx.network}</span>
+                                    <span className="text-xs px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground">{tx.category === "withdrawal" && isCrypto ? "Arc Testnet" : tx.network}</span>
                                   </div>
                                   <p className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap mt-0.5">
                                     <span>{format(new Date(tx.createdAt), "MMM d, yyyy · h:mm a")}</span>
@@ -911,7 +929,14 @@ export default function Dashboard() {
                                               <span>{tx.network}</span>
                                             </div>
                                           )}
-                                          {explorerUrl && (
+                                          {tx.txHash && isOnChainHash(tx.txHash) && (
+                                            <div className="flex items-center gap-1.5">
+                                              <span className="shrink-0 font-medium text-foreground">Tx Hash:</span>
+                                              <span className="font-mono">{tx.txHash.slice(0, 10)}…{tx.txHash.slice(-8)}</span>
+                                              <CopyButton text={tx.txHash} />
+                                            </div>
+                                          )}
+                                          {explorerUrl && !(tx.category === "withdrawal" && isCrypto) && (
                                             <a href={explorerUrl} target="_blank" rel="noopener noreferrer"
                                               className="flex items-center gap-1 text-primary hover:underline mt-1"
                                               onClick={(e) => e.stopPropagation()}
@@ -949,42 +974,65 @@ export default function Dashboard() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8, transition: { duration: 0.15 } }}
                 transition={{ duration: 0.25 }}
-                className="max-w-3xl mx-auto px-4 sm:px-6 py-8 space-y-6"
+                className={cn(
+                  "px-4 sm:px-6 py-8 space-y-6",
+                  (activePage === "subscription-my" || activePage === "subscription-create") ? "w-full" : "max-w-3xl mx-auto",
+                )}
               >
                 {/* Page header */}
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => setActivePage("dashboard")}
-                    className="p-2 rounded-xl border border-border bg-white hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
-                    title="Back to Dashboard"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <div>
-                    <h1 className="text-xl font-bold font-display text-foreground">
-                      {activePage === "send-usd"  ? "Send USD"       :
-                       activePage === "send-usdc" ? "Send USDC"      :
-                       activePage === "fund"      ? "Add Funds"      :
-                       activePage === "recurring" ? "Recurring"      : "Security"}
-                    </h1>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {activePage === "send-usd"  ? "Transfer USD to any email address"          :
-                       activePage === "send-usdc" ? "Withdraw USDC to an external wallet"        :
-                       activePage === "fund"      ? "Deposit USDC or fund via bank"              :
-                       activePage === "recurring" ? "Manage your scheduled transfers"            :
-                                                    "Transaction password & authorization key"}
-                    </p>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <button
+                      onClick={() => setActivePage("dashboard")}
+                      className="p-2 rounded-xl border border-border bg-white hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground shrink-0"
+                      title="Back to Dashboard"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                    <div className="min-w-0">
+                      <h1 className="text-xl font-bold font-display text-foreground truncate">
+                        {activePage === "send-usd"            ? "Send USD"             :
+                         activePage === "send-usdc"           ? "Send USDC"            :
+                         activePage === "fund"                ? "Add Funds"             :
+                         activePage === "recurring"           ? "Recurring"             :
+                         activePage === "subscription-create" ? "Create Subscription"   :
+                         activePage === "subscription-pay"   ? "Pay Subscription"      :
+                         activePage === "subscription-my"    ? "Subscription Dashboard" : "Security"}
+                      </h1>
+                      <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                        {activePage === "send-usd"            ? "Transfer USD to any email address"          :
+                         activePage === "send-usdc"           ? "Withdraw USDC to an external wallet"        :
+                         activePage === "fund"                ? "Deposit USDC or fund via bank"              :
+                         activePage === "recurring"           ? "Manage your scheduled transfers"            :
+                         activePage === "subscription-create" ? "Set up a new subscription plan"             :
+                         activePage === "subscription-pay"   ? "Pay an existing subscription"               :
+                         activePage === "subscription-my"    ? "Manage your subscriptions and passport"      :
+                                                               "Transaction password & authorization key"}
+                      </p>
+                    </div>
                   </div>
+
+                  {/* Balance — always visible on non-dashboard tabs */}
+                  <p className="text-base font-bold text-foreground tabular-nums shrink-0">
+                    {bal ? formatCurrency(bal.claimedBalance) : "$0.00"}
+                  </p>
                 </div>
 
-                {/* Page card */}
-                <div className="bg-white/90 backdrop-blur rounded-3xl shadow-sm border border-border overflow-hidden">
-                  <div className="p-6 lg:p-8">
+                {/* Page card — subscription-create manages its own layout */}
+                <div className={cn(
+                  "overflow-hidden",
+                  activePage !== "subscription-create" && "bg-white/90 backdrop-blur rounded-3xl shadow-sm border border-border",
+                )}>
+                  <div className={
+                    activePage === "subscription-create" ? "" :
+                    activePage === "subscription-my"     ? "p-4 lg:p-6" :
+                                                           "p-6 lg:p-8"
+                  }>
                     <AnimatePresence mode="wait">
 
                       {activePage === "send-usd" && (
                         <motion.div key="send-usd" variants={fadeIn} initial="hidden" animate="show" exit="hidden">
-                          <DashboardSendForm onSuccess={() => setActivePage("dashboard")} hasTransactionPassword={(user as any).hasTransactionPassword} />
+                          <DashboardSendForm onSuccess={() => setActivePage("dashboard")} hasTransactionPassword={(user as any).hasTransactionPassword} refetchBalance={refetchBalance} invalidateHistory={invalidateHistory} />
                         </motion.div>
                       )}
 
@@ -1007,7 +1055,16 @@ export default function Dashboard() {
                                     transition={{ type: "spring", stiffness: 400, damping: 30 }} />
                                 )}
                                 <span className="relative z-10 flex items-center gap-2">
-                                  {method === "crypto" ? <><QrCode className="w-4 h-4" /> Fund with Crypto</> : <><Landmark className="w-4 h-4" /> Direct Bank Deposit</>}
+                                  {method === "crypto" ? (
+                                    <><QrCode className="w-4 h-4" /> Fund with Crypto</>
+                                  ) : (
+                                    <>
+                                      <Landmark className="w-4 h-4" /> Direct Bank Deposit
+                                      <span className="ml-1 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold leading-none border border-amber-200">
+                                        Coming Soon
+                                      </span>
+                                    </>
+                                  )}
                                 </span>
                               </button>
                             ))}
@@ -1015,7 +1072,7 @@ export default function Dashboard() {
                           <AnimatePresence mode="wait">
                             {fundMethod === "crypto" ? (
                               <motion.div key="fund-crypto" variants={scaleIn} initial="hidden" animate="show" exit="hidden">
-                                <CryptoDepositPanel walletAddress={(user as any).circleWalletAddress} />
+                                <CryptoDepositPanel />
                               </motion.div>
                             ) : (
                               <motion.div key="fund-bank" variants={scaleIn} initial="hidden" animate="show" exit="hidden">
@@ -1029,6 +1086,24 @@ export default function Dashboard() {
                       {activePage === "recurring" && (
                         <motion.div key="recurring" variants={fadeIn} initial="hidden" animate="show" exit="hidden">
                           <RecurringTransferTab userEmail={user.email} availableBalance={parseFloat(balance?.claimedBalance ?? "0")} hasTransactionPassword={(user as any).hasTransactionPassword} />
+                        </motion.div>
+                      )}
+
+                      {activePage === "subscription-create" && (
+                        <motion.div key="subscription-create" variants={fadeIn} initial="hidden" animate="show" exit="hidden">
+                          <CreateSubscriptionTab user={user} />
+                        </motion.div>
+                      )}
+
+                      {activePage === "subscription-pay" && (
+                        <motion.div key="subscription-pay" variants={fadeIn} initial="hidden" animate="show" exit="hidden">
+                          <PaySubscriptionTab user={user} />
+                        </motion.div>
+                      )}
+
+                      {activePage === "subscription-my" && (
+                        <motion.div key="subscription-my" variants={fadeIn} initial="hidden" animate="show" exit="hidden">
+                          <MySubscriptionsTab user={user as any} />
                         </motion.div>
                       )}
 
@@ -1179,6 +1254,12 @@ function CryptoWithdrawalForm({ mutation, maxAmount, circleWalletAddress, hasTra
         {errors.amount && <p className="text-destructive text-sm mt-1">{errors.amount.message as string}</p>}
       </motion.div>
 
+      {/* Network notice */}
+      <motion.div variants={fadeUp} className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 text-xs">
+        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+        <span>Withdrawals are sent on the <strong>ARC Testnet</strong> network only.</span>
+      </motion.div>
+
       {/* Fee breakdown */}
       <motion.div variants={fadeUp} className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 space-y-1.5 text-sm">
         <div className="flex items-center justify-between text-muted-foreground">
@@ -1186,7 +1267,7 @@ function CryptoWithdrawalForm({ mutation, maxAmount, circleWalletAddress, hasTra
           <span className="font-medium text-foreground">{parsedAmount > 0 ? `$${parsedAmount.toFixed(2)}` : "—"} USDC</span>
         </div>
         <div className="flex items-center justify-between text-muted-foreground">
-          <span>Network fee</span>
+          <span>Transaction fee</span>
           <span className="font-medium text-amber-700">${WITHDRAWAL_FEE.toFixed(2)} USDC</span>
         </div>
         <div className="border-t border-amber-200 pt-1.5 flex items-center justify-between font-semibold text-foreground">
@@ -1239,14 +1320,20 @@ const dashSendSchema = z.object({
 
 type DashSendValues = z.infer<typeof dashSendSchema>;
 
-function DashboardSendForm({ onSuccess, hasTransactionPassword }: { onSuccess: () => void; hasTransactionPassword?: boolean }) {
-  const { data: balance } = useGetUserBalance({});
+type RecipientPreview = { registered: boolean; name: string | null; email: string };
+
+function DashboardSendForm({ onSuccess, hasTransactionPassword, refetchBalance, invalidateHistory }: { onSuccess: () => void; hasTransactionPassword?: boolean; refetchBalance: () => void; invalidateHistory: () => void }) {
+  const { data: balance } = useGetUserBalance({ query: { refetchInterval: 5_000 } as any });
   const [isSending,    setIsSending]    = useState(false);
+  const [isLooking,    setIsLooking]    = useState(false);
   const [formError,    setFormError]    = useState<string | null>(null);
   const [successEmail, setSuccessEmail] = useState("");
   const [successAmount, setSuccessAmount] = useState("");
+  const [successName,  setSuccessName]  = useState("");
   const [didSucceed,   setDidSucceed]   = useState(false);
   const [txnPwd,       setTxnPwd]       = useState("");
+  const [preview,      setPreview]      = useState<RecipientPreview | null>(null);
+  const [pendingData,  setPendingData]  = useState<DashSendValues | null>(null);
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<DashSendValues>({
     resolver: zodResolver(dashSendSchema),
@@ -1254,13 +1341,36 @@ function DashboardSendForm({ onSuccess, hasTransactionPassword }: { onSuccess: (
 
   const availableBalance = parseFloat(balance?.claimedBalance ?? "0");
 
-  const onSubmit = async (data: DashSendValues) => {
+  // Step 1 — validate locally, look up recipient, show confirmation screen
+  const onReview = async (data: DashSendValues) => {
     setFormError(null);
     const numAmount = parseFloat(data.amount);
     if (numAmount > availableBalance) {
       setFormError(`Insufficient balance. You have $${availableBalance.toFixed(2)} USD available.`);
       return;
     }
+    setIsLooking(true);
+    try {
+      const jwt = localStorage.getItem("token");
+      const headers: Record<string, string> = {};
+      if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
+      const email = data.recipientEmail.toLowerCase().trim();
+      const res = await fetch(`${BASE}/api/escrow/lookup-recipient?email=${encodeURIComponent(email)}`, { headers });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message ?? "Could not look up recipient");
+      setPendingData(data);
+      setPreview(json as RecipientPreview);
+    } catch (err: any) {
+      setFormError(err?.message ?? "Could not look up recipient. Please try again.");
+    } finally {
+      setIsLooking(false);
+    }
+  };
+
+  // Step 2 — user confirmed; execute the transfer
+  const onConfirm = async () => {
+    if (!pendingData || !preview) return;
+    setFormError(null);
     setIsSending(true);
     try {
       const jwt = localStorage.getItem("token");
@@ -1270,23 +1380,25 @@ function DashboardSendForm({ onSuccess, hasTransactionPassword }: { onSuccess: (
         method: "POST",
         headers: sendHeaders,
         body: JSON.stringify({
-          recipientEmail: data.recipientEmail.toLowerCase().trim(),
-          amount: data.amount,
+          recipientEmail: pendingData.recipientEmail.toLowerCase().trim(),
+          amount: pendingData.amount,
           ...(hasTransactionPassword && txnPwd ? { transactionPassword: txnPwd } : {}),
         }),
       });
       const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json.message ?? "Failed to send payment");
-      }
+      if (!res.ok) throw new Error(json.message ?? "Failed to send payment");
       setTxnPwd("");
-      setSuccessEmail(data.recipientEmail.toLowerCase().trim());
-      setSuccessAmount(data.amount);
+      setSuccessEmail(pendingData.recipientEmail.toLowerCase().trim());
+      setSuccessAmount(pendingData.amount);
+      setSuccessName(preview.name ?? "");
+      setPreview(null);
+      setPendingData(null);
       setDidSucceed(true);
       refetchBalance();
       invalidateHistory();
     } catch (err: any) {
       setFormError(err?.message ?? "Failed to send payment. Please try again.");
+      setPreview(null);
     } finally {
       setIsSending(false);
     }
@@ -1297,6 +1409,9 @@ function DashboardSendForm({ onSuccess, hasTransactionPassword }: { onSuccess: (
     setFormError(null);
     setSuccessEmail("");
     setSuccessAmount("");
+    setSuccessName("");
+    setPreview(null);
+    setPendingData(null);
     reset();
   };
 
@@ -1324,9 +1439,10 @@ function DashboardSendForm({ onSuccess, hasTransactionPassword }: { onSuccess: (
           <motion.div variants={staggerContainer(0.08)} initial="hidden" animate="show">
             <motion.h3 variants={fadeUp} className="text-2xl font-bold mb-1">Payment Sent!</motion.h3>
             <motion.p variants={fadeUp} className="text-muted-foreground text-sm mb-2">
-              <span className="font-semibold text-foreground">${successAmount} USD</span> locked in escrow for{" "}
-              <span className="font-semibold text-foreground">{successEmail}</span>.
-              They'll receive a notification to claim it.
+              <span className="font-semibold text-foreground">${successAmount} USD</span> sent to{" "}
+              <span className="font-semibold text-foreground">{successName || successEmail}</span>
+              {successName && <span className="text-muted-foreground"> ({successEmail})</span>}.
+              Their balance has been credited instantly.
             </motion.p>
             <motion.div variants={fadeUp} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-violet-50 text-violet-700 text-xs font-medium border border-violet-200 mb-6">
               <ShieldCheck className="w-3.5 h-3.5" />
@@ -1353,6 +1469,106 @@ function DashboardSendForm({ onSuccess, hasTransactionPassword }: { onSuccess: (
             </motion.div>
           </motion.div>
         </motion.div>
+      ) : preview ? (
+        /* ── Confirmation screen ── */
+        <motion.div key="confirm" variants={staggerContainer(0.07, 0)} initial="hidden" animate="show" exit="hidden">
+          <motion.div variants={fadeUp} className="mb-6">
+            <button
+              type="button"
+              onClick={() => { setPreview(null); setFormError(null); }}
+              className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4"
+            >
+              <ChevronLeft className="w-4 h-4" /> Back
+            </button>
+            <h3 className="text-xl font-bold font-display">Confirm Transfer</h3>
+            <p className="text-sm text-muted-foreground mt-0.5">Please review the details before sending</p>
+          </motion.div>
+
+          {/* Recipient card */}
+          <motion.div variants={fadeUp} className="rounded-2xl border border-border bg-secondary/40 overflow-hidden mb-4">
+            <div className="px-5 py-4 border-b border-border/60">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Sending to</p>
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-lg shrink-0">
+                  {(preview.name ?? preview.email).charAt(0).toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  {preview.name && <p className="font-semibold text-foreground truncate">{preview.name}</p>}
+                  <p className="text-sm text-muted-foreground truncate">{preview.email}</p>
+                  {preview.registered ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5 mt-1">
+                      <CheckCircle2 className="w-3 h-3" /> Verified Sweep user
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 mt-1">
+                      <AlertCircle className="w-3 h-3" /> Not yet on Sweep — funds held until they join
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="px-5 py-4 flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">Amount</span>
+              <span className="text-2xl font-bold text-foreground tabular-nums">
+                ${parseFloat(pendingData!.amount).toFixed(2)}{" "}
+                <span className="text-base font-medium text-muted-foreground">USD</span>
+              </span>
+            </div>
+          </motion.div>
+
+          {/* Transaction password on confirm screen */}
+          {hasTransactionPassword && (
+            <motion.div variants={fadeUp} className="mb-4">
+              <label className="block text-sm font-medium text-foreground mb-2">
+                <Lock className="w-4 h-4 inline mr-1.5 opacity-60" />
+                Transaction Password
+              </label>
+              <input
+                type="password"
+                value={txnPwd}
+                onChange={(e) => setTxnPwd(e.target.value)}
+                disabled={isSending}
+                placeholder="Your transaction password"
+                className="w-full px-4 py-3 rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all outline-none disabled:opacity-60"
+              />
+            </motion.div>
+          )}
+
+          {/* Error */}
+          <AnimatePresence>
+            {formError && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                className="flex items-start gap-3 px-4 py-3 mb-4 rounded-xl bg-destructive/10 border border-destructive/20 text-sm text-destructive overflow-hidden"
+              >
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>{formError}</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <motion.div variants={fadeUp}>
+            <motion.button
+              type="button"
+              onClick={onConfirm}
+              disabled={isSending}
+              whileHover={!isSending ? { scale: 1.02, y: -1 } : {}}
+              whileTap={!isSending ? { scale: 0.98 } : {}}
+              className="w-full relative group flex items-center justify-center gap-2 px-6 py-4 rounded-xl font-bold text-white overflow-hidden bg-primary disabled:opacity-70 disabled:cursor-not-allowed transition-shadow hover:shadow-xl hover:shadow-primary/30"
+            >
+              <div className="absolute inset-0 bg-gradient-to-r from-primary to-accent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
+              <span className="relative z-10 flex items-center gap-2">
+                {isSending
+                  ? <><Loader2 className="w-5 h-5 animate-spin" />Sending…</>
+                  : <><ShieldCheck className="w-5 h-5" />Confirm &amp; Send<ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></>
+                }
+              </span>
+            </motion.button>
+          </motion.div>
+        </motion.div>
+
       ) : (
         /* ── Form state ── */
         <motion.div key="form" variants={staggerContainer(0.08, 0)} initial="hidden" animate="show" exit="hidden">
@@ -1361,7 +1577,7 @@ function DashboardSendForm({ onSuccess, hasTransactionPassword }: { onSuccess: (
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-xl font-bold font-display">Send USD</h3>
-                <p className="text-sm text-muted-foreground mt-0.5">Lock funds in escrow for any email address</p>
+                <p className="text-sm text-muted-foreground mt-0.5">Send USD instantly to any email address</p>
               </div>
               <motion.div
                 initial={{ opacity: 0, scale: 0.9 }}
@@ -1395,7 +1611,7 @@ function DashboardSendForm({ onSuccess, hasTransactionPassword }: { onSuccess: (
             )}
           </AnimatePresence>
 
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+          <form onSubmit={handleSubmit(onReview)} className="space-y-5">
             {/* Recipient email */}
             <motion.div variants={fadeUp}>
               <label className="block text-sm font-medium text-foreground mb-2">
@@ -1404,7 +1620,7 @@ function DashboardSendForm({ onSuccess, hasTransactionPassword }: { onSuccess: (
               </label>
               <input
                 {...register("recipientEmail")}
-                disabled={isSending}
+                disabled={isLooking}
                 type="email"
                 autoComplete="off"
                 placeholder="satoshi@example.com"
@@ -1433,7 +1649,7 @@ function DashboardSendForm({ onSuccess, hasTransactionPassword }: { onSuccess: (
                 </div>
                 <input
                   {...register("amount")}
-                  disabled={isSending}
+                  disabled={isLooking}
                   type="number"
                   step="0.01"
                   min="0.01"
@@ -1456,46 +1672,26 @@ function DashboardSendForm({ onSuccess, hasTransactionPassword }: { onSuccess: (
               </AnimatePresence>
             </motion.div>
 
-            {/* Transaction password (shown only if user has one set) */}
-            {hasTransactionPassword && (
-              <motion.div variants={fadeUp}>
-                <label className="block text-sm font-medium text-foreground mb-2">
-                  <Lock className="w-4 h-4 inline mr-1.5 opacity-60" />
-                  Transaction Password
-                </label>
-                <div className="relative">
-                  <input
-                    type="password"
-                    value={txnPwd}
-                    onChange={(e) => setTxnPwd(e.target.value)}
-                    disabled={isSending}
-                    placeholder="Your transaction password"
-                    className="w-full px-4 py-3 rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all outline-none disabled:opacity-60"
-                  />
-                </div>
-              </motion.div>
-            )}
-
             {/* Info note */}
             <motion.div variants={fadeUp} className="flex items-start gap-3 px-4 py-3 rounded-xl bg-primary/5 border border-primary/10 text-sm text-muted-foreground">
               <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0 text-primary" />
-              <span>Funds are deducted from your balance and held in escrow until the recipient claims them.</span>
+              <span>Funds are deducted from your balance and credited to the recipient instantly.</span>
             </motion.div>
 
-            {/* Submit */}
+            {/* Review button */}
             <motion.div variants={fadeUp}>
               <motion.button
                 type="submit"
-                disabled={isSending}
-                whileHover={!isSending ? { scale: 1.02, y: -1 } : {}}
-                whileTap={!isSending ? { scale: 0.98 } : {}}
+                disabled={isLooking}
+                whileHover={!isLooking ? { scale: 1.02, y: -1 } : {}}
+                whileTap={!isLooking ? { scale: 0.98 } : {}}
                 className="w-full relative group flex items-center justify-center gap-2 px-6 py-4 rounded-xl font-bold text-white overflow-hidden bg-primary disabled:opacity-70 disabled:cursor-not-allowed transition-shadow hover:shadow-xl hover:shadow-primary/30"
               >
                 <div className="absolute inset-0 bg-gradient-to-r from-primary to-accent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
                 <span className="relative z-10 flex items-center gap-2">
-                  {isSending
-                    ? <><Loader2 className="w-5 h-5 animate-spin" />Sending…</>
-                    : <><Send className="w-5 h-5" />Lock &amp; Send<ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></>
+                  {isLooking
+                    ? <><Loader2 className="w-5 h-5 animate-spin" />Looking up recipient…</>
+                    : <><Send className="w-5 h-5" />Review Transfer<ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></>
                   }
                 </span>
               </motion.button>
@@ -1546,7 +1742,7 @@ function RecurringTransferTab({ userEmail, availableBalance, hasTransactionPassw
   const [txnPwd,    setTxnPwd]      = useState("");
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
 
-  const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<RecurringValues>({
+  const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<RecurringValues>({
     resolver: zodResolver(recurringSchema),
     defaultValues: { interval: "monthly", startHour: 9, startDayOfWeek: 1, startDayOfMonth: 1 },
   });
@@ -2121,6 +2317,15 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
 
   // ── PAK generation ───────────────────────────────────────────────────────
 
+  // First-time only: no OTP — email already verified at sign-up
+  const generatePakDirect = () => run(async () => {
+    const data = await api("/pak/generate-first");
+    setRevealedPak(data.pak);
+    setView("gen-pak-reveal");
+    reset();
+  });
+
+  // Regeneration: requires OTP (existing PAK being replaced)
   const requestPakOtp = () => run(async () => {
     await api("/pak/request-otp");
     setView("gen-pak-otp");
@@ -2262,43 +2467,6 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
             </motion.div>
           )}
 
-          {/* Transaction Password card */}
-          <motion.div variants={fadeUp} className="p-5 rounded-2xl border border-border bg-white space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center",
-                  user.hasTransactionPassword ? "bg-green-100 text-green-600" : "bg-amber-100 text-amber-600")}>
-                  <Lock className="w-4 h-4" />
-                </div>
-                <div>
-                  <p className="font-semibold text-foreground text-sm">Transaction Password</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {user.hasTransactionPassword ? "Required for all outgoing transfers" : "Not set — transactions are unprotected"}
-                  </p>
-                </div>
-              </div>
-              <span className={cn("px-2.5 py-1 rounded-full text-xs font-bold",
-                user.hasTransactionPassword ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700")}>
-                {user.hasTransactionPassword ? "Active" : "Not set"}
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {!user.hasTransactionPassword ? (
-                <button onClick={requestTxnOtp} disabled={isLoading}
-                  className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-primary/90 transition-colors disabled:opacity-60">
-                  {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Lock className="w-3 h-3" />}
-                  Set Transaction Password
-                </button>
-              ) : (
-                <button onClick={() => { reset(); setView("chg-txn-pak"); }} disabled={!user.hasPak}
-                  className="px-3 py-1.5 rounded-lg bg-secondary text-foreground text-xs font-semibold flex items-center gap-1.5 hover:bg-secondary/80 transition-colors disabled:opacity-40"
-                  title={!user.hasPak ? "Generate a PAK first to change passwords" : undefined}>
-                  <RefreshCw className="w-3 h-3" /> Change
-                </button>
-              )}
-            </div>
-          </motion.div>
-
           {/* PAK card */}
           <motion.div variants={fadeUp} className="p-5 rounded-2xl border border-border bg-white space-y-4">
             <div className="flex items-center justify-between">
@@ -2339,11 +2507,17 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
             )}
 
             <div className="flex flex-wrap gap-2">
-              {!user.hasPak || user.pakCanRegenerate ? (
+              {!user.hasPak ? (
+                <button onClick={generatePakDirect} disabled={isLoading}
+                  className="px-3 py-1.5 rounded-lg bg-violet-600 text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-violet-700 transition-colors disabled:opacity-60">
+                  {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <KeyRound className="w-3 h-3" />}
+                  Generate PAK
+                </button>
+              ) : user.pakCanRegenerate ? (
                 <button onClick={requestPakOtp} disabled={isLoading}
                   className="px-3 py-1.5 rounded-lg bg-violet-600 text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-violet-700 transition-colors disabled:opacity-60">
                   {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <KeyRound className="w-3 h-3" />}
-                  {user.hasPak ? "Regenerate PAK" : "Generate PAK"}
+                  Regenerate PAK
                 </button>
               ) : null}
               {user.hasPak && !user.pakCopied && (
@@ -2351,6 +2525,43 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
                   disabled={isLoading}
                   className="px-3 py-1.5 rounded-lg bg-secondary text-foreground text-xs font-semibold flex items-center gap-1.5 hover:bg-secondary/80 transition-colors disabled:opacity-60">
                   <CheckCircle2 className="w-3 h-3" /> Confirm saved
+                </button>
+              )}
+            </div>
+          </motion.div>
+
+          {/* Transaction Password card */}
+          <motion.div variants={fadeUp} className="p-5 rounded-2xl border border-border bg-white space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center",
+                  user.hasTransactionPassword ? "bg-green-100 text-green-600" : "bg-amber-100 text-amber-600")}>
+                  <Lock className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="font-semibold text-foreground text-sm">Transaction Password</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {user.hasTransactionPassword ? "Required for all outgoing transfers" : "Not set — transactions are unprotected"}
+                  </p>
+                </div>
+              </div>
+              <span className={cn("px-2.5 py-1 rounded-full text-xs font-bold",
+                user.hasTransactionPassword ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700")}>
+                {user.hasTransactionPassword ? "Active" : "Not set"}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {!user.hasTransactionPassword ? (
+                <button onClick={requestTxnOtp} disabled={isLoading}
+                  className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-primary/90 transition-colors disabled:opacity-60">
+                  {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Lock className="w-3 h-3" />}
+                  Set Transaction Password
+                </button>
+              ) : (
+                <button onClick={() => { reset(); setView("chg-txn-pak"); }} disabled={!user.hasPak}
+                  className="px-3 py-1.5 rounded-lg bg-secondary text-foreground text-xs font-semibold flex items-center gap-1.5 hover:bg-secondary/80 transition-colors disabled:opacity-40"
+                  title={!user.hasPak ? "Generate a PAK first to change passwords" : undefined}>
+                  <RefreshCw className="w-3 h-3" /> Change
                 </button>
               )}
             </div>
@@ -2660,42 +2871,119 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
 
 // ─── Fund with Crypto ─────────────────────────────────────────────────────────
 
-function CryptoDepositPanel({ walletAddress }: { walletAddress?: string }) {
-  const address = walletAddress ?? "";
+// ─── Chain metadata for deposit UI ───────────────────────────────────────────
+
+const CHAIN_META: Record<string, { label: string; color: string; badge: string }> = {
+  "BASE-SEPOLIA":  { label: "Base Sepolia",      color: "blue",   badge: "bg-blue-100 text-blue-700 border-blue-200" },
+  "ETH-SEPOLIA":   { label: "Ethereum Sepolia",  color: "indigo", badge: "bg-indigo-100 text-indigo-700 border-indigo-200" },
+  "MATIC-AMOY":    { label: "Polygon Amoy",      color: "violet", badge: "bg-violet-100 text-violet-700 border-violet-200" },
+  "ARB-SEPOLIA":   { label: "Arbitrum Sepolia",  color: "sky",    badge: "bg-sky-100 text-sky-700 border-sky-200" },
+  "AVAX-FUJI":     { label: "Avalanche Fuji",    color: "red",    badge: "bg-red-100 text-red-700 border-red-200" },
+};
+
+function CryptoDepositPanel() {
+  const [addresses, setAddresses] = useState<Record<string, string>>({});
+  const [loading,   setLoading]   = useState(true);
+  const [error,     setError]     = useState<string | null>(null);
+  const [activeChain, setActiveChain] = useState<string>("BASE-SEPOLIA");
+
+  useEffect(() => {
+    const jwt = localStorage.getItem("token");
+    fetch(`${BASE}/api/deposit/addresses`, {
+      headers: { Authorization: `Bearer ${jwt}` },
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.addresses && Object.keys(data.addresses).length > 0) {
+          setAddresses(data.addresses);
+          setActiveChain(Object.keys(data.addresses)[0]);
+        }
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const chains = Object.keys(addresses);
+  const activeAddress = addresses[activeChain] ?? "";
 
   return (
     <motion.div
       variants={staggerContainer(0.08)}
       initial="hidden"
       animate="show"
-      className="space-y-6"
+      className="space-y-5"
     >
+      {/* Header */}
       <motion.div variants={fadeUp} className="flex items-start gap-3 px-4 py-3 rounded-xl bg-violet-50 border border-violet-200 text-violet-700 text-sm">
         <QrCode className="w-4 h-4 shrink-0 mt-0.5" />
-        <span>Send <strong>USDC</strong> on <strong>Base Sepolia</strong> to your deposit address below. Your balance is credited automatically within seconds.</span>
+        <span>
+          Send <strong>USDC</strong> on any supported network below. Your balance is
+          credited automatically.
+        </span>
       </motion.div>
 
-      {address ? (
-        <>
-          <motion.div variants={fadeUp} className="p-5 rounded-2xl bg-white border-2 border-border space-y-4">
-            <p className="text-sm font-medium text-muted-foreground">Your USDC deposit address</p>
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary">
-              <code className="flex-1 text-xs font-mono break-all text-foreground">{address}</code>
-              <CopyButton text={address} />
-            </div>
-            <p className="text-xs text-muted-foreground">Only send USDC on <strong>Base Sepolia</strong>. Sending other tokens or using any other network will result in permanent loss of funds.</p>
-          </motion.div>
-
-          <motion.div variants={fadeUp} className="flex items-start gap-3 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 text-xs">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>Deposits are credited after on-chain confirmation (typically 1–2 minutes). Contact support if funds don't appear after 30 minutes.</span>
-          </motion.div>
-        </>
-      ) : (
+      {loading && (
         <motion.div variants={fadeUp} className="flex items-center gap-3 px-4 py-5 rounded-xl bg-secondary text-muted-foreground text-sm">
           <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-          <span>Loading your deposit address…</span>
+          <span>Loading your deposit addresses…</span>
         </motion.div>
+      )}
+
+      {error && (
+        <motion.div variants={fadeUp} className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{error}</span>
+        </motion.div>
+      )}
+
+      {!loading && !error && chains.length > 0 && (
+        <>
+          {/* Chain selector tabs */}
+          <motion.div variants={fadeUp} className="flex flex-wrap gap-2">
+            {chains.map((chain) => {
+              const meta = CHAIN_META[chain];
+              const isActive = chain === activeChain;
+              return (
+                <button
+                  key={chain}
+                  onClick={() => setActiveChain(chain)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all",
+                    isActive
+                      ? meta?.badge ?? "bg-gray-100 text-gray-700 border-gray-200"
+                      : "bg-white text-muted-foreground border-border hover:border-foreground/30",
+                  )}
+                >
+                  {meta?.label ?? chain}
+                </button>
+              );
+            })}
+          </motion.div>
+
+          {/* Selected chain address */}
+          <motion.div variants={fadeUp} className="p-5 rounded-2xl bg-white border-2 border-border space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-medium text-muted-foreground">
+                Your USDC deposit address
+              </p>
+              <span className={cn(
+                "px-2 py-0.5 rounded-md text-xs font-semibold border",
+                CHAIN_META[activeChain]?.badge ?? "bg-gray-100 text-gray-700 border-gray-200",
+              )}>
+                {CHAIN_META[activeChain]?.label ?? activeChain}
+              </span>
+            </div>
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary">
+              <code className="flex-1 text-xs font-mono break-all text-foreground">{activeAddress}</code>
+              <CopyButton text={activeAddress} />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Only send <strong>USDC</strong> on <strong>BASE-SEPOLIA</strong> and <strong>ARC-TESTNET</strong>.
+              Sending other tokens or the wrong network may cause permanent loss of funds.
+            </p>
+          </motion.div>
+
+        </>
       )}
     </motion.div>
   );
@@ -2877,5 +3165,1669 @@ function BankDepositForm({ onSuccess: _onSuccess }: { onSuccess: () => void }) {
       </motion.div>
 
     </motion.div>
+  );
+}
+
+// ─── Subscription Status Badge ────────────────────────────────────────────────
+
+function SubscriptionStatusBadge({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    active:    "bg-green-100 text-green-700 border-green-200",
+    trialing:  "bg-violet-100 text-violet-700 border-violet-200",
+    past_due:  "bg-amber-100 text-amber-700 border-amber-200",
+    cancelled: "bg-secondary text-muted-foreground border-border",
+    failed:    "bg-red-100 text-red-700 border-red-200",
+  };
+  const label = status === "past_due" ? "Past due" : status.charAt(0).toUpperCase() + status.slice(1);
+  return (
+    <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0", styles[status] ?? styles["cancelled"])}>
+      {label}
+    </span>
+  );
+}
+
+// ─── My Subscriptions Tab ─────────────────────────────────────────────────────
+
+type SubStatusFilter = "all" | "active" | "trialing" | "past_due" | "cancelled";
+
+function MySubscriptionsTab({ user }: { user: { name: string; email: string; hasTransactionPassword?: boolean } }) {
+  // ── Subscriber view ──────────────────────────────────────────────────────────
+  const [subscriptions,  setSubscriptions]  = useState<any[]>([]);
+  const [isLoading,      setIsLoading]      = useState(true);
+  const [cancellingId,   setCancellingId]   = useState<number | null>(null);
+  const [cancelError,    setCancelError]    = useState<string | null>(null);
+
+  // ── Passport ─────────────────────────────────────────────────────────────────
+  const [passport,          setPassport]          = useState<{ hasPassport: boolean; status: string | null; issuedAt?: string; passportId?: string } | null>(null);
+  const [isLoadingPassport, setIsLoadingPassport] = useState(true);
+  const [isRevoking,        setIsRevoking]        = useState(false);
+  const [revokeError,       setRevokeError]       = useState<string | null>(null);
+
+  // ── Creator view ─────────────────────────────────────────────────────────────
+  const [plans,              setPlans]              = useState<any[]>([]);
+  const [isLoadingPlans,     setIsLoadingPlans]     = useState(true);
+  const [expandedPlanId,     setExpandedPlanId]     = useState<number | null>(null);
+  const [planSubscribers,    setPlanSubscribers]    = useState<Record<number, any[]>>({});
+  const [loadingSubscribers, setLoadingSubscribers] = useState<Record<number, boolean>>({});
+  const [subFilter,          setSubFilter]          = useState<Record<number, SubStatusFilter>>({});
+
+  // ── Subscriber table search / filter ─────────────────────────────────────────
+  const [tableSearch, setTableSearch] = useState("");
+  const [tableFilter, setTableFilter] = useState<"all" | "active" | "trialing" | "past_due" | "ended">("all");
+
+  const authHeaders = () => {
+    const jwt = localStorage.getItem("token");
+    const h: Record<string, string> = { "Content-Type": "application/json" };
+    if (jwt) h["Authorization"] = `Bearer ${jwt}`;
+    return h;
+  };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res  = await fetch(`${BASE}/api/subscriptions/my`, { headers: authHeaders() });
+        const data = await res.json();
+        if (res.ok) setSubscriptions(data.subscriptions ?? []);
+      } finally { setIsLoading(false); }
+    })();
+    (async () => {
+      try {
+        const res  = await fetch(`${BASE}/api/subscriptions/plans`, { headers: authHeaders() });
+        const data = await res.json();
+        if (res.ok) setPlans(data.plans ?? []);
+      } finally { setIsLoadingPlans(false); }
+    })();
+    (async () => {
+      try {
+        const res  = await fetch(`${BASE}/api/subscriptions/passport`, { headers: authHeaders() });
+        const data = await res.json();
+        if (res.ok) setPassport(data);
+      } finally { setIsLoadingPassport(false); }
+    })();
+  }, []);
+
+  const handleCancel = async (id: number) => {
+    setCancelError(null);
+    setCancellingId(id);
+    try {
+      const res  = await fetch(`${BASE}/api/subscriptions/${id}`, { method: "DELETE", headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message ?? "Failed to cancel");
+      setSubscriptions((prev) =>
+        prev.map((s) => s.id === id ? { ...s, status: "cancelled", cancelledAt: new Date().toISOString() } : s),
+      );
+    } catch (err: any) {
+      setCancelError(err.message ?? "Failed to cancel subscription");
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
+  const togglePlanSubscribers = async (planId: number) => {
+    if (expandedPlanId === planId) { setExpandedPlanId(null); return; }
+    setExpandedPlanId(planId);
+    if (planSubscribers[planId]) return;
+    setLoadingSubscribers((prev) => ({ ...prev, [planId]: true }));
+    try {
+      const res  = await fetch(`${BASE}/api/subscriptions/plans/${planId}/subscribers`, { headers: authHeaders() });
+      const data = await res.json();
+      if (res.ok) setPlanSubscribers((prev) => ({ ...prev, [planId]: data.subscribers ?? [] }));
+    } finally {
+      setLoadingSubscribers((prev) => ({ ...prev, [planId]: false }));
+    }
+  };
+
+  const handleRevokePassport = async () => {
+    setRevokeError(null);
+    setIsRevoking(true);
+    try {
+      const res  = await fetch(`${BASE}/api/subscriptions/passport`, { method: "DELETE", headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message ?? "Failed to revoke passport");
+      setPassport((prev) => prev ? { ...prev, status: "revoked" } : prev);
+    } catch (err: any) {
+      setRevokeError(err.message ?? "Failed to revoke passport");
+    } finally {
+      setIsRevoking(false);
+    }
+  };
+
+  // Subscriber groups
+  const activeSubs   = subscriptions.filter((s) => s.status === "active");
+  const trialingSubs = subscriptions.filter((s) => s.status === "trialing");
+  const pastDueSubs  = subscriptions.filter((s) => s.status === "past_due");
+
+  const totalRevenue = plans.reduce((sum: number, p: any) => sum + parseFloat(p.totalRevenue ?? "0"), 0);
+  const activePlanCount = plans.reduce((sum: number, p: any) => sum + (p.activeSubscriberCount ?? 0), 0);
+
+  // Total spend = sum of amounts for all currently billed subscriptions
+  const totalSpend = subscriptions
+    .filter((s) => s.status === "active" || s.status === "trialing" || s.status === "past_due")
+    .reduce((sum, s) => sum + parseFloat(s.amount ?? "0"), 0);
+
+  // Earliest upcoming billing/trial-end date
+  const nextBillingInfo = (() => {
+    const billing = subscriptions
+      .filter((s) => (s.status === "active" || s.status === "past_due") && s.nextBillingAt)
+      .sort((a: any, b: any) => new Date(a.nextBillingAt).getTime() - new Date(b.nextBillingAt).getTime())[0];
+    const trialing = subscriptions
+      .filter((s) => s.status === "trialing" && s.trialEndsAt)
+      .sort((a: any, b: any) => new Date(a.trialEndsAt).getTime() - new Date(b.trialEndsAt).getTime())[0];
+    if (!billing && !trialing) return null;
+    if (!billing) return { date: trialing.trialEndsAt, label: `${trialing.planTitle} trial ends` };
+    if (!trialing) return { date: billing.nextBillingAt, label: billing.planTitle };
+    return new Date(trialing.trialEndsAt) < new Date(billing.nextBillingAt)
+      ? { date: trialing.trialEndsAt, label: `${trialing.planTitle} trial ends` }
+      : { date: billing.nextBillingAt, label: billing.planTitle };
+  })();
+
+  // Passport activations count
+  const passportUsesDisplay = passport?.hasPassport
+    ? subscriptions.filter((s) => s.status !== "cancelled" && s.status !== "failed").length
+    : 0;
+
+  // Filtered subscriptions for the table
+  const filteredTableSubs = subscriptions.filter((sub) => {
+    const q = tableSearch.toLowerCase();
+    const matchesSearch = !q ||
+      sub.planTitle?.toLowerCase().includes(q) ||
+      sub.merchantId?.toLowerCase().includes(q);
+    const matchesFilter =
+      tableFilter === "all" ||
+      (tableFilter === "active"    && sub.status === "active") ||
+      (tableFilter === "trialing"  && sub.status === "trialing") ||
+      (tableFilter === "past_due"  && sub.status === "past_due") ||
+      (tableFilter === "ended"     && (sub.status === "cancelled" || sub.status === "failed"));
+    return matchesSearch && matchesFilter;
+  });
+
+  return (
+    <div className="flex flex-col gap-6 w-full">
+
+      {/* ── Passport card — standalone, credit-card size ── */}
+      {isLoadingPassport ? (
+        <div className="w-[380px] rounded-2xl border border-border bg-white px-5 py-4 flex items-center gap-2 text-muted-foreground text-sm">
+          <Loader2 className="w-4 h-4 animate-spin" /> Checking passport…
+        </div>
+      ) : !passport?.hasPassport ? (
+        <div className="w-[380px] rounded-2xl border border-dashed border-border bg-secondary/20 px-5 py-6 flex flex-col items-center text-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-white border border-border flex items-center justify-center">
+            <ShieldOff className="w-4 h-4 text-muted-foreground" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-foreground">No passport yet</p>
+            <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">Complete your first subscription to earn a passport.</p>
+          </div>
+        </div>
+      ) : (
+        <div
+          className={cn(
+            "relative rounded-2xl overflow-hidden w-[380px] shrink-0",
+            passport.status === "active"    ? "bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950" :
+            passport.status === "suspended" ? "bg-gradient-to-br from-slate-900 via-slate-800 to-amber-950"   :
+                                              "bg-gradient-to-br from-slate-800 to-slate-900",
+          )}
+          style={{ aspectRatio: "85.6 / 54" }}
+        >
+          {/* Decorative glows */}
+          <div className="absolute -top-10 -right-10 w-48 h-48 rounded-full opacity-[0.08] bg-white pointer-events-none" />
+          <div className="absolute -bottom-10 -left-6  w-36 h-36 rounded-full opacity-[0.05] bg-white pointer-events-none" />
+
+          <div className="relative h-full px-5 pt-4 pb-4 flex flex-col justify-between">
+            {/* Top row: brand label left, status badge right */}
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-[9px] font-bold text-white/40 uppercase tracking-[0.18em]">Subscription</p>
+                <p className="text-xl font-black text-white tracking-tight leading-tight mt-0.5">PASSPORT</p>
+              </div>
+              <span className={cn(
+                "text-[9px] font-bold px-2 py-0.5 rounded-full border mt-0.5",
+                passport.status === "active"    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" :
+                passport.status === "suspended" ? "bg-amber-500/20 text-amber-300 border-amber-500/30"       :
+                                                  "bg-white/10 text-white/40 border-white/10",
+              )}>
+                {passport.status === "active" ? "ACTIVE" : passport.status === "suspended" ? "SUSPENDED" : "REVOKED"}
+              </span>
+            </div>
+
+            {/* Passport ID */}
+            <div>
+              <p className="text-[8px] text-white/35 uppercase tracking-widest mb-1">Passport ID</p>
+              <p className="text-[13px] font-mono font-bold text-white tracking-[0.15em] leading-none">
+                {passport.passportId ?? "—"}
+              </p>
+            </div>
+
+            {/* Bottom row: holder left, meta right */}
+            <div className="border-t border-white/10 pt-2.5 flex items-end justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[8px] text-white/35 uppercase tracking-widest mb-0.5">Holder</p>
+                <p className="text-xs font-semibold text-white leading-tight truncate">{user.name}</p>
+                <p className="text-[9px] text-white/40 truncate max-w-[140px]">{user.email}</p>
+              </div>
+              <div className="flex items-end gap-3 shrink-0">
+                <div className="text-right">
+                  <p className="text-[8px] text-white/35 uppercase tracking-widest mb-0.5">Issued</p>
+                  <p className="text-[11px] font-semibold text-white/70">
+                    {passport.issuedAt
+                      ? new Date(passport.issuedAt).toLocaleDateString("en-US", { month: "2-digit", year: "2-digit" })
+                      : "—"}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[8px] text-white/35 uppercase tracking-widest mb-0.5">TXN Pwd</p>
+                  {passport.status === "active"
+                    ? <p className="text-[11px] font-semibold text-emerald-400">✓ Active</p>
+                    : passport.status === "suspended"
+                    ? <p className="text-[11px] font-semibold text-amber-400">Changed</p>
+                    : <p className="text-[11px] text-white/30">—</p>}
+                </div>
+                {/* Revoke sits beside TXN Pwd — same bottom-right cluster, never overlaps status badge */}
+                {passport.status === "active" && (
+                  <div className="text-right">
+                    {revokeError && <p className="text-[8px] text-red-400 mb-0.5">{revokeError}</p>}
+                    <button
+                      type="button"
+                      onClick={handleRevokePassport}
+                      disabled={isRevoking}
+                      className="text-[9px] px-2 py-0.5 rounded border bg-white/10 text-white/40 hover:bg-white/20 disabled:opacity-50 font-medium transition border-white/10 whitespace-nowrap"
+                    >
+                      {isRevoking ? "Revoking…" : "Revoke"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Stats row — 6 equal cards ── */}
+      <div className="grid grid-cols-6 gap-3">
+        <div className="rounded-xl border border-border bg-white px-4 py-3.5 space-y-1">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Active</p>
+            <Plus className="w-3 h-3 text-muted-foreground/40" />
+          </div>
+          <p className="text-2xl font-bold text-foreground">{activeSubs.length}</p>
+          <p className="text-[11px] text-muted-foreground">subscriptions</p>
+        </div>
+        <div className="rounded-xl border border-border bg-white px-4 py-3.5 space-y-1">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Trialing</p>
+            <RefreshCw className="w-3 h-3 text-muted-foreground/40" />
+          </div>
+          <p className="text-2xl font-bold text-foreground">{trialingSubs.length}</p>
+          <p className="text-[11px] text-muted-foreground">free trial</p>
+        </div>
+        <div className="rounded-xl border border-border bg-white px-4 py-3.5 space-y-1">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Past Due</p>
+            <AlertCircle className="w-3 h-3 text-muted-foreground/40" />
+          </div>
+          <p className="text-2xl font-bold text-foreground">{pastDueSubs.length}</p>
+          <p className="text-[11px] text-muted-foreground">retrying</p>
+        </div>
+        <div className="rounded-xl border border-border bg-white px-4 py-3.5 space-y-1">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Total Spend</p>
+            <DollarSign className="w-3 h-3 text-muted-foreground/40" />
+          </div>
+          <p className="text-2xl font-bold text-foreground">${totalSpend.toFixed(2)}</p>
+          <p className="text-[11px] text-muted-foreground">across all plans</p>
+        </div>
+        <div className="rounded-xl border border-border bg-white px-4 py-3.5 space-y-1">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Next Billing</p>
+            <CalendarDays className="w-3 h-3 text-muted-foreground/40" />
+          </div>
+          <p className="text-2xl font-bold text-foreground">
+            {nextBillingInfo
+              ? new Date(nextBillingInfo.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+              : "—"}
+          </p>
+          <p className="text-[11px] text-muted-foreground truncate">{nextBillingInfo?.label ?? "No upcoming billing"}</p>
+        </div>
+        <div className="rounded-xl border border-border bg-white px-4 py-3.5 space-y-1">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Passport Uses</p>
+            <Zap className="w-3 h-3 text-muted-foreground/40" />
+          </div>
+          <p className="text-2xl font-bold text-foreground">{passportUsesDisplay}×</p>
+          <p className="text-[11px] text-muted-foreground">activated via passport</p>
+        </div>
+      </div>
+
+      {/* ── My Subscriptions Table ── */}
+      <div className="rounded-2xl border border-border bg-white overflow-hidden w-full">
+        {/* Table header */}
+        <div className="px-5 py-4 border-b border-border flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold text-foreground">My Subscriptions</h2>
+            <p className="text-[11px] text-muted-foreground">
+              {subscriptions.length} total · {activeSubs.length} active
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Search */}
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Search title or merchant ID..."
+                value={tableSearch}
+                onChange={(e) => setTableSearch(e.target.value)}
+                className="pl-8 pr-3 h-8 rounded-lg border border-border text-xs text-foreground bg-secondary/30 outline-none focus:ring-1 focus:ring-primary/30 w-52"
+              />
+            </div>
+            {/* Filter tabs */}
+            <div className="flex items-center gap-0.5 bg-secondary/60 rounded-lg p-0.5">
+              {(["all", "active", "trialing", "past_due", "ended"] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setTableFilter(f)}
+                  className={cn(
+                    "text-[11px] font-medium px-2.5 py-1.5 rounded-md transition",
+                    tableFilter === f
+                      ? "bg-white shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {f === "all" ? "All" : f === "past_due" ? "Due" : f === "trialing" ? "Trial" : f.charAt(0).toUpperCase() + f.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Table body */}
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-muted-foreground text-sm p-6">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+          </div>
+        ) : filteredTableSubs.length === 0 ? (
+          <p className="text-xs text-muted-foreground p-6 text-center">
+            {subscriptions.length === 0 ? "No subscriptions yet." : "No subscriptions match this filter."}
+          </p>
+        ) : (
+          <>
+            {cancelError && <div className="px-5 pt-3"><InlineError message={cancelError} /></div>}
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border bg-slate-50/60">
+                    <th className="text-left px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Subscription</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Merchant ID</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Plan</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Amount</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Status</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Next Billing</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Method</th>
+                    <th className="px-4 py-3 w-16" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredTableSubs.map((sub: any) => {
+                    const isPassportMethod = sub.activationMethod === "passport";
+                    const nextDate = sub.status === "trialing" && sub.trialEndsAt
+                      ? sub.trialEndsAt
+                      : sub.nextBillingAt;
+                    return (
+                      <tr key={sub.id} className="border-b border-border/50 last:border-0 hover:bg-secondary/20 transition-colors">
+                        <td className="px-5 py-3.5">
+                          <p className="font-semibold text-foreground">{sub.planTitle}</p>
+                          <p className="text-[11px] text-muted-foreground mt-0.5">
+                            Since {sub.startedAt
+                              ? new Date(sub.startedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                              : "—"}
+                          </p>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <code className="text-[11px] font-mono text-muted-foreground">{sub.merchantId ?? "—"}</code>
+                        </td>
+                        <td className="px-4 py-3.5 text-muted-foreground capitalize">{sub.planInterval}</td>
+                        <td className="px-4 py-3.5 font-bold text-foreground">${parseFloat(sub.amount).toFixed(2)}</td>
+                        <td className="px-4 py-3.5"><SubscriptionStatusBadge status={sub.status} /></td>
+                        <td className="px-4 py-3.5 text-muted-foreground whitespace-nowrap">
+                          {nextDate
+                            ? new Date(nextDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                            : "—"}
+                        </td>
+                        <td className="px-4 py-3.5">
+                          {isPassportMethod ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md whitespace-nowrap">
+                              <Zap className="w-3 h-3" /> Passport
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-muted-foreground bg-secondary border border-border px-2 py-0.5 rounded-md whitespace-nowrap">
+                              <KeyRound className="w-3 h-3" /> Code
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3.5">
+                          {(sub.status === "active" || sub.status === "trialing" || sub.status === "past_due") && (
+                            <button
+                              type="button"
+                              onClick={() => handleCancel(sub.id)}
+                              disabled={cancellingId === sub.id}
+                              className="text-[11px] font-medium text-destructive/60 hover:text-destructive transition disabled:opacity-50 flex items-center gap-1 whitespace-nowrap"
+                            >
+                              {cancellingId === sub.id
+                                ? <Loader2 className="w-3 h-3 animate-spin" />
+                                : <XCircle className="w-3 h-3" />}
+                              {cancellingId === sub.id ? "Cancelling…" : "Cancel"}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── My Plans (creator) ── */}
+      {(isLoadingPlans || plans.length > 0) && (
+        <div className="rounded-2xl border border-border bg-white overflow-hidden w-full">
+          {/* Section header */}
+          <div className="px-5 py-4 border-b border-border flex items-center justify-between bg-slate-50/80">
+            <div>
+              <h2 className="text-sm font-bold text-foreground flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-muted-foreground" />
+                My Plans
+              </h2>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {plans.length} plan{plans.length !== 1 ? "s" : ""} · {activePlanCount} active subscriber{activePlanCount !== 1 ? "s" : ""} · ${totalRevenue.toFixed(2)} total revenue
+              </p>
+            </div>
+            {plans.length > 0 && (
+              <span className="text-[10px] font-bold text-primary bg-primary/10 px-2.5 py-1 rounded-full">
+                {plans.length}
+              </span>
+            )}
+          </div>
+
+          <div className="p-5 bg-secondary/10">
+            {isLoadingPlans ? (
+              <div className="flex items-center gap-2 text-muted-foreground text-sm py-6">
+                <Loader2 className="w-4 h-4 animate-spin" /> Loading plans…
+              </div>
+            ) : (
+              <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))" }}>
+                {plans.map((plan: any) => {
+                  const planSubscribeUrl = plan.merchantId
+                    ? `${window.location.origin}${BASE}/subscribe/${plan.merchantId}`
+                    : null;
+                  const filter = subFilter[plan.id] ?? "all";
+                  const allSubs = planSubscribers[plan.id] ?? [];
+                  const filteredSubs = filter === "all" ? allSubs : allSubs.filter((s: any) => s.status === filter);
+                  const intervals: { interval: string; amount: string }[] = plan.intervals ?? [];
+
+                  return (
+                    <div key={plan.id} className="rounded-xl border border-border bg-white overflow-hidden flex flex-col shadow-sm">
+
+                      {/* Plan header */}
+                      <div className="px-4 pt-4 pb-3 border-b border-border/60">
+                        <div className="flex items-start justify-between gap-2 mb-1">
+                          <p className="text-sm font-bold text-foreground leading-tight">{plan.planTitle}</p>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {plan.hasFreeTrial && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 border border-violet-200">
+                                {plan.trialDurationDays}d free trial
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+                          <Mail className="w-3 h-3 shrink-0" />
+                          <span className="truncate">{plan.paymentEmail}</span>
+                        </p>
+                      </div>
+
+                      {/* Stats */}
+                      <div className="grid grid-cols-3 divide-x divide-border border-b border-border/60">
+                        <div className="px-3 py-3 text-center">
+                          <p className="text-[9px] text-muted-foreground uppercase tracking-wide font-semibold mb-0.5">Revenue</p>
+                          <p className="text-base font-bold text-foreground">${parseFloat(plan.totalRevenue ?? "0").toFixed(2)}</p>
+                        </div>
+                        <div className="px-3 py-3 text-center">
+                          <p className="text-[9px] text-muted-foreground uppercase tracking-wide font-semibold mb-0.5">Active</p>
+                          <p className="text-base font-bold text-foreground">{plan.activeSubscriberCount ?? 0}</p>
+                        </div>
+                        <div className="px-3 py-3 text-center">
+                          <p className="text-[9px] text-muted-foreground uppercase tracking-wide font-semibold mb-0.5">Total</p>
+                          <p className="text-base font-bold text-foreground">{allSubs.length || plan.totalSubscriberCount || "—"}</p>
+                        </div>
+                      </div>
+
+                      {/* Pricing intervals */}
+                      {intervals.length > 0 && (
+                        <div className="px-4 py-3 border-b border-border/60 space-y-1.5">
+                          <p className="text-[9px] text-muted-foreground uppercase tracking-wide font-semibold mb-2">Pricing</p>
+                          <div className="flex flex-wrap gap-2">
+                            {intervals.map((iv: any) => (
+                              <div key={iv.interval} className="flex items-center gap-1.5 bg-secondary/60 border border-border rounded-lg px-2.5 py-1.5">
+                                <span className="text-[10px] text-muted-foreground capitalize font-medium">{iv.interval}</span>
+                                <span className="text-[10px] font-bold text-foreground">${parseFloat(iv.amount).toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Merchant ID + link */}
+                      <div className="px-4 py-3 border-b border-border/60 space-y-2">
+                        {plan.merchantId && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wide">Merchant ID</span>
+                            <div className="flex items-center gap-1">
+                              <code className="text-[11px] font-mono text-foreground">{plan.merchantId}</code>
+                              <CopyButton text={plan.merchantId} />
+                            </div>
+                          </div>
+                        )}
+                        {planSubscribeUrl && (
+                          <div className="flex items-center gap-1.5 rounded-lg bg-secondary px-2.5 py-1.5">
+                            <span className="text-[10px] text-primary font-mono truncate flex-1">{planSubscribeUrl}</span>
+                            <CopyButton text={planSubscribeUrl} />
+                            <a href={planSubscribeUrl} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-foreground transition">
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Subscribers toggle */}
+                      <button
+                        type="button"
+                        onClick={() => togglePlanSubscribers(plan.id)}
+                        className="w-full flex items-center justify-between px-4 py-2.5 text-[11px] font-semibold text-muted-foreground hover:text-foreground hover:bg-secondary/30 transition"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <Users className="w-3.5 h-3.5" />
+                          Subscribers
+                          {allSubs.length > 0 && (
+                            <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-full font-bold">{allSubs.length}</span>
+                          )}
+                        </span>
+                        {expandedPlanId === plan.id ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      </button>
+
+                      {expandedPlanId === plan.id && (
+                        <div className="border-t border-border bg-secondary/20 p-3 space-y-2">
+                          {loadingSubscribers[plan.id] ? (
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…
+                            </div>
+                          ) : allSubs.length === 0 ? (
+                            <p className="text-xs text-muted-foreground py-3 text-center">No subscribers yet.</p>
+                          ) : (
+                            <>
+                              {/* Filter tabs */}
+                              <div className="flex flex-wrap gap-1.5 pb-1">
+                                {(["all", "active", "trialing", "past_due", "cancelled"] as SubStatusFilter[]).map((f) => {
+                                  const count = f === "all" ? allSubs.length : allSubs.filter((s: any) => s.status === f).length;
+                                  if (f !== "all" && count === 0) return null;
+                                  const label = f === "all" ? "All" : f === "past_due" ? "Due" : f.charAt(0).toUpperCase() + f.slice(1);
+                                  return (
+                                    <button
+                                      key={f}
+                                      type="button"
+                                      onClick={() => setSubFilter((prev) => ({ ...prev, [plan.id]: f }))}
+                                      className={cn(
+                                        "text-[10px] font-semibold px-2 py-0.5 rounded-full border transition",
+                                        filter === f
+                                          ? "bg-primary text-white border-primary"
+                                          : "bg-white text-muted-foreground border-border hover:border-primary/40",
+                                      )}
+                                    >
+                                      {label} {count > 0 && `(${count})`}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              {/* Subscriber rows */}
+                              {filteredSubs.length === 0 ? (
+                                <p className="text-xs text-muted-foreground py-1">None with this status.</p>
+                              ) : (
+                                <div className="space-y-1.5">
+                                  {filteredSubs.map((sub: any) => (
+                                    <div key={sub.subscriptionId} className="rounded-lg bg-white border border-border px-3 py-2.5">
+                                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                                        <div className="min-w-0">
+                                          <p className="text-xs font-semibold text-foreground truncate">{sub.subscriberName}</p>
+                                          <p className="text-[10px] text-muted-foreground truncate">{sub.subscriberEmail}</p>
+                                        </div>
+                                        <SubscriptionStatusBadge status={sub.status} />
+                                      </div>
+                                      <div className="grid grid-cols-3 gap-x-3 text-[10px] text-muted-foreground border-t border-border/50 pt-1.5 mt-1">
+                                        <div>
+                                          <p className="uppercase tracking-wide font-semibold text-[9px] mb-0.5">Plan</p>
+                                          <p className="capitalize font-medium text-foreground">{sub.planInterval}</p>
+                                        </div>
+                                        <div>
+                                          <p className="uppercase tracking-wide font-semibold text-[9px] mb-0.5">Amount</p>
+                                          <p className="font-bold text-foreground">${parseFloat(sub.amount).toFixed(2)}</p>
+                                        </div>
+                                        <div>
+                                          <p className="uppercase tracking-wide font-semibold text-[9px] mb-0.5">
+                                            {sub.nextBillingAt && sub.status !== "cancelled" ? "Next Bill" : sub.cancelledAt ? "Ended" : "Since"}
+                                          </p>
+                                          <p className="font-medium text-foreground">
+                                            {sub.nextBillingAt && sub.status !== "cancelled"
+                                              ? new Date(sub.nextBillingAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                                              : sub.cancelledAt
+                                              ? new Date(sub.cancelledAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                                              : new Date(sub.startedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+// ─── Create Subscription Tab ──────────────────────────────────────────────────
+
+const PRESET_TIER_NAMES = ["Basic", "Starter", "Individual", "Pro", "Team", "Business", "Student", "Enterprise"];
+const MAX_TIERS = 5;
+const MAX_FEATURES = 20;
+
+type TierDraft = {
+  id:            string;
+  tierName:      string;
+  customName:    string;
+  description:   string;
+  features:      string[];
+  featureInput:  string;
+  isHighlighted: boolean;
+  displayOrder:  number;
+  intervals:     { interval: string; amount: string }[];
+};
+
+function makeTier(displayOrder: number): TierDraft {
+  return {
+    id:            crypto.randomUUID(),
+    tierName:      PRESET_TIER_NAMES[displayOrder] ?? "",
+    customName:    "",
+    description:   "",
+    features:      [],
+    featureInput:  "",
+    isHighlighted: displayOrder === 1,
+    displayOrder,
+    intervals:     [{ interval: "monthly", amount: "" }],
+  };
+}
+
+function CreateSubscriptionTab({ user: _user }: { user: any }) {
+  const [planMode,           setPlanMode]           = useState<"flat" | "tiered">("flat");
+  const [planTitle,          setPlanTitle]          = useState("");
+  const [paymentEmail,       setPaymentEmail]       = useState("");
+  const [intervals,          setIntervals]          = useState<{ interval: string; amount: string }[]>([{ interval: "monthly", amount: "" }]);
+  const [tiers,              setTiers]              = useState<TierDraft[]>([makeTier(0)]);
+  const [hasFreeTrial,       setHasFreeTrial]       = useState(false);
+  const [trialDurationDays,  setTrialDurationDays]  = useState("7");
+  const [pak,                setPak]                = useState("");
+  const [pakVisible,         setPakVisible]         = useState(false);
+  const [isSubmitting,       setIsSubmitting]       = useState(false);
+  const [error,              setError]              = useState<string | null>(null);
+  const [result,             setResult]             = useState<any | null>(null);
+  const authHeaders = () => {
+    const jwt = localStorage.getItem("token");
+    const h: Record<string, string> = { "Content-Type": "application/json" };
+    if (jwt) h["Authorization"] = `Bearer ${jwt}`;
+    return h;
+  };
+
+  // ── Flat-plan interval helpers ──────────────────────────────────────────────
+
+  const addInterval = () => {
+    const used = new Set(intervals.map((i) => i.interval));
+    const next  = ["weekly", "monthly", "yearly"].find((v) => !used.has(v));
+    if (next) setIntervals([...intervals, { interval: next, amount: "" }]);
+  };
+
+  const removeInterval = (idx: number) => {
+    if (intervals.length === 1) return;
+    setIntervals(intervals.filter((_, i) => i !== idx));
+  };
+
+  const updateInterval = (idx: number, field: "interval" | "amount", value: string) =>
+    setIntervals(intervals.map((iv, i) => (i === idx ? { ...iv, [field]: value } : iv)));
+
+  // ── Tier helpers ─────────────────────────────────────────────────────────────
+
+  const addTier = () => {
+    if (tiers.length >= MAX_TIERS) return;
+    setTiers((prev) => [...prev, makeTier(prev.length)]);
+  };
+
+  const removeTier = (id: string) => {
+    if (tiers.length === 1) return;
+    setTiers((prev) => prev.filter((t) => t.id !== id).map((t, i) => ({ ...t, displayOrder: i })));
+  };
+
+  const updateTier = (id: string, patch: Partial<TierDraft>) =>
+    setTiers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+
+  const addTierInterval = (tierId: string) => {
+    setTiers((prev) => prev.map((t) => {
+      if (t.id !== tierId || t.intervals.length >= 3) return t;
+      const used = new Set(t.intervals.map((i) => i.interval));
+      const next = ["weekly", "monthly", "yearly"].find((v) => !used.has(v));
+      if (!next) return t;
+      return { ...t, intervals: [...t.intervals, { interval: next, amount: "" }] };
+    }));
+  };
+
+  const removeTierInterval = (tierId: string, idx: number) =>
+    setTiers((prev) => prev.map((t) =>
+      t.id === tierId && t.intervals.length > 1
+        ? { ...t, intervals: t.intervals.filter((_, i) => i !== idx) }
+        : t,
+    ));
+
+  const updateTierInterval = (tierId: string, idx: number, field: "interval" | "amount", value: string) =>
+    setTiers((prev) => prev.map((t) =>
+      t.id === tierId
+        ? { ...t, intervals: t.intervals.map((iv, i) => (i === idx ? { ...iv, [field]: value } : iv)) }
+        : t,
+    ));
+
+  const addFeature = (tierId: string) => {
+    setTiers((prev) => prev.map((t) => {
+      if (t.id !== tierId) return t;
+      const trimmed = t.featureInput.trim();
+      if (!trimmed || t.features.includes(trimmed) || t.features.length >= MAX_FEATURES) return t;
+      return { ...t, features: [...t.features, trimmed], featureInput: "" };
+    }));
+  };
+
+  const removeFeature = (tierId: string, feature: string) =>
+    setTiers((prev) => prev.map((t) =>
+      t.id === tierId ? { ...t, features: t.features.filter((f) => f !== feature) } : t,
+    ));
+
+  const handleSubmit = async (e: { preventDefault(): void }) => {
+    e.preventDefault();
+    setError(null);
+    setResult(null);
+    setIsSubmitting(true);
+    try {
+      const body = planMode === "tiered"
+        ? {
+            planTitle:         planTitle.trim(),
+            paymentEmail:      paymentEmail.trim(),
+            hasFreeTrial,
+            trialDurationDays: hasFreeTrial ? parseInt(trialDurationDays, 10) : undefined,
+            pak,
+            tiers: tiers.map((t) => ({
+              tierName:      t.tierName === "__custom__" ? t.customName.trim() : t.tierName,
+              description:   t.description.trim() || undefined,
+              features:      t.features,
+              isHighlighted: t.isHighlighted,
+              displayOrder:  t.displayOrder,
+              intervals:     t.intervals,
+            })),
+          }
+        : {
+            planTitle:         planTitle.trim(),
+            paymentEmail:      paymentEmail.trim(),
+            intervals,
+            hasFreeTrial,
+            trialDurationDays: hasFreeTrial ? parseInt(trialDurationDays, 10) : undefined,
+            pak,
+          };
+
+      const res  = await fetch(`${BASE}/api/subscriptions/plans`, {
+        method: "POST",
+        headers: authHeaders(),
+        body:    JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message ?? "Failed to create plan");
+      setResult(json);
+      setPlanTitle(""); setPaymentEmail("");
+      setIntervals([{ interval: "monthly", amount: "" }]);
+      setTiers([makeTier(0)]);
+      setHasFreeTrial(false); setTrialDurationDays("7"); setPak("");
+    } catch (err: any) {
+      setError(err.message ?? "Failed to create plan");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto">
+      <div className="bg-white rounded-2xl border border-border shadow-sm overflow-hidden">
+
+        {/* Header */}
+        <div className="px-8 py-6 border-b border-border">
+          <h3 className="text-lg font-bold text-foreground">New Subscription Plan</h3>
+          <p className="text-sm text-muted-foreground mt-1">
+            Subscribers are billed automatically on the schedule you define.
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="divide-y divide-border">
+
+          {/* §1 Plan Details */}
+          <div className="px-8 py-7 space-y-5">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Plan Details</p>
+
+            <div className="space-y-1.5">
+              <label htmlFor="plan-title" className="text-sm font-medium text-foreground">Plan Title</label>
+              <input
+                id="plan-title" name="planTitle" type="text"
+                placeholder="e.g. Creator Pro…"
+                autoComplete="off"
+                value={planTitle} onChange={(e) => setPlanTitle(e.target.value)} required
+                className="w-full h-11 rounded-xl border border-border bg-white px-4 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor="payment-email" className="text-sm font-medium text-foreground">Payment Email</label>
+              <p className="text-xs text-muted-foreground">Subscription payments are sent to this address.</p>
+              <input
+                id="payment-email" name="paymentEmail" type="email"
+                placeholder="payments@yourdomain.com"
+                autoComplete="email"
+                spellCheck={false}
+                value={paymentEmail} onChange={(e) => setPaymentEmail(e.target.value)} required
+                className="w-full h-11 rounded-xl border border-border bg-white px-4 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
+              />
+            </div>
+          </div>
+
+          {/* §2 Plan Structure */}
+          <div className="px-8 py-7 space-y-6">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Plan Structure</p>
+
+            {/* Mode toggle */}
+            <div role="group" aria-label="Plan structure type" className="flex gap-3">
+              {([
+                { mode: "flat",   Icon: List,   label: "Simple",  sub: "One price for all subscribers" },
+                { mode: "tiered", Icon: Layers, label: "Tiered",  sub: "Multiple tiers with different prices" },
+              ] as const).map(({ mode, Icon, label, sub }) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={planMode === mode}
+                  onClick={() => setPlanMode(mode)}
+                  className={cn(
+                    "flex-1 flex items-center gap-3 px-4 py-3.5 rounded-xl border-2 text-left transition-all",
+                    planMode === mode
+                      ? "border-primary bg-primary/5"
+                      : "border-border bg-slate-50/60 hover:border-primary/30 hover:bg-white",
+                  )}
+                >
+                  <div className={cn(
+                    "w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
+                    planMode === mode ? "bg-primary text-white" : "bg-white border border-border text-muted-foreground",
+                  )}>
+                    <Icon className="w-4 h-4" aria-hidden />
+                  </div>
+                  <div className="min-w-0">
+                    <p className={cn("text-sm font-semibold", planMode === mode ? "text-primary" : "text-foreground")}>{label}</p>
+                    <p className="text-[11px] text-muted-foreground truncate">{sub}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            {/* ── Simple mode ── */}
+            {planMode === "flat" && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium text-foreground">Billing Intervals</label>
+                  {intervals.length < 3 && (
+                    <button type="button" onClick={addInterval}
+                      className="flex items-center gap-1 text-xs font-semibold text-primary hover:text-primary/80 transition">
+                      <Plus className="w-3.5 h-3.5" aria-hidden /> Add Interval
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  {intervals.map((iv, idx) => (
+                    <div key={idx} className="flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-50 border border-border">
+                      <select
+                        value={iv.interval} onChange={(e) => updateInterval(idx, "interval", e.target.value)}
+                        aria-label={`Billing cadence for interval ${idx + 1}`}
+                        className="h-9 rounded-lg border border-border bg-white px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
+                      >
+                        {["weekly", "monthly", "yearly"].map((opt) => (
+                          <option key={opt} value={opt} disabled={intervals.some((x, i) => i !== idx && x.interval === opt)}>
+                            {opt.charAt(0).toUpperCase() + opt.slice(1)}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="relative flex-1">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground" aria-hidden>$</span>
+                        <input
+                          type="number" min="0.01" step="0.01" placeholder="0.00"
+                          aria-label={`Price for interval ${idx + 1}`}
+                          value={iv.amount} onChange={(e) => updateInterval(idx, "amount", e.target.value)} required
+                          className="w-full h-9 rounded-lg border border-border bg-white pl-7 pr-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
+                        />
+                      </div>
+                      {intervals.length > 1 && (
+                        <button type="button" onClick={() => removeInterval(idx)} aria-label="Remove interval"
+                          className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition">
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Tiered mode ── */}
+            {planMode === "tiered" && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Plan Tiers</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Each tier has its own name, features, and pricing.</p>
+                  </div>
+                  <button
+                    type="button" onClick={addTier} disabled={tiers.length >= MAX_TIERS}
+                    className="flex items-center gap-1.5 text-xs font-semibold text-primary hover:text-primary/80 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  >
+                    <PlusCircle className="w-4 h-4" aria-hidden />
+                    Add Tier {tiers.length < MAX_TIERS ? `(${tiers.length}/${MAX_TIERS})` : "(max)"}
+                  </button>
+                </div>
+
+                <div className={cn("grid gap-4", tiers.length >= 2 ? "xl:grid-cols-2" : "grid-cols-1")}>
+                  {tiers.map((tier, tierIdx) => (
+                    <div key={tier.id} className={cn(
+                      "rounded-xl border-2 bg-white overflow-hidden transition-all",
+                      tier.isHighlighted ? "border-primary/40 shadow-sm shadow-primary/10" : "border-border",
+                    )}>
+                      {/* Tier header */}
+                      <div className={cn(
+                        "flex items-center justify-between px-4 py-3 border-b",
+                        tier.isHighlighted ? "bg-primary/5 border-primary/20" : "bg-slate-50 border-border",
+                      )}>
+                        <div className="flex items-center gap-2">
+                          <GripVertical className="w-4 h-4 text-muted-foreground/30" aria-hidden />
+                          <span className="text-xs font-bold text-muted-foreground uppercase tracking-wide">Tier {tierIdx + 1}</span>
+                          {tier.isHighlighted && (
+                            <span className="flex items-center gap-1 text-[10px] font-bold text-primary px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20">
+                              <Star className="w-2.5 h-2.5" aria-hidden /> Recommended
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button" onClick={() => removeTier(tier.id)} disabled={tiers.length === 1}
+                          aria-label={`Remove tier ${tierIdx + 1}`}
+                          className="p-1 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-30 disabled:cursor-not-allowed transition"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="px-4 py-4 space-y-4">
+                        {/* Name */}
+                        <div className="space-y-2">
+                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                            Tier Name <span aria-hidden className="text-destructive">*</span>
+                          </label>
+                          <div role="group" aria-label="Preset tier names" className="flex flex-wrap gap-1.5">
+                            {PRESET_TIER_NAMES.map((name) => (
+                              <button key={name} type="button"
+                                onClick={() => updateTier(tier.id, { tierName: name, customName: "" })}
+                                aria-pressed={tier.tierName === name}
+                                className={cn(
+                                  "px-2.5 py-1 rounded-lg text-xs font-medium border transition-all",
+                                  tier.tierName === name
+                                    ? "bg-primary text-white border-primary"
+                                    : "bg-white text-muted-foreground border-border hover:border-primary/50 hover:text-primary",
+                                )}
+                              >{name}</button>
+                            ))}
+                          </div>
+                          <input
+                            type="text" placeholder="Or type a custom name…" maxLength={50}
+                            aria-label={`Custom name for tier ${tierIdx + 1}`}
+                            value={tier.tierName === "__custom__" ? tier.customName : ""}
+                            onChange={(e) => updateTier(tier.id, { tierName: "__custom__", customName: e.target.value })}
+                            onFocus={() => { if (!PRESET_TIER_NAMES.includes(tier.tierName) && tier.tierName !== "__custom__") updateTier(tier.id, { tierName: "__custom__", customName: tier.tierName }); }}
+                            className="w-full h-9 rounded-xl border border-border bg-white px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition placeholder:text-muted-foreground/50"
+                          />
+                          {(tier.tierName === "__custom__" ? !tier.customName.trim() : !tier.tierName) && (
+                            <p className="text-[11px] text-destructive" role="alert">Select a preset or type a custom tier name.</p>
+                          )}
+                        </div>
+
+                        {/* Description */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                            Description <span className="text-muted-foreground font-normal normal-case">(optional)</span>
+                          </label>
+                          <div className="relative">
+                            <textarea rows={2} maxLength={200}
+                              placeholder="Briefly describe what's included…"
+                              aria-label={`Description for tier ${tierIdx + 1}`}
+                              value={tier.description}
+                              onChange={(e) => updateTier(tier.id, { description: e.target.value })}
+                              className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm resize-none focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition placeholder:text-muted-foreground/50"
+                            />
+                            <span className="absolute bottom-2 right-3 text-[10px] text-muted-foreground/40">{tier.description.length}/200</span>
+                          </div>
+                        </div>
+
+                        {/* Features */}
+                        <div className="space-y-2">
+                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                            Features <span className="text-muted-foreground font-normal normal-case">(optional)</span>
+                          </label>
+                          <div className="flex gap-2">
+                            <input
+                              type="text" placeholder="e.g. Unlimited projects…" maxLength={60}
+                              aria-label={`Add feature to tier ${tierIdx + 1}`}
+                              value={tier.featureInput}
+                              onChange={(e) => updateTier(tier.id, { featureInput: e.target.value })}
+                              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addFeature(tier.id); } }}
+                              className="flex-1 h-9 rounded-xl border border-border bg-white px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
+                            />
+                            <button type="button" onClick={() => addFeature(tier.id)}
+                              disabled={!tier.featureInput.trim() || tier.features.length >= MAX_FEATURES}
+                              className="h-9 px-4 rounded-xl bg-primary/10 text-primary text-xs font-semibold hover:bg-primary/20 disabled:opacity-40 transition"
+                            >Add</button>
+                          </div>
+                          {tier.features.length > 0 && (
+                            <div role="list" aria-label={`Features for tier ${tierIdx + 1}`} className="flex flex-wrap gap-1.5 pt-1">
+                              {tier.features.map((feat) => (
+                                <span key={feat} role="listitem"
+                                  className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-secondary border border-border text-xs text-foreground"
+                                >
+                                  <Tag className="w-3 h-3 text-muted-foreground" aria-hidden />{feat}
+                                  <button type="button" onClick={() => removeFeature(tier.id, feat)}
+                                    aria-label={`Remove feature: ${feat}`}
+                                    className="ml-0.5 text-muted-foreground hover:text-destructive transition"
+                                  ><X className="w-3 h-3" /></button>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Pricing */}
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Pricing</label>
+                            {tier.intervals.length < 3 && (
+                              <button type="button" onClick={() => addTierInterval(tier.id)}
+                                className="flex items-center gap-1 text-xs font-semibold text-primary hover:text-primary/80 transition">
+                                <Plus className="w-3.5 h-3.5" aria-hidden /> Add Interval
+                              </button>
+                            )}
+                          </div>
+                          <div className="space-y-2">
+                            {tier.intervals.map((iv, ivIdx) => (
+                              <div key={ivIdx} className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-50 border border-border">
+                                <select value={iv.interval}
+                                  onChange={(e) => updateTierInterval(tier.id, ivIdx, "interval", e.target.value)}
+                                  aria-label={`Billing cadence for tier ${tierIdx + 1} interval ${ivIdx + 1}`}
+                                  className="h-8 rounded-lg border border-border bg-white px-2 text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
+                                >
+                                  {["weekly", "monthly", "yearly"].map((opt) => (
+                                    <option key={opt} value={opt} disabled={tier.intervals.some((x, i) => i !== ivIdx && x.interval === opt)}>
+                                      {opt.charAt(0).toUpperCase() + opt.slice(1)}
+                                    </option>
+                                  ))}
+                                </select>
+                                <div className="relative flex-1">
+                                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground" aria-hidden>$</span>
+                                  <input type="number" min="0.01" step="0.01" placeholder="0.00"
+                                    aria-label={`Price for tier ${tierIdx + 1} interval ${ivIdx + 1}`}
+                                    value={iv.amount}
+                                    onChange={(e) => updateTierInterval(tier.id, ivIdx, "amount", e.target.value)}
+                                    required
+                                    className="w-full h-8 rounded-lg border border-border bg-white pl-6 pr-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
+                                  />
+                                </div>
+                                {tier.intervals.length > 1 && (
+                                  <button type="button" onClick={() => removeTierInterval(tier.id, ivIdx)} aria-label="Remove interval"
+                                    className="p-1 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition">
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Highlight toggle */}
+                        <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                          <input type="checkbox" checked={tier.isHighlighted}
+                            onChange={(e) => updateTier(tier.id, { isHighlighted: e.target.checked })}
+                            className="w-4 h-4 accent-primary rounded"
+                            aria-label={`Mark tier ${tierIdx + 1} as highlighted`}
+                          />
+                          <span className="text-sm text-foreground">Highlight as <span className="font-medium">"Recommended"</span></span>
+                        </label>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* §3 Settings */}
+          <div className="px-8 py-7 space-y-5">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Settings</p>
+
+            {/* Free trial */}
+            <div className="flex items-start gap-3 p-4 rounded-xl border border-border bg-slate-50/60">
+              <input
+                id="free-trial-toggle"
+                type="checkbox" checked={hasFreeTrial}
+                onChange={(e) => setHasFreeTrial(e.target.checked)}
+                className="w-4 h-4 mt-0.5 accent-primary rounded shrink-0"
+              />
+              <div className="flex-1 min-w-0">
+                <label htmlFor="free-trial-toggle" className="text-sm font-medium text-foreground cursor-pointer">
+                  Offer a free trial
+                </label>
+                <p className="text-xs text-muted-foreground mt-0.5">Let new subscribers try your plan before they're charged.</p>
+                {hasFreeTrial && (
+                  <div className="flex items-center gap-2 mt-3">
+                    <input
+                      type="number" min="1" value={trialDurationDays}
+                      onChange={(e) => setTrialDurationDays(e.target.value)}
+                      aria-label="Trial duration in days"
+                      className="w-20 h-9 rounded-xl border border-border bg-white px-3 text-sm text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
+                    />
+                    <span className="text-sm text-muted-foreground">days free</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* PAK */}
+            <div className="space-y-1.5">
+              <label htmlFor="pak-input" className="text-sm font-medium text-foreground">
+                Personal Authorization Key
+              </label>
+              <p className="text-xs text-muted-foreground">Required to create or manage plans.</p>
+              <div className="relative">
+                <input
+                  id="pak-input" name="pak"
+                  type={pakVisible ? "text" : "password"} placeholder="Enter your PAK…"
+                  value={pak} onChange={(e) => setPak(e.target.value)} required
+                  className="w-full h-11 rounded-xl border border-border bg-white px-4 pr-11 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
+                />
+                <button
+                  type="button" onClick={() => setPakVisible((v) => !v)}
+                  aria-label={pakVisible ? "Hide PAK" : "Show PAK"}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition"
+                >
+                  {pakVisible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* §4 Actions */}
+          <div className="px-8 py-6 space-y-4 bg-slate-50/60">
+            {error && <InlineError message={error} />}
+
+            {result && (() => {
+              const planMerchantId = result.plan.merchantId ?? "";
+              const subscribeUrl   = `${window.location.origin}${BASE}/subscribe/${planMerchantId}`;
+              const embedCode      = `<a href="${subscribeUrl}" style="display:inline-block;padding:12px 24px;background:#6366f1;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-family:sans-serif;">Subscribe to ${result.plan.planTitle}</a>`;
+              const isTieredResult = Array.isArray(result.tiers) && result.tiers.length > 0;
+              return (
+                <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+                  className="rounded-xl bg-green-50 border border-green-200 p-5 space-y-4"
+                  role="status" aria-label="Plan created successfully"
+                >
+                  <div className="flex items-center gap-2 text-green-700 font-semibold text-sm">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden /> Plan created successfully!
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-green-800 uppercase tracking-wide">Merchant ID</p>
+                    <div className="flex items-center justify-between rounded-lg bg-white border border-green-200 px-3 py-2.5">
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-0.5">Share with subscribers</p>
+                        <code className="text-sm font-mono font-bold text-foreground tracking-wider" translate="no">{planMerchantId}</code>
+                      </div>
+                      <CopyButton text={planMerchantId} />
+                    </div>
+                    {!isTieredResult && Array.isArray(result.intervals) && (
+                      <div className="space-y-1">
+                        {result.intervals.map((iv: any) => (
+                          <div key={iv.id} className="flex items-center justify-between rounded-lg bg-white/60 border border-green-100 px-3 py-1.5">
+                            <span className="text-xs font-semibold capitalize text-green-700">{iv.interval}</span>
+                            <span className="text-xs text-muted-foreground">${parseFloat(iv.amount).toFixed(2)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {isTieredResult && (
+                      <div className="grid sm:grid-cols-2 gap-2 mt-1">
+                        {result.tiers.map(({ tier, intervals: tierIvs }: any) => (
+                          <div key={tier.id} className={cn(
+                            "rounded-lg border px-3 py-2.5 space-y-1.5",
+                            tier.isHighlighted ? "bg-primary/5 border-primary/30" : "bg-white/60 border-green-100",
+                          )}>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-green-800">{tier.tierName}</span>
+                              {tier.isHighlighted && (
+                                <span className="text-[10px] font-bold text-primary px-1.5 py-0.5 rounded-full bg-primary/10 border border-primary/20">Recommended</span>
+                              )}
+                            </div>
+                            {tierIvs.map((iv: any) => (
+                              <div key={iv.id} className="flex items-center justify-between">
+                                <span className="text-xs font-semibold capitalize text-green-700">{iv.interval}</span>
+                                <span className="text-xs text-muted-foreground">${parseFloat(iv.amount).toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-green-800 uppercase tracking-wide">Subscription Page</p>
+                    <div className="flex items-center gap-2 rounded-lg bg-white border border-green-200 px-3 py-2">
+                      <a href={subscribeUrl} target="_blank" rel="noreferrer"
+                        className="flex-1 text-xs font-mono text-primary truncate hover:underline"
+                      >{subscribeUrl}</a>
+                      <CopyButton text={subscribeUrl} />
+                      <a href={subscribeUrl} target="_blank" rel="noreferrer"
+                        aria-label="Open subscription page"
+                        className="p-1 rounded hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
+                      ><ExternalLink className="w-3.5 h-3.5" /></a>
+                    </div>
+                    <p className="text-[11px] text-green-700">Share this link — subscribers visit it to activate.</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-green-800 uppercase tracking-wide">
+                      Embed Code <span className="text-green-600 font-normal normal-case">(optional)</span>
+                    </p>
+                    <div className="relative rounded-lg bg-white border border-green-200 px-3 py-2">
+                      <pre className="text-[10px] font-mono text-muted-foreground whitespace-pre-wrap break-all leading-relaxed pr-8">{embedCode}</pre>
+                      <div className="absolute top-2 right-2">
+                        <CopyButton text={embedCode} />
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-green-700">Paste into your website to add a subscribe button.</p>
+                  </div>
+                </motion.div>
+              );
+            })()}
+
+            <button
+              type="submit" disabled={isSubmitting}
+              className="w-full h-11 rounded-xl bg-primary text-white font-bold text-sm hover:bg-primary/90 disabled:opacity-60 flex items-center justify-center gap-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+            >
+              {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <Plus className="w-4 h-4" aria-hidden />}
+              {isSubmitting ? "Creating…" : "Create Plan"}
+            </button>
+          </div>
+
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ─── Pay Subscription Tab ─────────────────────────────────────────────────────
+
+function PaySubscriptionTab({ user }: { user: any }) {
+  const [merchantId,           setMerchantId]           = useState("");
+  const [planInfo,             setPlanInfo]             = useState<any | null>(null);
+  const [lookupError,          setLookupError]          = useState<string | null>(null);
+  const [isLooking,            setIsLooking]            = useState(false);
+  const [selectedPlanInterval, setSelectedPlanInterval] = useState("");
+  const [selectedIntervalId,   setSelectedIntervalId]   = useState<number | null>(null);
+  const [txPassword,           setTxPassword]           = useState("");
+  const [txPasswordVisible,    setTxPasswordVisible]    = useState(false);
+  const [step,                 setStep]                 = useState<"lookup" | "otp" | "done">("lookup");
+  const [otp,                  setOtp]                  = useState("");
+  const [isSubmitting,         setIsSubmitting]         = useState(false);
+  const [stepError,            setStepError]            = useState<string | null>(null);
+
+  const hasTransactionPassword = (user as any)?.hasTransactionPassword;
+
+  const authHeaders = () => {
+    const jwt = localStorage.getItem("token");
+    const h: Record<string, string> = { "Content-Type": "application/json" };
+    if (jwt) h["Authorization"] = `Bearer ${jwt}`;
+    return h;
+  };
+
+  const handleLookup = async () => {
+    if (!merchantId.trim()) return;
+    setLookupError(null); setPlanInfo(null);
+    setIsLooking(true);
+    try {
+      const res  = await fetch(`${BASE}/api/subscriptions/merchant/${encodeURIComponent(merchantId.trim())}`, { headers: authHeaders() });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message ?? "Merchant ID not found");
+      setPlanInfo(json);
+      if (json.intervals?.length === 1) {
+        setSelectedPlanInterval(json.intervals[0].interval);
+        setSelectedIntervalId(json.intervals[0].intervalId ?? null);
+      }
+    } catch (err: any) {
+      setLookupError(err.message ?? "Merchant ID not found");
+    } finally {
+      setIsLooking(false);
+    }
+  };
+
+  const handleRequestOtp = async () => {
+    if (!selectedPlanInterval) return;
+    setStepError(null); setIsSubmitting(true);
+    try {
+      const body: Record<string, any> = { merchantId: merchantId, planInterval: selectedPlanInterval };
+      if (selectedIntervalId) body["intervalId"] = selectedIntervalId;
+      if (hasTransactionPassword && txPassword) body["transactionPassword"] = txPassword;
+      const res  = await fetch(`${BASE}/api/subscriptions/confirmation-code/request-otp`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message ?? "Failed to send OTP");
+      setStep("otp");
+    } catch (err: any) {
+      setStepError(err.message ?? "Failed to send OTP");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleGenerateCode = async () => {
+    if (!otp.trim()) return;
+    setStepError(null); setIsSubmitting(true);
+    try {
+      const res  = await fetch(`${BASE}/api/subscriptions/confirmation-code/generate`, {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ otp: otp.trim(), merchantId: merchantId, planInterval: selectedPlanInterval, ...(selectedIntervalId ? { intervalId: selectedIntervalId } : {}) }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message ?? "Failed to generate code");
+      setStep("done");
+    } catch (err: any) {
+      setStepError(err.message ?? "Failed to generate code");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const resetForm = () => {
+    setMerchantId(""); setPlanInfo(null); setLookupError(null);
+    setSelectedPlanInterval(""); setSelectedIntervalId(null);
+    setTxPassword(""); setOtp(""); setStep("lookup"); setStepError(null);
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-2xl border-2 border-border bg-white overflow-hidden">
+        <div className="px-5 py-4 border-b border-border bg-slate-50">
+          <h3 className="text-sm font-bold text-foreground">Pay Subscription</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">Enter the Merchant ID provided by the creator to get your confirmation code.</p>
+        </div>
+
+        <div className="px-5 py-5 space-y-4">
+
+          {/* ── Step: lookup ── */}
+          {step === "lookup" && (
+            <>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Merchant ID</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text" placeholder="XXXX-XXXX-XXXX"
+                    value={merchantId} onChange={(e) => setMerchantId(e.target.value.toUpperCase())}
+                    className="flex-1 h-10 rounded-xl border border-border bg-white px-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 transition"
+                  />
+                  <button type="button" onClick={handleLookup} disabled={isLooking || !merchantId.trim()}
+                    className="h-10 px-4 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary/90 disabled:opacity-60 flex items-center gap-2 transition"
+                  >
+                    {isLooking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Look up"}
+                  </button>
+                </div>
+                {lookupError && <InlineError message={lookupError} />}
+              </div>
+
+              {planInfo && (
+                <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+                  {/* Plan card */}
+                  <div className="rounded-xl bg-primary/5 border border-primary/20 p-4 space-y-1">
+                    <p className="text-sm font-semibold text-foreground">{planInfo.planTitle}</p>
+                    <p className="text-xs text-muted-foreground">By {planInfo.creatorName}</p>
+                    {planInfo.hasFreeTrial && (
+                      <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 border border-violet-200">
+                        {planInfo.trialDurationDays} day free trial
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Interval / tier selector */}
+                  {(() => {
+                    const isTiered = planInfo.tiers?.length > 0;
+                    const selectIv = (iv: any) => {
+                      setSelectedPlanInterval(iv.interval);
+                      setSelectedIntervalId(iv.intervalId ?? null);
+                    };
+
+                    if (isTiered) {
+                      return (
+                        <div className="space-y-3">
+                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Choose a Plan</label>
+                          {planInfo.tiers.map((tier: any) => (
+                            <div
+                              key={tier.tierId}
+                              className={cn(
+                                "rounded-2xl border-2 overflow-hidden transition-all",
+                                tier.isHighlighted ? "border-primary/40 shadow-sm shadow-primary/10" : "border-border",
+                              )}
+                            >
+                              {/* Tier header */}
+                              <div className={cn(
+                                "px-4 py-3 border-b",
+                                tier.isHighlighted ? "bg-primary/5 border-primary/20" : "bg-slate-50 border-border",
+                              )}>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-bold text-foreground">{tier.tierName}</span>
+                                  {tier.isHighlighted && (
+                                    <span className="flex items-center gap-1 text-[10px] font-bold text-primary px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20">
+                                      <Star className="w-2.5 h-2.5" aria-hidden /> Recommended
+                                    </span>
+                                  )}
+                                </div>
+                                {tier.description && (
+                                  <p className="text-xs text-muted-foreground mt-0.5">{tier.description}</p>
+                                )}
+                                {tier.features?.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-2">
+                                    {tier.features.map((f: string) => (
+                                      <span key={f} className="px-2 py-0.5 rounded-full bg-secondary border border-border text-[11px] text-muted-foreground">
+                                        {f}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                              {/* Tier intervals */}
+                              <div className="divide-y divide-border">
+                                {tier.intervals.map((iv: any) => {
+                                  const isSelected = selectedIntervalId === iv.intervalId;
+                                  return (
+                                    <button
+                                      key={iv.intervalId}
+                                      type="button"
+                                      onClick={() => selectIv(iv)}
+                                      aria-pressed={isSelected}
+                                      className={cn(
+                                        "w-full flex items-center justify-between px-4 py-3 text-left transition-all",
+                                        isSelected ? "bg-primary/5" : "bg-white hover:bg-slate-50",
+                                      )}
+                                    >
+                                      <div className="flex items-center gap-3">
+                                        <div className={cn(
+                                          "w-4 h-4 rounded-full border-2 shrink-0 transition-colors",
+                                          isSelected ? "border-primary bg-primary" : "border-muted-foreground/40",
+                                        )} />
+                                        <span className="text-sm font-semibold capitalize text-foreground">{iv.interval}</span>
+                                      </div>
+                                      <div className="text-right">
+                                        <span className="text-sm font-bold text-primary">${parseFloat(iv.amount).toFixed(2)}</span>
+                                        <span className="text-xs text-muted-foreground ml-1">/ {iv.interval === "yearly" ? "yr" : iv.interval === "weekly" ? "wk" : "mo"}</span>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    }
+
+                    if (planInfo.intervals.length > 1) {
+                      return (
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Billing Cycle</label>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            {planInfo.intervals.map((iv: any) => {
+                              const isSelected = selectedIntervalId === iv.intervalId;
+                              return (
+                                <button key={iv.intervalId ?? iv.interval} type="button"
+                                  onClick={() => selectIv(iv)}
+                                  aria-pressed={isSelected}
+                                  className={cn(
+                                    "flex flex-col items-start rounded-xl border-2 p-3 text-left transition-all",
+                                    isSelected ? "border-primary bg-primary/5" : "border-border hover:border-primary/50",
+                                  )}
+                                >
+                                  <span className="text-xs font-semibold capitalize text-foreground">{iv.interval}</span>
+                                  <span className="text-sm font-bold text-primary">${parseFloat(iv.amount).toFixed(2)}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return null;
+                  })()}
+
+                  {/* Transaction password */}
+                  {hasTransactionPassword && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Transaction Password</label>
+                      <div className="relative">
+                        <input type={txPasswordVisible ? "text" : "password"} placeholder="Enter your transaction password"
+                          value={txPassword} onChange={(e) => setTxPassword(e.target.value)}
+                          className="w-full h-10 rounded-xl border border-border bg-white px-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition"
+                        />
+                        <button type="button" onClick={() => setTxPasswordVisible((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition">
+                          {txPasswordVisible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {stepError && <InlineError message={stepError} />}
+
+                  <button type="button" disabled={isSubmitting || !selectedPlanInterval} onClick={handleRequestOtp}
+                    className="w-full h-11 rounded-xl bg-primary text-white font-bold text-sm hover:bg-primary/90 disabled:opacity-60 flex items-center justify-center gap-2 transition"
+                  >
+                    {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+                    {isSubmitting ? "Sending OTP…" : "Continue"}
+                  </button>
+                </motion.div>
+              )}
+            </>
+          )}
+
+          {/* ── Step: OTP entry ── */}
+          {step === "otp" && (
+            <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+              <div className="flex items-start gap-3 px-4 py-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 text-sm">
+                <Mail className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>We sent a 6-digit OTP to your registered email. Enter it below to generate your confirmation code.</span>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">One-Time Password</label>
+                <input type="text" inputMode="numeric" maxLength={6} placeholder="123456"
+                  value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  className="w-full h-10 rounded-xl border border-border bg-white px-3 text-sm font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-primary/30 transition"
+                />
+              </div>
+              {stepError && <InlineError message={stepError} />}
+              <div className="flex gap-2">
+                <button type="button" onClick={() => { setStep("lookup"); setStepError(null); }}
+                  className="flex-1 h-11 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition"
+                >
+                  Back
+                </button>
+                <button type="button" disabled={isSubmitting || otp.length < 6} onClick={handleGenerateCode}
+                  className="flex-1 h-11 rounded-xl bg-primary text-white font-bold text-sm hover:bg-primary/90 disabled:opacity-60 flex items-center justify-center gap-2 transition"
+                >
+                  {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  {isSubmitting ? "Generating…" : "Generate Code"}
+                </button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* ── Step: success ── */}
+          {step === "done" && (
+            <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
+              className="flex flex-col items-center gap-4 py-6 text-center"
+            >
+              <div className="w-14 h-14 rounded-2xl bg-green-100 flex items-center justify-center">
+                <CheckCircle2 className="w-7 h-7 text-green-600" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-semibold text-foreground">Confirmation code sent!</h3>
+                <p className="text-sm text-muted-foreground max-w-xs">
+                  Your 8-character confirmation code has been emailed to you. Visit the creator's subscription page and enter it to activate your subscription.
+                </p>
+              </div>
+              <p className="text-xs text-muted-foreground">The code expires in 7 days.</p>
+              <button type="button" onClick={resetForm}
+                className="mt-2 h-10 px-6 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition"
+              >
+                Pay another subscription
+              </button>
+            </motion.div>
+          )}
+
+        </div>
+      </div>
+    </div>
   );
 }
