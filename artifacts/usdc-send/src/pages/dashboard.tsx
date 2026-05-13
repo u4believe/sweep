@@ -465,7 +465,7 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
       {/* Desktop sidebar */}
       <aside
         className={cn(
-          "hidden lg:flex flex-col fixed left-0 top-20 h-[calc(100vh-5rem)] bg-white/95 backdrop-blur border-r border-border z-30 transition-all duration-300 w-60",
+          "hidden lg:flex flex-col fixed left-0 top-28 h-[calc(100vh-7rem)] bg-white/95 backdrop-blur border-r border-border z-30 transition-all duration-300 w-60",
           collapsed && "translate-x-[-100%]",
         )}
       >
@@ -476,7 +476,7 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
       <button
         onClick={onToggleCollapse}
         className={cn(
-          "hidden lg:flex fixed top-[calc(50%+2.5rem)] -translate-y-1/2 z-40 items-center justify-center bg-white border border-l-0 border-border rounded-r-xl w-6 h-12 shadow-md hover:bg-secondary transition-all duration-300",
+          "hidden lg:flex fixed top-[calc(50%+3.5rem)] -translate-y-1/2 z-40 items-center justify-center bg-white border border-l-0 border-border rounded-r-xl w-6 h-12 shadow-md hover:bg-secondary transition-all duration-300",
           collapsed ? "left-0" : "left-60",
         )}
         title={collapsed ? "Show sidebar" : "Hide sidebar"}
@@ -494,7 +494,9 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
           mobileOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        {sidebarContent}
+        <div className="pt-28 flex flex-col flex-1 overflow-hidden">
+          {sidebarContent}
+        </div>
       </aside>
     </>
   );
@@ -649,7 +651,7 @@ export default function Dashboard() {
   if (isUserLoading || !user) {
     return (
       <AppLayout>
-        <div className="flex items-center justify-center h-[calc(100vh-5rem)]">
+        <div className="flex items-center justify-center h-[calc(100vh-7rem)]">
           <motion.div
             animate={{ rotate: 360 }}
             transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
@@ -681,7 +683,7 @@ export default function Dashboard() {
 
       <Navbar />
 
-      <div className="flex pt-20 min-h-[calc(100vh-80px)]">
+      <div className="flex pt-28 min-h-screen">
         {/* Mobile overlay */}
         <AnimatePresence>
           {mobileOpen && (
