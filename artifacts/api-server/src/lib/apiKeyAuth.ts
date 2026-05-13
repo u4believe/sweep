@@ -4,7 +4,7 @@ import { Request, Response, NextFunction } from "express";
 import { db, developerApiKeysTable, developersTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 
-const JWT_SECRET = process.env.JWT_SECRET ?? "arc-dev-secret-change-in-prod";
+const JWT_SECRET = process.env.JWT_SECRET!;
 
 // ─── In-memory rate limit store (per API key, per minute window) ───────────────
 // For production, replace with Redis. Good enough for single-instance deployments.

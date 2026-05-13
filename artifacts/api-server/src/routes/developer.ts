@@ -21,7 +21,7 @@ import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
 
-const DEV_JWT_SECRET = process.env.DEV_JWT_SECRET ?? "arc-dev-secret-change-in-prod";
+const DEV_JWT_SECRET = process.env.DEV_JWT_SECRET!;
 const MERCHANT_CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 function generateMerchantId(): string {

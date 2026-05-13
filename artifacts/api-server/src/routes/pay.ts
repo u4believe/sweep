@@ -220,7 +220,7 @@ router.post("/checkout", requireAuth, requireEmailVerified, async (req, res) => 
         .limit(1);
 
       if (!existingPassport) {
-        const secret    = process.env.JWT_SECRET ?? "arc-passport-secret";
+        const secret    = process.env.PASSPORT_SECRET!;
         const payload   = `passport:${user.userId}:${Date.now()}`;
         const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
         await db.insert(subscriptionPassportsTable).values({

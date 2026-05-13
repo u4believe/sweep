@@ -336,7 +336,7 @@ router.post("/validate", requireApiKey, async (req, res) => {
         .limit(1);
 
       if (!passport) {
-        const secret    = process.env.JWT_SECRET ?? "arc-passport-secret";
+        const secret    = process.env.PASSPORT_SECRET!;
         const payload   = `passport:${subscriber!.id}:${Date.now()}`;
         const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
         await db.insert(subscriptionPassportsTable).values({
