@@ -13,6 +13,7 @@ import {
 import { cn } from "@/lib/utils";
 import { fadeUp, slideRight, scaleIn, staggerContainer, fadeIn } from "@/lib/motion";
 
+import { API_BASE } from "@/lib/api";
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 // ── Form schema ───────────────────────────────────────────────────────────────
@@ -1353,7 +1354,7 @@ export default function Landing() {
     const token = localStorage.getItem("token");
     setIsLoggedIn(!!token);
     if (token) {
-      fetch(`${BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+      fetch(`${API_BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
         .then((r) => r.json())
         .then((u) => { if (u?.hasTransactionPassword) setHasTransactionPassword(true); })
         .catch(() => {});
@@ -1377,7 +1378,7 @@ export default function Landing() {
       const headers: Record<string, string> = {};
       if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
       const email = data.recipientEmail.toLowerCase().trim();
-      const res = await fetch(`${BASE}/api/escrow/lookup-recipient?email=${encodeURIComponent(email)}`, { headers });
+      const res = await fetch(`${API_BASE}/api/escrow/lookup-recipient?email=${encodeURIComponent(email)}`, { headers });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Could not look up recipient");
       setPendingData(data);
@@ -1403,7 +1404,7 @@ export default function Landing() {
         amount: pendingData.amount,
       };
       if (hasTransactionPassword && txnPwd) payload["transactionPassword"] = txnPwd;
-      const res = await fetch(`${BASE}/api/escrow/send/platform`, {
+      const res = await fetch(`${API_BASE}/api/escrow/send/platform`, {
         method: "POST", headers, body: JSON.stringify(payload),
       });
       const json = await res.json();

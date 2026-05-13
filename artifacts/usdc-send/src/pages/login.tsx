@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { AppLayout } from "@/components/layout";
 
+import { API_BASE } from "@/lib/api";
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const IS_DEV = import.meta.env.DEV;
 
@@ -41,7 +42,7 @@ export default function Login() {
     setError("");
     setIsPending(true);
     try {
-      const res  = await fetch(`${BASE}/api/auth/login`, {
+      const res  = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.toLowerCase().trim(), password }),
@@ -88,7 +89,7 @@ export default function Login() {
     setError("");
     setIsPending(true);
     try {
-      const res  = await fetch(`${BASE}/api/auth/verify-otp`, {
+      const res  = await fetch(`${API_BASE}/api/auth/verify-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId, code, type: "login" }),
@@ -113,7 +114,7 @@ export default function Login() {
     setError("");
     setIsPending(true);
     try {
-      const res  = await fetch(`${BASE}/api/auth/resend-otp`, {
+      const res  = await fetch(`${API_BASE}/api/auth/resend-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId, type: "login" }),

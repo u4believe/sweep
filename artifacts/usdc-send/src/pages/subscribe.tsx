@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { Navbar } from "@/components/layout";
 import { fadeUp, staggerContainer } from "@/lib/motion";
 
+import { API_BASE } from "@/lib/api";
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 function CopyButton({ text }: { text: string }) {
@@ -92,7 +93,7 @@ export default function SubscribePage() {
   // Load plan info
   useEffect(() => {
     if (!merchantIdParam) return;
-    fetch(`${BASE}/api/subscriptions/merchant/${encodeURIComponent(merchantIdParam)}`)
+    fetch(`${API_BASE}/api/subscriptions/merchant/${encodeURIComponent(merchantIdParam)}`)
       .then(async (res) => {
         const json = await res.json();
         if (!res.ok) throw new Error(json.message ?? "Plan not found");
@@ -111,7 +112,7 @@ export default function SubscribePage() {
   // Check passport status if logged in
   useEffect(() => {
     if (!token) { setPassportChecked(true); return; }
-    fetch(`${BASE}/api/subscriptions/passport`, {
+    fetch(`${API_BASE}/api/subscriptions/passport`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(async (res) => {
@@ -130,7 +131,7 @@ export default function SubscribePage() {
     setSubmitError(null);
     setIsSubmitting(true);
     try {
-      const res  = await fetch(`${BASE}/api/subscriptions/passport/activate`, {
+      const res  = await fetch(`${API_BASE}/api/subscriptions/passport/activate`, {
         method:  "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -157,7 +158,7 @@ export default function SubscribePage() {
     setSubmitError(null);
     setIsSubmitting(true);
     try {
-      const res  = await fetch(`${BASE}/api/subscriptions/activate`, {
+      const res  = await fetch(`${API_BASE}/api/subscriptions/activate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -498,7 +499,7 @@ export default function SubscribePage() {
                                 if (!selectedInterval || confirmationCode.length < 8) return;
                                 setSubmitError(null);
                                 setIsSubmitting(true);
-                                fetch(`${BASE}/api/subscriptions/activate`, {
+                                fetch(`${API_BASE}/api/subscriptions/activate`, {
                                   method: "POST",
                                   headers: { "Content-Type": "application/json" },
                                   body: JSON.stringify({ merchantId: merchantIdParam, planInterval: selectedInterval, intervalId: selectedIntervalId ?? undefined, confirmationCode: confirmationCode.trim() }),

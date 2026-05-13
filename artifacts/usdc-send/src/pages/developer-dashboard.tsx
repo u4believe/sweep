@@ -8,9 +8,9 @@ import {
   ChevronDown, ChevronUp, Info, TriangleAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { API_BASE as API_URL } from "@/lib/api";
 
-const BASE    = import.meta.env.BASE_URL.replace(/\/$/, "");
-const API_URL = "";  // same origin
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

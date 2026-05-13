@@ -63,6 +63,7 @@ import {
 } from "@workspace/api-client-react";
 import { useQuery } from "@tanstack/react-query";
 import { cn, formatCurrency } from "@/lib/utils";
+import { API_BASE } from "@/lib/api";
 import { AppLayout, Navbar } from "@/components/layout";
 import { fadeUp, scaleIn, staggerContainer, fadeIn } from "@/lib/motion";
 
@@ -511,12 +512,10 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
 function EmailVerificationPending({ email }: { email: string }) {
   const [resent, setResent] = useState(false);
   const [sending, setSending] = useState(false);
-  const BASE_URL = import.meta.env.BASE_URL.replace(/\/$/, "");
-
   const resend = async () => {
     setSending(true);
     try {
-      await fetch(`${BASE_URL}/api/auth/resend-verification`, {
+      await fetch(`${API_BASE}/api/auth/resend-verification`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
@@ -618,7 +617,7 @@ export default function Dashboard() {
     refetchOnWindowFocus: true,     // refresh instantly when user switches back to tab
     refetchIntervalInBackground: false,
     queryFn: async () => {
-      const res = await fetch(`${BASE}/api/user/history`, {
+      const res = await fetch(`${API_BASE}/api/user/history`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
       });
       if (!res.ok) {
@@ -1355,7 +1354,7 @@ function DashboardSendForm({ onSuccess, hasTransactionPassword, refetchBalance, 
       const headers: Record<string, string> = {};
       if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
       const email = data.recipientEmail.toLowerCase().trim();
-      const res = await fetch(`${BASE}/api/escrow/lookup-recipient?email=${encodeURIComponent(email)}`, { headers });
+      const res = await fetch(`${API_BASE}/api/escrow/lookup-recipient?email=${encodeURIComponent(email)}`, { headers });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Could not look up recipient");
       setPendingData(data);
@@ -1376,7 +1375,7 @@ function DashboardSendForm({ onSuccess, hasTransactionPassword, refetchBalance, 
       const jwt = localStorage.getItem("token");
       const sendHeaders: Record<string, string> = { "Content-Type": "application/json" };
       if (jwt) sendHeaders["Authorization"] = `Bearer ${jwt}`;
-      const res = await fetch(`${BASE}/api/escrow/send/platform`, {
+      const res = await fetch(`${API_BASE}/api/escrow/send/platform`, {
         method: "POST",
         headers: sendHeaders,
         body: JSON.stringify({
@@ -1758,7 +1757,7 @@ function RecurringTransferTab({ userEmail, availableBalance, hasTransactionPassw
   const fetchTransfers = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch(`${BASE}/api/recurring`, { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/api/recurring`, { headers: authHeaders() });
       if (res.ok) setTransfers(await res.json());
     } finally {
       setIsLoading(false);
@@ -1789,7 +1788,7 @@ function RecurringTransferTab({ userEmail, availableBalance, hasTransactionPassw
       if (data.interval === "monthly" && data.startDayOfMonth !== undefined) body["startDayOfMonth"] = data.startDayOfMonth;
       if (data.endDate) body["endDate"] = new Date(data.endDate).toISOString();
       if (hasTransactionPassword && txnPwd) body["transactionPassword"] = txnPwd;
-      const res = await fetch(`${BASE}/api/recurring`, {
+      const res = await fetch(`${API_BASE}/api/recurring`, {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify(body),
@@ -1811,7 +1810,7 @@ function RecurringTransferTab({ userEmail, availableBalance, hasTransactionPassw
   const handleCancel = async (id: number) => {
     setCancellingId(id);
     try {
-      const res = await fetch(`${BASE}/api/recurring/${id}`, {
+      const res = await fetch(`${API_BASE}/api/recurring/${id}`, {
         method: "DELETE",
         headers: authHeaders(),
       });
@@ -2263,7 +2262,7 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
   };
 
   const api = async (path: string, body?: object) => {
-    const res = await fetch(`${BASE}/api/security${path}`, {
+    const res = await fetch(`${API_BASE}/api/security${path}`, {
       method: "POST",
       headers: authHeaders(),
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -2889,7 +2888,7 @@ function CryptoDepositPanel() {
 
   useEffect(() => {
     const jwt = localStorage.getItem("token");
-    fetch(`${BASE}/api/deposit/addresses`, {
+    fetch(`${API_BASE}/api/deposit/addresses`, {
       headers: { Authorization: `Bearer ${jwt}` },
     })
       .then((r) => r.json())
@@ -3022,7 +3021,7 @@ function BankDepositForm({ onSuccess: _onSuccess }: { onSuccess: () => void }) {
     const jwt = localStorage.getItem("token");
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
-    const res = await fetch(`${BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    const res = await fetch(`${API_BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
     const json = await res.json();
     if (!res.ok) throw new Error(json.message ?? "Request failed");
     return json;
@@ -3225,21 +3224,21 @@ function MySubscriptionsTab({ user }: { user: { name: string; email: string; has
   useEffect(() => {
     (async () => {
       try {
-        const res  = await fetch(`${BASE}/api/subscriptions/my`, { headers: authHeaders() });
+        const res  = await fetch(`${API_BASE}/api/subscriptions/my`, { headers: authHeaders() });
         const data = await res.json();
         if (res.ok) setSubscriptions(data.subscriptions ?? []);
       } finally { setIsLoading(false); }
     })();
     (async () => {
       try {
-        const res  = await fetch(`${BASE}/api/subscriptions/plans`, { headers: authHeaders() });
+        const res  = await fetch(`${API_BASE}/api/subscriptions/plans`, { headers: authHeaders() });
         const data = await res.json();
         if (res.ok) setPlans(data.plans ?? []);
       } finally { setIsLoadingPlans(false); }
     })();
     (async () => {
       try {
-        const res  = await fetch(`${BASE}/api/subscriptions/passport`, { headers: authHeaders() });
+        const res  = await fetch(`${API_BASE}/api/subscriptions/passport`, { headers: authHeaders() });
         const data = await res.json();
         if (res.ok) setPassport(data);
       } finally { setIsLoadingPassport(false); }
@@ -3250,7 +3249,7 @@ function MySubscriptionsTab({ user }: { user: { name: string; email: string; has
     setCancelError(null);
     setCancellingId(id);
     try {
-      const res  = await fetch(`${BASE}/api/subscriptions/${id}`, { method: "DELETE", headers: authHeaders() });
+      const res  = await fetch(`${API_BASE}/api/subscriptions/${id}`, { method: "DELETE", headers: authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message ?? "Failed to cancel");
       setSubscriptions((prev) =>
@@ -3269,7 +3268,7 @@ function MySubscriptionsTab({ user }: { user: { name: string; email: string; has
     if (planSubscribers[planId]) return;
     setLoadingSubscribers((prev) => ({ ...prev, [planId]: true }));
     try {
-      const res  = await fetch(`${BASE}/api/subscriptions/plans/${planId}/subscribers`, { headers: authHeaders() });
+      const res  = await fetch(`${API_BASE}/api/subscriptions/plans/${planId}/subscribers`, { headers: authHeaders() });
       const data = await res.json();
       if (res.ok) setPlanSubscribers((prev) => ({ ...prev, [planId]: data.subscribers ?? [] }));
     } finally {
@@ -3281,7 +3280,7 @@ function MySubscriptionsTab({ user }: { user: { name: string; email: string; has
     setRevokeError(null);
     setIsRevoking(true);
     try {
-      const res  = await fetch(`${BASE}/api/subscriptions/passport`, { method: "DELETE", headers: authHeaders() });
+      const res  = await fetch(`${API_BASE}/api/subscriptions/passport`, { method: "DELETE", headers: authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message ?? "Failed to revoke passport");
       setPassport((prev) => prev ? { ...prev, status: "revoked" } : prev);
@@ -3999,7 +3998,7 @@ function CreateSubscriptionTab({ user: _user }: { user: any }) {
             pak,
           };
 
-      const res  = await fetch(`${BASE}/api/subscriptions/plans`, {
+      const res  = await fetch(`${API_BASE}/api/subscriptions/plans`, {
         method: "POST",
         headers: authHeaders(),
         body:    JSON.stringify(body),
@@ -4532,7 +4531,7 @@ function PaySubscriptionTab({ user }: { user: any }) {
     setLookupError(null); setPlanInfo(null);
     setIsLooking(true);
     try {
-      const res  = await fetch(`${BASE}/api/subscriptions/merchant/${encodeURIComponent(merchantId.trim())}`, { headers: authHeaders() });
+      const res  = await fetch(`${API_BASE}/api/subscriptions/merchant/${encodeURIComponent(merchantId.trim())}`, { headers: authHeaders() });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Merchant ID not found");
       setPlanInfo(json);
@@ -4554,7 +4553,7 @@ function PaySubscriptionTab({ user }: { user: any }) {
       const body: Record<string, any> = { merchantId: merchantId, planInterval: selectedPlanInterval };
       if (selectedIntervalId) body["intervalId"] = selectedIntervalId;
       if (hasTransactionPassword && txPassword) body["transactionPassword"] = txPassword;
-      const res  = await fetch(`${BASE}/api/subscriptions/confirmation-code/request-otp`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
+      const res  = await fetch(`${API_BASE}/api/subscriptions/confirmation-code/request-otp`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Failed to send OTP");
       setStep("otp");
@@ -4569,7 +4568,7 @@ function PaySubscriptionTab({ user }: { user: any }) {
     if (!otp.trim()) return;
     setStepError(null); setIsSubmitting(true);
     try {
-      const res  = await fetch(`${BASE}/api/subscriptions/confirmation-code/generate`, {
+      const res  = await fetch(`${API_BASE}/api/subscriptions/confirmation-code/generate`, {
         method: "POST", headers: authHeaders(),
         body: JSON.stringify({ otp: otp.trim(), merchantId: merchantId, planInterval: selectedPlanInterval, ...(selectedIntervalId ? { intervalId: selectedIntervalId } : {}) }),
       });

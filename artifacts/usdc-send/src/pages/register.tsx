@@ -4,6 +4,7 @@ import { Mail, Lock, User, ArrowRight, Loader2, CheckCircle2, RefreshCw } from "
 import { motion, AnimatePresence } from "framer-motion";
 import { AppLayout } from "@/components/layout";
 
+import { API_BASE } from "@/lib/api";
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 type Step = "form" | "check-email";
@@ -26,7 +27,7 @@ export default function Register() {
     setError("");
     setIsPending(true);
     try {
-      const res  = await fetch(`${BASE}/api/auth/register`, {
+      const res  = await fetch(`${API_BASE}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, email: email.toLowerCase().trim(), password }),
@@ -47,7 +48,7 @@ export default function Register() {
     setResent(false);
     setIsPending(true);
     try {
-      await fetch(`${BASE}/api/auth/resend-verification`, {
+      await fetch(`${API_BASE}/api/auth/resend-verification`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: sentEmail }),

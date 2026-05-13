@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+import { API_BASE } from "@/lib/api";
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -131,7 +132,7 @@ export default function PayPage() {
   // Load plan
   useEffect(() => {
     if (!merchantId) return;
-    fetch(`${BASE}/api/subscriptions/merchant/${encodeURIComponent(merchantId)}`)
+    fetch(`${API_BASE}/api/subscriptions/merchant/${encodeURIComponent(merchantId)}`)
       .then(async (r) => {
         const json = await r.json();
         if (!r.ok) throw new Error(json.message ?? "Plan not found");
@@ -152,7 +153,7 @@ export default function PayPage() {
   // Load balance when logged in
   useEffect(() => {
     if (!token) return;
-    fetch(`${BASE}/api/escrow/balance`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${API_BASE}/api/escrow/balance`, { headers: { Authorization: `Bearer ${token}` } })
       .then(async (r) => { if (r.ok) { const j = await r.json(); setBalance(j.claimedBalance ?? "0"); } })
       .catch(() => {});
   }, [token]);
@@ -160,7 +161,7 @@ export default function PayPage() {
   // Check passport status
   useEffect(() => {
     if (!token) return;
-    fetch(`${BASE}/api/subscriptions/passport`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${API_BASE}/api/subscriptions/passport`, { headers: { Authorization: `Bearer ${token}` } })
       .then(async (r) => { if (r.ok) { const j = await r.json(); setHasPassport(j.hasPassport && j.status === "active"); } })
       .catch(() => {});
   }, [token]);
@@ -198,7 +199,7 @@ export default function PayPage() {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const res = await fetch(`${BASE}/api/subscriptions/passport/activate`, {
+      const res = await fetch(`${API_BASE}/api/subscriptions/passport/activate`, {
         method:  "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body:    JSON.stringify({
@@ -229,7 +230,7 @@ export default function PayPage() {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const res = await fetch(`${BASE}/api/pay/checkout`, {
+      const res = await fetch(`${API_BASE}/api/pay/checkout`, {
         method:  "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body:    JSON.stringify({ merchantId, intervalId: selectedId, externalRef: externalRef || undefined, redirectUrl: redirectUrl || undefined }),

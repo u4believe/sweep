@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { ArrowLeft, Loader2, AlertCircle, Eye, EyeOff, CheckCircle2 } from "lucide-react";
 
+import { API_BASE } from "@/lib/api";
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 export default function DeveloperAuth() {
@@ -53,7 +54,7 @@ export default function DeveloperAuth() {
 
     try {
       if (mode === "forgot") {
-        const res = await fetch("/api/developer/forgot-password", {
+        const res = await fetch(`${API_BASE}/api/developer/forgot-password`, {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({ email: form.email }),
@@ -66,7 +67,7 @@ export default function DeveloperAuth() {
       }
 
       if (mode === "reset") {
-        const res = await fetch("/api/developer/reset-password", {
+        const res = await fetch(`${API_BASE}/api/developer/reset-password`, {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({ token: resetToken, newPassword: form.newPassword }),
@@ -82,7 +83,7 @@ export default function DeveloperAuth() {
         ? { email: form.email, password: form.password }
         : { email: form.email, password: form.password, name: form.name, paymentEmail: form.paymentEmail };
 
-      const res = await fetch(`/api/developer/${mode}`, {
+      const res = await fetch(`${API_BASE}/api/developer/${mode}`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify(body),
