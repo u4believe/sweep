@@ -313,29 +313,31 @@ class ChainIndexer {
   }
 
   private async handleDeposit(userId: number, amount: string, txHash: string, toAddress: string) {
-    // Idempotency check
-    const [dup] = await db
-      .select({ id: depositsTable.id })
-      .from(depositsTable)
-      .where(eq(depositsTable.txHash, txHash))
-      .limit(1);
-    if (dup) return;
+    // Atomically insert deposit record first — unique constraint on txHash
+    // prevents double-processing even under concurrent indexer runs.
+    // Balance is only credited if the insert actually succeeds.
+    const credited = await db.transaction(async (tx) => {
+      const [inserted] = await tx.insert(depositsTable).values({
+        userId,
+        amount,
+        type:             "crypto",
+        source:           CHAIN_LABELS[this.cfg.chain] ?? `${this.cfg.chain} USDC`,
+        status:           "completed",
+        depositReference: txHash,
+        txHash,
+        creditedAt:       new Date(),
+      }).onConflictDoNothing().returning({ id: depositsTable.id });
 
-    // Credit balance atomically
-    await db.update(usersTable)
-      .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })
-      .where(eq(usersTable.id, userId));
+      if (!inserted) return false; // already processed — skip
 
-    await db.insert(depositsTable).values({
-      userId,
-      amount,
-      type:             "crypto",
-      source:           CHAIN_LABELS[this.cfg.chain] ?? `${this.cfg.chain} USDC`,
-      status:           "completed",
-      depositReference: txHash,
-      txHash,
-      creditedAt:       new Date(),
+      await tx.update(usersTable)
+        .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })
+        .where(eq(usersTable.id, userId));
+
+      return true;
     });
+
+    if (!credited) return;
 
     logger.info(
       { txHash, userId, amount, chain: this.cfg.chain },

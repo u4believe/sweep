@@ -13,7 +13,7 @@ export const depositsTable = pgTable("deposits", {
   status: text("status").notNull().default("pending_transfer"),
   depositReference: text("deposit_reference"),   // unique ref user includes in memo (ARC-XXXXXX)
   circlePaymentId: text("circle_payment_id"),    // Circle payment ID when webhook confirms
-  txHash: text("tx_hash"),                       // on-chain tx hash for crypto deposits
+  txHash: text("tx_hash").unique(),              // on-chain tx hash for crypto deposits
   creditedAt: timestamp("credited_at"),          // when claimedBalance was updated
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
