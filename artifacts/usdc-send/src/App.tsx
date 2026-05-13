@@ -2,7 +2,8 @@ import { Switch, Route, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { setAuthTokenGetter } from "@workspace/api-client-react";
+import { setAuthTokenGetter, setBaseUrl } from "@workspace/api-client-react";
+import { API_BASE } from "@/lib/api";
 import Landing from "./pages/landing";
 import Login from "./pages/login";
 import Register from "./pages/register";
@@ -14,7 +15,8 @@ import DeveloperDashboard from "./pages/developer-dashboard";
 import Pay from "./pages/pay";
 import NotFound from "./pages/not-found";
 
-// Wire up the auth token so every generated API hook includes Authorization: Bearer
+// Wire up base URL and auth token for every generated API hook
+setBaseUrl(API_BASE);
 setAuthTokenGetter(() => localStorage.getItem("token"));
 
 const queryClient = new QueryClient({
