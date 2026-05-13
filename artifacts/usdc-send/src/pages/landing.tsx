@@ -232,6 +232,17 @@ function LandingNav() {
               </button>
             ))}
             <Link
+              href={`${BASE}/docs`}
+              className={cn(
+                "flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors",
+                scrolled
+                  ? "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
+                  : "text-white/80 hover:text-white hover:bg-white/15",
+              )}
+            >
+              Documentation
+            </Link>
+            <Link
               href={`${BASE}/developer`}
               className={cn(
                 "flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors",
@@ -333,6 +344,17 @@ function LandingNav() {
                     {link.label}
                   </button>
                 ))}
+                <Link
+                  href={`${BASE}/docs`}
+                  className={cn(
+                    "block px-4 py-2.5 rounded-xl text-sm font-medium transition-colors",
+                    scrolled
+                      ? "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
+                      : "text-white/80 hover:text-white hover:bg-white/15",
+                  )}
+                >
+                  Documentation
+                </Link>
                 <Link
                   href={`${BASE}/developer`}
                   className={cn(

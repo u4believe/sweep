@@ -13,6 +13,7 @@ import DeveloperPortal from "./pages/developer-portal";
 import DeveloperAuth from "./pages/developer-auth";
 import DeveloperDashboard from "./pages/developer-dashboard";
 import Pay from "./pages/pay";
+import Docs from "./pages/docs";
 import NotFound from "./pages/not-found";
 
 // Wire up base URL and auth token for every generated API hook
@@ -49,6 +50,7 @@ function Router() {
       <Route path="/developer/login" component={DeveloperAuth} />
       <Route path="/developer/reset-password" component={DeveloperAuth} />
       <Route path="/developer/dashboard" component={DeveloperDashboard} />
+      <Route path="/docs" component={Docs} />
       <Route component={NotFound} />
     </Switch>
   );
