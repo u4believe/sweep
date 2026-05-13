@@ -405,17 +405,6 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
 
   const sidebarContent = (
     <div className="flex flex-col h-full">
-      {/* Sidebar header — collapse toggle only */}
-      <div className="flex items-center justify-end px-3 py-3 border-b border-border">
-        <button
-          onClick={onToggleCollapse}
-          className="p-1.5 rounded-lg hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
-          title="Collapse sidebar"
-        >
-          <ChevronLeft className="w-4 h-4" />
-        </button>
-      </div>
-
       {/* Nav items */}
       <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
         <SidebarItem
@@ -473,7 +462,7 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
 
   return (
     <>
-      {/* Desktop sidebar — fully hidden when collapsed */}
+      {/* Desktop sidebar */}
       <aside
         className={cn(
           "hidden lg:flex flex-col fixed left-0 top-20 h-[calc(100vh-5rem)] bg-white/95 backdrop-blur border-r border-border z-30 transition-all duration-300 w-60",
@@ -483,16 +472,20 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
         {sidebarContent}
       </aside>
 
-      {/* Floating expand button — shown when sidebar is fully hidden */}
-      {collapsed && (
-        <button
-          onClick={onToggleCollapse}
-          className="hidden lg:flex fixed left-0 top-[calc(50%+2.5rem)] -translate-y-1/2 z-40 items-center justify-center bg-white border border-border border-l-0 rounded-r-xl w-6 h-12 shadow-md hover:bg-secondary transition-colors"
-          title="Show sidebar"
-        >
-          <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
-        </button>
-      )}
+      {/* Toggle tab — always visible, slides with the sidebar edge */}
+      <button
+        onClick={onToggleCollapse}
+        className={cn(
+          "hidden lg:flex fixed top-[calc(50%+2.5rem)] -translate-y-1/2 z-40 items-center justify-center bg-white border border-l-0 border-border rounded-r-xl w-6 h-12 shadow-md hover:bg-secondary transition-all duration-300",
+          collapsed ? "left-0" : "left-60",
+        )}
+        title={collapsed ? "Show sidebar" : "Hide sidebar"}
+      >
+        {collapsed
+          ? <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+          : <ChevronLeft className="w-3.5 h-3.5 text-muted-foreground" />
+        }
+      </button>
 
       {/* Mobile drawer */}
       <aside
