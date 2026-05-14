@@ -14,11 +14,13 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 # Copy all workspace packages needed for the build
 COPY lib/ ./lib/
 COPY artifacts/api-server/ ./artifacts/api-server/
+COPY artifacts/usdc-send/ ./artifacts/usdc-send/
 
 # Install all workspace dependencies
 RUN pnpm install --frozen-lockfile
 
-# Build the api-server
+# Build the frontend first, then the api-server
+RUN pnpm --filter @workspace/usdc-send build
 RUN pnpm --filter @workspace/api-server build
 
 WORKDIR /app/artifacts/api-server
