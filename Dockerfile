@@ -10,6 +10,7 @@ RUN npm install -g pnpm@10.33.0
 
 # Copy workspace manifest files first (better layer caching)
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY tsconfig.base.json tsconfig.json ./
 
 # Copy all workspace packages needed for the build
 COPY lib/ ./lib/
