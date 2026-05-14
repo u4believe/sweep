@@ -487,10 +487,13 @@ export async function sendSecurityOtpEmail(to: string, code: string, actionType:
   const transporter = getTransporter();
   if (!transporter) return;
 
-  // Fire-and-forget: don't let email failure block the OTP response
-  transporter.sendMail({ from: FROM, to, subject: meta.subject, html }).catch((err: any) => {
-    console.error(`[security-otp-email] Failed to send to ${to}: ${err?.message}`);
-  });
+  try {
+    await transporter.sendMail({ from: FROM, to, subject: meta.subject, html });
+    console.info(`[security-otp-email] ✅ Sent [${actionType}] to ${to}`);
+  } catch (err: any) {
+    console.error(`[security-otp-email] ❌ FAILED [${actionType}] to ${to}: ${err?.message}`);
+    console.error(`[security-otp-email]    Resend error:`, JSON.stringify(err));
+  }
 }
 
 // ─── Subscription: OTP email ───────────────────────────────────────────────────
