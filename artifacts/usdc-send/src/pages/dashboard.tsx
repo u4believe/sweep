@@ -2972,9 +2972,15 @@ function CryptoDepositPanel() {
               <CopyButton text={activeAddress} />
             </div>
             <p className="text-xs text-muted-foreground">
-              Only send <strong>USDC</strong> on <strong>BASE-SEPOLIA</strong> and <strong>ARC-TESTNET</strong>.
+              Only send <strong>USDC</strong> on <strong>Base Sepolia</strong> and <strong>Arc Testnet</strong>.
               Sending other tokens or the wrong network may cause permanent loss of funds.
             </p>
+            <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-violet-50 border border-violet-200">
+              <span className="text-violet-500 text-xs mt-0.5">ℹ</span>
+              <p className="text-xs text-violet-700">
+                <strong>Same address, all networks.</strong> Your deposit address is identical across Base Sepolia and Arc Testnet — you do not need a different address per chain.
+              </p>
+            </div>
           </motion.div>
 
         </>

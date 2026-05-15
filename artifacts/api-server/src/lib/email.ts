@@ -36,7 +36,7 @@ function getTransporter() {
   };
 }
 
-const FROM = process.env.RESEND_FROM ?? process.env.SMTP_FROM ?? "Arc <no-reply@usdcsend.app>";
+const FROM = process.env.RESEND_FROM ?? process.env.SMTP_FROM ?? "SweepUSDC <no-reply@usdcsend.app>";
 
 export async function verifySmtp(): Promise<void> {
   const key = process.env.RESEND_API_KEY;
@@ -72,9 +72,9 @@ export async function sendRecurringSuccessEmail(
         <!-- Logo -->
         <tr><td align="center" style="padding-bottom:24px;">
           <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;">↗</span>
+            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
           </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
         </td></tr>
 
         <!-- Card -->
@@ -112,14 +112,14 @@ export async function sendRecurringSuccessEmail(
           </div>
 
           <p style="margin:0;color:#94a3b8;font-size:13px;line-height:1.6;">
-            The recipient will be notified and can claim the funds from their USDC Send account.<br>
+            The recipient will be notified and can claim the funds from their SweepUSDC account.<br>
             You can manage or cancel your recurring transfers from your dashboard.
           </p>
         </td></tr>
 
         <!-- Footer -->
         <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
         </td></tr>
 
       </table>
@@ -170,9 +170,9 @@ export async function sendRecurringFailureEmail(
         <!-- Logo -->
         <tr><td align="center" style="padding-bottom:24px;">
           <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;">↗</span>
+            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
           </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
         </td></tr>
 
         <!-- Card -->
@@ -217,7 +217,7 @@ export async function sendRecurringFailureEmail(
 
         <!-- Footer -->
         <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
         </td></tr>
 
       </table>
@@ -248,8 +248,8 @@ export async function sendRecurringFailureEmail(
 
 export async function sendOtpEmail(to: string, code: string, type: "register" | "login"): Promise<void> {
   const subject = type === "register"
-    ? "Verify your USDC Send account"
-    : "Your USDC Send sign-in code";
+    ? "Verify your SweepUSDC account"
+    : "Your SweepUSDC sign-in code";
 
   const action = type === "register" ? "create your account" : "sign in";
 
@@ -268,9 +268,9 @@ export async function sendOtpEmail(to: string, code: string, type: "register" | 
         <!-- Logo -->
         <tr><td align="center" style="padding-bottom:24px;">
           <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;">↗</span>
+            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
           </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
         </td></tr>
 
         <!-- Card -->
@@ -296,7 +296,7 @@ export async function sendOtpEmail(to: string, code: string, type: "register" | 
         <!-- Footer -->
         <tr><td style="padding:24px 0;text-align:center;">
           <p style="margin:0;color:#94a3b8;font-size:12px;">
-            &copy; ${new Date().getFullYear()} USDC Send. All rights reserved.
+            &copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.
           </p>
         </td></tr>
 
@@ -350,9 +350,9 @@ export async function sendVerificationEmail(to: string, verificationUrl: string)
       <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
         <tr><td align="center" style="padding-bottom:24px;">
           <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;">↗</span>
+            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
           </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
         </td></tr>
         <tr><td style="background:#fff;border-radius:20px;padding:40px 36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
           <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Confirm your email address</p>
@@ -375,7 +375,7 @@ export async function sendVerificationEmail(to: string, verificationUrl: string)
           </p>
         </td></tr>
         <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
         </td></tr>
       </table>
     </td></tr>
@@ -395,7 +395,7 @@ export async function sendVerificationEmail(to: string, verificationUrl: string)
   transporter.sendMail({
     from: FROM,
     to,
-    subject: "Verify your USDC Send account",
+    subject: "Verify your SweepUSDC account",
     html,
   }).catch((err: any) => {
     console.error(`[verify-email] Failed to send to ${to}: ${err?.message}`);
@@ -407,7 +407,7 @@ const SECURITY_ACTION_LABELS: Record<string, { subject: string; heading: string;
   "pak-gen":     { subject: "Generate your Personal Authorization Key", heading: "Generate PAK",          desc: "to generate your Personal Authorization Key (PAK)" },
   "chg-login":   { subject: "Change your sign-in password",          heading: "Change sign-in password",  desc: "to change your sign-in password" },
   "chg-txn-pwd": { subject: "Change your transaction password",      heading: "Change transaction password", desc: "to change your transaction password" },
-  "del-account": { subject: "Confirm account deletion — USDC Send",  heading: "Delete your account",         desc: "to permanently delete your account" },
+  "del-account": { subject: "Confirm account deletion — SweepUSDC",  heading: "Delete your account",         desc: "to permanently delete your account" },
 };
 
 export async function sendSecurityOtpEmail(to: string, code: string, actionType: string): Promise<void> {
@@ -432,9 +432,9 @@ export async function sendSecurityOtpEmail(to: string, code: string, actionType:
         <!-- Logo -->
         <tr><td align="center" style="padding-bottom:24px;">
           <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;">↗</span>
+            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
           </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
         </td></tr>
 
         <!-- Card -->
@@ -457,19 +457,19 @@ export async function sendSecurityOtpEmail(to: string, code: string, actionType:
 
           <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:12px;padding:16px;margin-bottom:24px;">
             <p style="margin:0;color:#92400e;font-size:13px;line-height:1.6;">
-              <strong>⚠ Security notice:</strong> If you did not initiate this action, your account may be at risk. Do not share this code with anyone — USDC Send will never ask for it.
+              <strong>⚠ Security notice:</strong> If you did not initiate this action, your account may be at risk. Do not share this code with anyone — SweepUSDC will never ask for it.
             </p>
           </div>
 
           <p style="margin:0;color:#94a3b8;font-size:13px;line-height:1.6;">
-            This code was requested for your USDC Send account.<br>
+            This code was requested for your SweepUSDC account.<br>
             If you didn't request this, you can safely ignore this email.
           </p>
         </td></tr>
 
         <!-- Footer -->
         <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
         </td></tr>
 
       </table>
@@ -509,9 +509,9 @@ export async function sendSubscriptionOtpEmail(to: string, code: string): Promis
       <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
         <tr><td align="center" style="padding-bottom:24px;">
           <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;">↗</span>
+            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
           </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
         </td></tr>
         <tr><td style="background:#fff;border-radius:20px;padding:40px 36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
           <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dbeafe;margin-bottom:20px;">
@@ -528,7 +528,7 @@ export async function sendSubscriptionOtpEmail(to: string, code: string): Promis
           <p style="margin:0;color:#94a3b8;font-size:13px;">If you didn't request this, you can safely ignore this email.</p>
         </td></tr>
         <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
         </td></tr>
       </table>
     </td></tr>
@@ -582,9 +582,9 @@ export async function sendSubscriptionConfirmationCodeEmail(
       <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
         <tr><td align="center" style="padding-bottom:24px;">
           <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;">↗</span>
+            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
           </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
         </td></tr>
         <tr><td style="background:#fff;border-radius:20px;padding:40px 36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
           <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dcfce7;margin-bottom:20px;">
@@ -609,7 +609,7 @@ export async function sendSubscriptionConfirmationCodeEmail(
           <p style="margin:0;color:#94a3b8;font-size:13px;">If you didn't request this, contact support immediately.</p>
         </td></tr>
         <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
         </td></tr>
       </table>
     </td></tr>
@@ -859,9 +859,9 @@ export async function sendSubscriptionActivatedEmail(
     <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
       <tr><td align="center" style="padding-bottom:24px;">
         <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;">↗</span>
+          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
         </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
       </td></tr>
       <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
         <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:99px;background:${badgeBg};margin-bottom:20px;">
@@ -896,7 +896,7 @@ export async function sendSubscriptionActivatedEmail(
         </p>
       </td></tr>
       <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
       </td></tr>
     </table>
   </td></tr></table>
@@ -920,9 +920,9 @@ export async function sendSubscriptionCancelledEmail(
     <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
       <tr><td align="center" style="padding-bottom:24px;">
         <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;">↗</span>
+          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
         </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
       </td></tr>
       <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
         <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:99px;background:#f1f5f9;margin-bottom:20px;">
@@ -937,7 +937,7 @@ export async function sendSubscriptionCancelledEmail(
         </p>
       </td></tr>
       <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
       </td></tr>
     </table>
   </td></tr></table>
@@ -965,9 +965,9 @@ export async function sendSubscriptionTrialEndingSoonEmail(
     <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
       <tr><td align="center" style="padding-bottom:24px;">
         <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;">↗</span>
+          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
         </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
       </td></tr>
       <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
         <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:99px;background:#ede9fe;margin-bottom:20px;">
@@ -1003,7 +1003,7 @@ export async function sendSubscriptionTrialEndingSoonEmail(
         </p>
       </td></tr>
       <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
       </td></tr>
     </table>
   </td></tr></table>
@@ -1029,9 +1029,9 @@ export async function sendTransferSentEmail(
     <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
       <tr><td align="center" style="padding-bottom:24px;">
         <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;">↗</span>
+          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
         </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
       </td></tr>
       <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
         <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dcfce7;margin-bottom:20px;">
@@ -1058,7 +1058,7 @@ export async function sendTransferSentEmail(
         <p style="margin:0;color:#94a3b8;font-size:13px;">If you didn't authorize this transfer, contact support immediately.</p>
       </td></tr>
       <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
       </td></tr>
     </table>
   </td></tr></table>
@@ -1087,9 +1087,9 @@ export async function sendTransferReceivedEmail(
     <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
       <tr><td align="center" style="padding-bottom:24px;">
         <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;">↗</span>
+          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
         </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
       </td></tr>
       <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
         <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dbeafe;margin-bottom:20px;">
@@ -1113,10 +1113,10 @@ export async function sendTransferReceivedEmail(
             <span style="font-size:13px;font-weight:600;color:#1e293b;">$${parseFloat(newBalance).toFixed(2)} USD</span>
           </div>
         </div>
-        <p style="margin:0;color:#94a3b8;font-size:13px;">Funds are available immediately in your USDC Send balance.</p>
+        <p style="margin:0;color:#94a3b8;font-size:13px;">Funds are available immediately in your SweepUSDC balance.</p>
       </td></tr>
       <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
       </td></tr>
     </table>
   </td></tr></table>
@@ -1144,9 +1144,9 @@ export async function sendEscrowClaimedEmail(
     <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
       <tr><td align="center" style="padding-bottom:24px;">
         <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;">↗</span>
+          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
         </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
       </td></tr>
       <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
         <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dcfce7;margin-bottom:20px;">
@@ -1163,10 +1163,10 @@ export async function sendEscrowClaimedEmail(
             <span style="font-size:20px;font-weight:800;color:#16a34a;">+$${parseFloat(totalAmount).toFixed(2)} USD</span>
           </div>
         </div>
-        <p style="margin:0;color:#94a3b8;font-size:13px;">These funds are now available in your USDC Send balance.</p>
+        <p style="margin:0;color:#94a3b8;font-size:13px;">These funds are now available in your SweepUSDC balance.</p>
       </td></tr>
       <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
       </td></tr>
     </table>
   </td></tr></table>
@@ -1196,9 +1196,9 @@ export async function sendDepositConfirmedEmail(
     <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
       <tr><td align="center" style="padding-bottom:24px;">
         <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;">↗</span>
+          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
         </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
       </td></tr>
       <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
         <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dcfce7;margin-bottom:20px;">
@@ -1226,7 +1226,7 @@ export async function sendDepositConfirmedEmail(
         <p style="margin:0;color:#94a3b8;font-size:13px;">Your balance has been updated and is available for use immediately.</p>
       </td></tr>
       <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
       </td></tr>
     </table>
   </td></tr></table>
@@ -1255,9 +1255,9 @@ export async function sendWithdrawalCryptoEmail(
     <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
       <tr><td align="center" style="padding-bottom:24px;">
         <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;">↗</span>
+          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
         </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
       </td></tr>
       <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
         <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dbeafe;margin-bottom:20px;">
@@ -1284,7 +1284,7 @@ export async function sendWithdrawalCryptoEmail(
         <p style="margin:0;color:#94a3b8;font-size:13px;">If you didn't authorize this withdrawal, contact support immediately.</p>
       </td></tr>
       <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
       </td></tr>
     </table>
   </td></tr></table>
@@ -1312,9 +1312,9 @@ export async function sendWithdrawalFiatEmail(
     <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
       <tr><td align="center" style="padding-bottom:24px;">
         <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;">↗</span>
+          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
         </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">USDC Send</p>
+        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
       </td></tr>
       <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
         <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dbeafe;margin-bottom:20px;">
@@ -1341,7 +1341,7 @@ export async function sendWithdrawalFiatEmail(
         <p style="margin:0;color:#94a3b8;font-size:13px;">If you didn't authorize this withdrawal, contact support immediately.</p>
       </td></tr>
       <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} USDC Send. All rights reserved.</p>
+        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
       </td></tr>
     </table>
   </td></tr></table>
@@ -1368,7 +1368,7 @@ export async function sendPassportCreatedEmail(to: string): Promise<void> {
         </div>
         <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#0f172a;">Your Subscription Passport is ready</p>
         <p style="margin:0 0 20px;color:#64748b;font-size:14px;line-height:1.6;">
-          You've been issued a Subscription Passport. Next time you subscribe to a plan on USDC Send,
+          You've been issued a Subscription Passport. Next time you subscribe to a plan on SweepUSDC,
           you can activate in one click — no confirmation code needed.
         </p>
         <div style="background:#f1f5f9;border-radius:12px;padding:16px;margin-bottom:20px;">
@@ -1440,7 +1440,7 @@ export async function sendDevPasswordResetEmail(to: string, resetUrl: string): P
 
         <tr><td align="center" style="padding-bottom:28px;">
           <div style="width:48px;height:48px;background:linear-gradient(135deg,#4f46e5,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;">↗</span>
+            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
           </div>
           <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#fff;">Sweep Developer Portal</p>
         </td></tr>
