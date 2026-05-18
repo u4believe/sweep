@@ -221,8 +221,6 @@ class ChainIndexer {
   // Real tx hashes are globally unique — no collision is possible, unlike the
   // synthetic balance-diff keys the previous approach relied on.
   private async runCircleTransactionPoll() {
-    if (this.cfg.chain !== "ARC-TESTNET") return;
-
     const client = getDcwClient();
     if (!client) {
       logger.warn(`[usdc-indexer:${this.cfg.chain}] Circle DCW client unavailable — skipping API poll`);
@@ -236,7 +234,7 @@ class ChainIndexer {
 
     try {
       const res  = await client.listTransactions({
-        blockchain: "ARC-TESTNET" as any,
+        blockchain: this.cfg.chain as any,
         txType:     "INBOUND"     as any,
         state:      "COMPLETE"    as any,
         from,
