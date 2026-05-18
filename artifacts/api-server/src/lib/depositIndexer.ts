@@ -285,21 +285,17 @@ class ChainIndexer {
           continue;
         }
 
-        // Real on-chain hash is the idempotency key. Fall back to the Circle UUID
-        // (prefixed to avoid collisions with Base Sepolia hashes) for the rare case
-        // where txHash is not yet populated by the time we fetch.
-        const idempotencyKey = txHash ?? `circle-${circleId}`;
-
         logger.info(
-          { userId, amount, idempotencyKey, chain: this.cfg.chain },
+          { userId, amount, circleId, txHash, chain: this.cfg.chain },
           `[usdc-indexer:${this.cfg.chain}] Circle API poll: crediting ${parseFloat(amount).toFixed(6)} USDC`,
         );
 
         await this.handleDeposit(
           userId,
           parseFloat(amount).toFixed(6),
-          idempotencyKey,
+          txHash,
           destAddress || walletId || "",
+          circleId,
         );
       }
 
@@ -312,10 +308,50 @@ class ChainIndexer {
     }
   }
 
-  private async handleDeposit(userId: number, amount: string, txHash: string, toAddress: string) {
-    // Atomically insert deposit record first — unique constraint on txHash
-    // prevents double-processing even under concurrent indexer runs.
-    // Balance is only credited if the insert actually succeeds.
+  // circleId is provided for Arc Testnet Circle-poll deposits; absent for Base Sepolia Transfer-event deposits.
+  private async handleDeposit(userId: number, amount: string, txHash: string | null, toAddress: string, circleId?: string) {
+    // Idempotency key strategy:
+    //   Circle poll (Arc): depositReference = "circle-{circleId}" — stable even before txHash is indexed.
+    //   Transfer events (Base): depositReference = txHash — always available from getLogs.
+    // This ensures webhook and indexer always agree on the same key for the same deposit,
+    // preventing double-credits when the webhook fires before txHash is populated.
+    const depositRef = circleId ? `circle-${circleId}` : (txHash ?? "");
+
+    // 1. If we have a real txHash, check whether it was already credited under that hash.
+    if (txHash) {
+      const [existingByHash] = await db
+        .select({ id: depositsTable.id })
+        .from(depositsTable)
+        .where(eq(depositsTable.txHash, txHash))
+        .limit(1);
+      if (existingByHash) {
+        logger.debug({ txHash, userId }, `[usdc-indexer:${this.cfg.chain}] Already credited by txHash — skipping`);
+        return;
+      }
+    }
+
+    // 2. Check whether a record already exists under the same depositReference
+    //    (webhook may have inserted it early, possibly without a txHash yet).
+    if (depositRef) {
+      const [existingByRef] = await db
+        .select({ id: depositsTable.id, currentTxHash: depositsTable.txHash })
+        .from(depositsTable)
+        .where(eq(depositsTable.depositReference, depositRef))
+        .limit(1);
+
+      if (existingByRef) {
+        // Already credited — just patch in the real txHash if it was missing.
+        if (!existingByRef.currentTxHash && txHash) {
+          await db.update(depositsTable)
+            .set({ txHash })
+            .where(eq(depositsTable.id, existingByRef.id));
+          logger.info({ txHash, depositRef, userId }, `[usdc-indexer:${this.cfg.chain}] Patched missing txHash on existing deposit`);
+        }
+        return;
+      }
+    }
+
+    // 3. Not credited yet — insert and credit atomically.
     const credited = await db.transaction(async (tx) => {
       const [inserted] = await tx.insert(depositsTable).values({
         userId,
@@ -323,12 +359,12 @@ class ChainIndexer {
         type:             "crypto",
         source:           CHAIN_LABELS[this.cfg.chain] ?? `${this.cfg.chain} USDC`,
         status:           "completed",
-        depositReference: txHash,
-        txHash,
+        depositReference: depositRef || null,
+        txHash:           txHash ?? null,
         creditedAt:       new Date(),
       }).onConflictDoNothing().returning({ id: depositsTable.id });
 
-      if (!inserted) return false; // already processed — skip
+      if (!inserted) return false;
 
       await tx.update(usersTable)
         .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })

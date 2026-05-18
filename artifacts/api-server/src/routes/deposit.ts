@@ -328,14 +328,39 @@ router.post("/circle/webhook", async (req, res) => {
       return;
     }
 
-    const idempotencyRef = txId ?? txHash ?? "";
-    if (idempotencyRef) {
-      const [dup] = await db
+    // Always use "circle-{txId}" as the stable idempotency key — txId is always
+    // present in the webhook payload, unlike txHash which may not be indexed yet.
+    // This key matches what the deposit indexer uses for the same transaction,
+    // preventing double-credits when the indexer runs after the webhook.
+    const depositRef = txId ? `circle-${txId}` : (txHash ?? null);
+
+    // Check by depositReference — catches the normal case.
+    if (depositRef) {
+      const [dupByRef] = await db
+        .select({ id: depositsTable.id, currentTxHash: depositsTable.txHash })
+        .from(depositsTable)
+        .where(eq(depositsTable.depositReference, depositRef))
+        .limit(1);
+      if (dupByRef) {
+        // Already credited — patch in real txHash if the record is still missing it.
+        if (!dupByRef.currentTxHash && txHash) {
+          await db.update(depositsTable)
+            .set({ txHash })
+            .where(eq(depositsTable.id, dupByRef.id));
+          console.info(`[circle/webhook] Patched missing txHash on deposit ref=${depositRef}`);
+        }
+        return;
+      }
+    }
+
+    // Check by txHash — catches edge cases where the indexer inserted first using the real hash.
+    if (txHash) {
+      const [dupByHash] = await db
         .select({ id: depositsTable.id })
         .from(depositsTable)
-        .where(eq(depositsTable.depositReference, idempotencyRef))
+        .where(eq(depositsTable.txHash, txHash))
         .limit(1);
-      if (dup) return;
+      if (dupByHash) return;
     }
 
     // Credit balance atomically
@@ -349,7 +374,7 @@ router.post("/circle/webhook", async (req, res) => {
       type:             "crypto",
       source:           `${blockchain ?? "Circle"} USDC`,
       status:           "completed",
-      depositReference: idempotencyRef || null,
+      depositReference: depositRef,
       txHash:           txHash ?? null,
       creditedAt:       new Date(),
     });
