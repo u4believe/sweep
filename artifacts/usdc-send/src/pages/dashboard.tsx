@@ -1040,8 +1040,10 @@ export default function Dashboard() {
                         <motion.div key="fund" variants={fadeIn} initial="hidden" animate="show" exit="hidden">
                           <div className="flex gap-2 p-1 bg-secondary rounded-xl mb-8">
                             {(["crypto", "bank"] as const).map((method) => (
-                              <button key={method} onClick={() => setFundMethod(method)}
+                              <button key={method} onClick={() => method === "crypto" && setFundMethod(method)}
+                                disabled={method === "bank"}
                                 className={cn("flex-1 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-all relative",
+                                method === "bank" && "opacity-50 cursor-not-allowed",
                                   fundMethod === method ? "text-foreground" : "text-muted-foreground hover:text-foreground")}
                               >
                                 {fundMethod === method && (
@@ -1070,7 +1072,11 @@ export default function Dashboard() {
                               </motion.div>
                             ) : (
                               <motion.div key="fund-bank" variants={scaleIn} initial="hidden" animate="show" exit="hidden">
-                                <BankDepositForm onSuccess={() => setActivePage("dashboard")} />
+                                <div className="flex flex-col items-center justify-center py-12 px-6 rounded-2xl bg-amber-50 border border-amber-200 text-center space-y-3">
+                                  <Landmark className="w-8 h-8 text-amber-400" />
+                                  <p className="font-semibold text-amber-800">Direct Bank Deposit — Coming Soon</p>
+                                  <p className="text-sm text-amber-700">Bank deposit via wire transfer is not yet available. Use the <strong>Fund with Crypto</strong> tab to deposit USDC.</p>
+                                </div>
                               </motion.div>
                             )}
                           </AnimatePresence>
