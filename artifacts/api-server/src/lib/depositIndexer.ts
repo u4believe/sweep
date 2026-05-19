@@ -212,21 +212,20 @@ class ChainIndexer {
     );
   }
 
-  // Circle API transaction poll — ARC-TESTNET ONLY.
-  // Arc USDC (0x3600… precompile) does NOT emit standard ERC-20 Transfer events,
-  // so getLogs() returns nothing and there is no on-chain event from which to
-  // extract a transaction hash.  Base Sepolia uses real Transfer-event hashes;
-  // Arc uses Circle's own DCW transaction index, which tracks every inbound
-  // transfer to managed wallets and exposes the real on-chain txHash.
-  // Real tx hashes are globally unique — no collision is possible, unlike the
-  // synthetic balance-diff keys the previous approach relied on.
+  // Circle API transaction poll — runs for ALL chains.
+  //
+  // Arc Testnet: Arc USDC (0x3600 precompile) does NOT emit ERC-20 Transfer events,
+  //   so getLogs() returns nothing. This poll is the ONLY detection path.
+  //
+  // Base Sepolia: The public Base Sepolia RPC (sepolia.base.org) returns -32602
+  //   "query exceeds max results 20000" on ANY getLogs call against the USDC contract
+  //   because the contract receives thousands of faucet transfers per block.
+  //   getLogs is completely unusable. Circle's API is the only reliable path here too.
+  //
+  // Both chains use the same idempotency key — "circle-{circleId}" — which matches
+  // what the webhook uses (notification.id == Circle transaction UUID). The webhook
+  // handles the fast path; this poll fills in the real txHash once Circle indexes it.
   private async runCircleTransactionPoll() {
-    // Arc USDC (0x3600 precompile) does NOT emit ERC-20 Transfer events, so
-    // getLogs returns nothing on Arc. The Circle API poll is the ONLY reliable
-    // detection path for Arc deposits and provides real on-chain tx hashes.
-    // Base Sepolia emits standard Transfer events — getLogs handles it there.
-    if (this.cfg.chain !== "ARC-TESTNET") return;
-
     const client = getDcwClient();
     if (!client) {
       logger.warn(`[usdc-indexer:${this.cfg.chain}] Circle DCW client unavailable — skipping API poll`);
@@ -240,7 +239,7 @@ class ChainIndexer {
 
     try {
       const res  = await client.listTransactions({
-        blockchain: "ARC-TESTNET" as any,
+        blockchain: this.cfg.chain as any,
         txType:     "INBOUND"     as any,
         state:      "COMPLETE"    as any,
         from,
@@ -472,39 +471,30 @@ class ChainIndexer {
       this.pollCount++;
 
       if (this.addressMap.size > 0) {
-        // ── Transfer-event indexing ───────────────────────────────────────────────
-        // Arc USDC (0x3600 precompile) does NOT emit standard ERC-20 Transfer events.
-        // Fetching getLogs on Arc is pure waste — skip it and advance lastBlock to
-        // current so we don't repeat catch-up on every restart. Balance sync below
-        // is the authoritative detection path for Arc deposits.
-        if (this.cfg.chain === "ARC-TESTNET") {
-          try {
-            const currentBlock = await this.provider!.getBlockNumber();
-            const lastBlock    = await this.getOrInitLastBlock(currentBlock);
-            if (currentBlock > lastBlock) {
-              await this.saveLastBlock(currentBlock);
-              logger.debug(
-                { chain: this.cfg.chain, advanced: currentBlock - lastBlock },
-                `[usdc-indexer:${this.cfg.chain}] Advanced lastBlock to current (no Transfer events on Arc — balance sync handles deposits)`,
-              );
-            }
-          } catch { /* non-fatal */ }
-        } else {
-          // BASE-SEPOLIA: fetch Transfer events with throttled chunks so GC can breathe.
-          // Isolated in its own try/catch so errors do NOT prevent the Circle API poll.
+        // ── Block pointer housekeeping (getLogs disabled for all current chains) ───
+        // Arc Testnet: USDC precompile does not emit Transfer events → getLogs useless.
+        // Base Sepolia: public RPC returns -32602 "query exceeds max results 20000"
+        //   on EVERY getLogs call against the USDC contract (too many faucet transfers
+        //   per block). Reducing chunk size doesn't help — even 5-block ranges overflow.
+        // Both chains rely solely on the Circle API poll (below) for deposit detection.
+        // We still advance lastBlock so the pointer doesn't drift and cause false catch-up.
+        try {
+          const currentBlock = await this.provider!.getBlockNumber();
+          const lastBlock    = await this.getOrInitLastBlock(currentBlock);
+          if (currentBlock > lastBlock) {
+            await this.saveLastBlock(currentBlock);
+          }
+        } catch { /* non-fatal */ }
+
+        if (false) {
+          // getLogs path — preserved for future chain support if needed
+          // (currently unreachable: all configured chains use Circle API poll)
           try {
             const currentBlock = await this.provider!.getBlockNumber();
             const lastBlock    = await this.getOrInitLastBlock(currentBlock);
             const gap          = currentBlock - lastBlock;
             const catchingUp   = gap > CATCHUP_THRESHOLD;
             const chunkSize    = catchingUp ? CATCHUP_BLOCKS_PER_CHUNK : BLOCKS_PER_CHUNK;
-
-            if (catchingUp) {
-              logger.info(
-                { chain: this.cfg.chain, gap, chunkSize },
-                `[usdc-indexer:${this.cfg.chain}] Catch-up mode — ${gap} blocks behind`,
-              );
-            }
 
             let from = lastBlock + 1;
             while (from <= currentBlock) {
@@ -525,9 +515,9 @@ class ChainIndexer {
         }
       }
 
-      // Circle API transaction poll — PRIMARY detection path for Arc Testnet.
-      // Arc USDC does not emit Transfer events so getLogs is useless there;
-      // Circle's own transaction index provides the real on-chain tx hashes.
+      // Circle API transaction poll — PRIMARY detection path for ALL chains.
+      // Arc:  USDC precompile doesn't emit Transfer events, only API poll works.
+      // Base: Public RPC getLogs is rate-limited and unusable; API poll works.
       if (doRefresh) await this.runCircleTransactionPoll();
     } catch (err: any) {
       logger.error(

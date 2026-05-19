@@ -326,19 +326,6 @@ router.post("/circle/webhook", async (req, res) => {
       return;
     }
 
-    // BASE-SEPOLIA: Transfer-event indexer (getLogs) is the authoritative detection path
-    // and always provides a real on-chain txHash. The webhook commonly fires before Circle
-    // indexes the hash, so txHash is often null at this point. If we credit here with key
-    // "circle-{txId}" and the indexer later credits with key txHash, the deposit is double-
-    // counted. Skip crediting for Base Sepolia when txHash is absent — the indexer handles it.
-    // Use .includes() to match any Circle blockchain name variant (BASE-SEPOLIA, BASE_SEPOLIA, etc.)
-    const normalizedChain = (blockchain ?? "").toUpperCase().replace(/[_\s]/g, "-");
-    const isBaseSepolia = normalizedChain.includes("BASE") && normalizedChain.includes("SEPOLIA");
-    if (isBaseSepolia && !txHash) {
-      console.info(`[circle/webhook] BASE-SEPOLIA deposit without txHash — deferring to Transfer-event indexer (txId=${txId})`);
-      return;
-    }
-
     // Always use "circle-{txId}" as the stable idempotency key — txId is always
     // present in the webhook payload, unlike txHash which may not be indexed yet.
     // This key matches what the deposit indexer uses for the same transaction,
