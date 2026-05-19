@@ -237,10 +237,14 @@ class ChainIndexer {
       return;
     }
 
-    // 2-minute safety buffer: advance the cursor to (now − 2 min) so that any
-    // transactions Circle indexes with a slight delay aren't skipped.
+    // 30-minute safety buffer: advance the cursor to (now − 30 min) so that
+    // Base Sepolia deposits (which can take 5–15 min to confirm on-chain) are
+    // not missed. Circle's `from` filter is on createDate, so a deposit created
+    // at T but confirmed at T+10min would be skipped if the cursor has already
+    // moved past T. The extra lookback is cheap — idempotency checks prevent
+    // double-credits for already-processed deposits.
     const from = this.lastCirclePollTime;
-    const next = new Date(Date.now() - 120_000).toISOString();
+    const next = new Date(Date.now() - 1_800_000).toISOString();
 
     try {
       // No blockchain filter — Circle's listTransactions does not reliably accept
