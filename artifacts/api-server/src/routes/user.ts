@@ -51,6 +51,24 @@ router.get("/history", requireAuth, async (req, res) => {
         .limit(100),
     ]);
 
+    // ── Resolve on-chain hashes for crypto deposits (fire-and-forget) ───────────
+    // Deposits credited by the Circle webhook use depositReference = "circle-{txId}"
+    // and may have txHash = null when Circle hadn't indexed the on-chain hash yet.
+    // Resolve now so the history shows a clickable block explorer link.
+    const pendingDepositHashResolution = deposits
+      .filter((d) => d.type === "crypto" && !d.txHash && d.depositReference?.startsWith("circle-"))
+      .map(async (d) => {
+        try {
+          const circleId = d.depositReference!.slice("circle-".length);
+          const hash = await resolveCircleOnChainTxHash(circleId);
+          if (hash) {
+            await db.update(depositsTable).set({ txHash: hash }).where(eq(depositsTable.id, d.id));
+            d.txHash = hash;
+          }
+        } catch { /* non-fatal */ }
+      });
+    void Promise.allSettled(pendingDepositHashResolution);
+
     // ── Map deposits → unified format ────────────────────────────────────────
     const depositEntries = deposits.map((d) => ({
       id:          `dep-${d.id}`,
