@@ -202,9 +202,7 @@ router.post("/circle/webhook", async (req, res) => {
 
   try {
     const { notificationType, notification } = req.body ?? {};
-    console.info(
-      `[circle/webhook] type=${notificationType} body=${JSON.stringify(req.body).slice(0, 400)}`,
-    );
+    console.info(`[circle/webhook] type=${notificationType} body=${JSON.stringify(req.body)}`);
 
     // ── Wire (fiat) payment ───────────────────────────────────────────────
     if (notificationType === "payments") {
@@ -275,7 +273,7 @@ router.post("/circle/webhook", async (req, res) => {
 
     const { id: txId, walletId, amounts, blockchain, txHash, state, destinationAddress } = notification;
     console.info(
-      `[circle/webhook] Inbound: state=${state} walletId=${walletId} address=${destinationAddress} amount=${amounts?.[0]} chain=${blockchain}`,
+      `[circle/webhook] Inbound: state=${state} walletId=${walletId} address=${destinationAddress} amounts=${JSON.stringify(amounts)} txHash=${txHash} txId=${txId} chain=${blockchain}`,
     );
 
     if (state !== "COMPLETED" && state !== "COMPLETE") return;
@@ -333,9 +331,11 @@ router.post("/circle/webhook", async (req, res) => {
     // indexes the hash, so txHash is often null at this point. If we credit here with key
     // "circle-{txId}" and the indexer later credits with key txHash, the deposit is double-
     // counted. Skip crediting for Base Sepolia when txHash is absent — the indexer handles it.
-    const normalizedChain = (blockchain ?? "").toUpperCase();
-    if (normalizedChain === "BASE-SEPOLIA" && !txHash) {
-      console.info(`[circle/webhook] BASE-SEPOLIA deposit without txHash — deferring to Transfer-event indexer (depositRef=circle-${txId})`);
+    // Use .includes() to match any Circle blockchain name variant (BASE-SEPOLIA, BASE_SEPOLIA, etc.)
+    const normalizedChain = (blockchain ?? "").toUpperCase().replace(/[_\s]/g, "-");
+    const isBaseSepolia = normalizedChain.includes("BASE") && normalizedChain.includes("SEPOLIA");
+    if (isBaseSepolia && !txHash) {
+      console.info(`[circle/webhook] BASE-SEPOLIA deposit without txHash — deferring to Transfer-event indexer (txId=${txId})`);
       return;
     }
 

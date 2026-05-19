@@ -433,6 +433,18 @@ class ChainIndexer {
       toBlock,
     });
 
+    const relevantLogs = rawLogs.filter((raw) => {
+      const parsed = this.contract!.interface.parseLog(raw);
+      if (!parsed) return false;
+      const to = (parsed.args[1] as string).toLowerCase();
+      return this.addressMap.has(to);
+    });
+
+    logger.info(
+      { chain: this.cfg.chain, fromBlock, toBlock, totalLogs: rawLogs.length, relevantLogs: relevantLogs.length },
+      `[usdc-indexer:${this.cfg.chain}] processChunk scanned ${toBlock - fromBlock + 1} blocks — ${rawLogs.length} Transfer events, ${relevantLogs.length} to watched addresses`,
+    );
+
     for (const raw of rawLogs) {
       const iface  = this.contract!.interface;
       const parsed = iface.parseLog(raw);
@@ -441,6 +453,10 @@ class ChainIndexer {
       const userId = this.addressMap.get(to);
       if (!userId) continue;  // JS-side recipient filter
       const amount = parseFloat(ethers.formatUnits(parsed.args[2] as bigint, decimals)).toFixed(6);
+      logger.info(
+        { chain: this.cfg.chain, txHash: raw.transactionHash, amount, to, userId },
+        `[usdc-indexer:${this.cfg.chain}] Transfer event found — crediting ${amount} USDC to user ${userId}`,
+      );
       await this.handleDeposit(userId, amount, raw.transactionHash, to);
     }
   }
