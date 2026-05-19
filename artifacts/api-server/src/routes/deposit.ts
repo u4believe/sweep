@@ -328,6 +328,17 @@ router.post("/circle/webhook", async (req, res) => {
       return;
     }
 
+    // BASE-SEPOLIA: Transfer-event indexer (getLogs) is the authoritative detection path
+    // and always provides a real on-chain txHash. The webhook commonly fires before Circle
+    // indexes the hash, so txHash is often null at this point. If we credit here with key
+    // "circle-{txId}" and the indexer later credits with key txHash, the deposit is double-
+    // counted. Skip crediting for Base Sepolia when txHash is absent — the indexer handles it.
+    const normalizedChain = (blockchain ?? "").toUpperCase();
+    if (normalizedChain === "BASE-SEPOLIA" && !txHash) {
+      console.info(`[circle/webhook] BASE-SEPOLIA deposit without txHash — deferring to Transfer-event indexer (depositRef=circle-${txId})`);
+      return;
+    }
+
     // Always use "circle-{txId}" as the stable idempotency key — txId is always
     // present in the webhook payload, unlike txHash which may not be indexed yet.
     // This key matches what the deposit indexer uses for the same transaction,
@@ -398,11 +409,15 @@ router.post("/circle/webhook", async (req, res) => {
       // Don't bridge if the destination IS the platform treasury (it's already there).
       if (!platformAddress || destinationAddress.toLowerCase() !== platformAddress.toLowerCase()) {
         try {
-          const [existingJob] = await db
-            .select({ id: bridgeJobsTable.id })
-            .from(bridgeJobsTable)
-            .where(eq(bridgeJobsTable.txHash, txHash ?? idempotencyRef))
-            .limit(1);
+          let existingJob: { id: number } | undefined;
+          if (txHash) {
+            const [found] = await db
+              .select({ id: bridgeJobsTable.id })
+              .from(bridgeJobsTable)
+              .where(eq(bridgeJobsTable.txHash, txHash))
+              .limit(1);
+            existingJob = found;
+          }
 
           if (!existingJob) {
             await db.insert(bridgeJobsTable).values({

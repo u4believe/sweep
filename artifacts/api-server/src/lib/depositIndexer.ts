@@ -15,7 +15,7 @@ import { ethers }  from "ethers";
 import {
   db, usersTable, depositsTable, indexerStateTable, bridgeJobsTable,
 } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, isNull } from "drizzle-orm";
 import { logger } from "./logger.js";
 import {
   SUPPORTED_SOURCE_CHAINS,
@@ -221,6 +221,12 @@ class ChainIndexer {
   // Real tx hashes are globally unique — no collision is possible, unlike the
   // synthetic balance-diff keys the previous approach relied on.
   private async runCircleTransactionPoll() {
+    // Arc USDC (0x3600 precompile) does NOT emit ERC-20 Transfer events, so
+    // getLogs returns nothing on Arc. The Circle API poll is the ONLY reliable
+    // detection path for Arc deposits and provides real on-chain tx hashes.
+    // Base Sepolia emits standard Transfer events — getLogs handles it there.
+    if (this.cfg.chain !== "ARC-TESTNET") return;
+
     const client = getDcwClient();
     if (!client) {
       logger.warn(`[usdc-indexer:${this.cfg.chain}] Circle DCW client unavailable — skipping API poll`);
@@ -234,7 +240,7 @@ class ChainIndexer {
 
     try {
       const res  = await client.listTransactions({
-        blockchain: this.cfg.chain as any,
+        blockchain: "ARC-TESTNET" as any,
         txType:     "INBOUND"     as any,
         state:      "COMPLETE"    as any,
         from,
@@ -385,7 +391,7 @@ class ChainIndexer {
       const [existingJob] = await db
         .select({ id: bridgeJobsTable.id })
         .from(bridgeJobsTable)
-        .where(eq(bridgeJobsTable.txHash, txHash))
+        .where(txHash ? eq(bridgeJobsTable.txHash, txHash) : isNull(bridgeJobsTable.txHash))
         .limit(1);
 
       if (!existingJob) {
