@@ -65,6 +65,12 @@ CREATE TABLE IF NOT EXISTS "deposits" (
   "credited_at" timestamp,
   "created_at" timestamp NOT NULL DEFAULT now()
 );
+-- Partial unique indexes on deposits: NULL values are excluded so existing
+-- null records don't conflict, and onConflictDoNothing() works correctly.
+CREATE UNIQUE INDEX IF NOT EXISTS deposits_tx_hash_unique
+  ON deposits(tx_hash) WHERE tx_hash IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS deposits_deposit_reference_unique
+  ON deposits(deposit_reference) WHERE deposit_reference IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS "withdrawals" (
   "id" serial PRIMARY KEY,
@@ -157,3 +163,10 @@ INSERT INTO "indexer_state" ("id", "last_processed_block") VALUES (1, 0) ON CONF
 INSERT INTO "indexer_state" ("id", "last_processed_block") VALUES (2, 0) ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "indexer_state" ("id", "last_processed_block") VALUES (3, 0) ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "indexer_state" ("id", "last_processed_block") VALUES (4, 0) ON CONFLICT ("id") DO NOTHING;
+
+-- Add unique indexes on deposits (safe to re-run; IF NOT EXISTS is idempotent).
+-- These make onConflictDoNothing() actually work to prevent double-credits.
+CREATE UNIQUE INDEX IF NOT EXISTS deposits_tx_hash_unique
+  ON deposits(tx_hash) WHERE tx_hash IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS deposits_deposit_reference_unique
+  ON deposits(deposit_reference) WHERE deposit_reference IS NOT NULL;

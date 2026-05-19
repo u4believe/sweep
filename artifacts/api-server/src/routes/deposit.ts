@@ -374,21 +374,34 @@ router.post("/circle/webhook", async (req, res) => {
       if (dupByHash) return;
     }
 
-    // Credit balance atomically
-    await db.update(usersTable)
-      .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })
-      .where(eq(usersTable.id, dbUser.id));
+    // Credit inside a transaction: INSERT first, balance update second.
+    // onConflictDoNothing relies on the unique index on deposit_reference / tx_hash
+    // (see schema migration). If the INSERT is skipped the balance is NOT touched.
+    const credited = await db.transaction(async (tx) => {
+      const [inserted] = await tx.insert(depositsTable).values({
+        userId:           dbUser.id,
+        amount:           parseFloat(amount).toFixed(6),
+        type:             "crypto",
+        source:           `${blockchain ?? "Circle"} USDC`,
+        status:           "completed",
+        depositReference: depositRef,
+        txHash:           txHash ?? null,
+        creditedAt:       new Date(),
+      }).onConflictDoNothing().returning({ id: depositsTable.id });
 
-    await db.insert(depositsTable).values({
-      userId:           dbUser.id,
-      amount:           parseFloat(amount).toFixed(6),
-      type:             "crypto",
-      source:           `${blockchain ?? "Circle"} USDC`,
-      status:           "completed",
-      depositReference: depositRef,
-      txHash:           txHash ?? null,
-      creditedAt:       new Date(),
+      if (!inserted) return false;
+
+      await tx.update(usersTable)
+        .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })
+        .where(eq(usersTable.id, dbUser.id));
+
+      return true;
     });
+
+    if (!credited) {
+      console.info(`[circle/webhook] Duplicate deposit (conflict on insert) — skipping balance update ref=${depositRef}`);
+      return;
+    }
 
     console.info(`[circle/webhook] Credited ${amount} USDC to user ${dbUser.id} from ${blockchain}`);
 
