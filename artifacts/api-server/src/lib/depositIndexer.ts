@@ -212,23 +212,28 @@ class ChainIndexer {
     );
   }
 
-  // Circle API transaction poll — runs for ALL chains.
+  // Circle API transaction poll — runs ONLY from the BASE-SEPOLIA indexer instance.
+  //
+  // A single poll (no blockchain filter) fetches all INBOUND COMPLETE transactions
+  // across all chains. Running it once avoids races where two indexers see the same
+  // transaction and one credits it with the wrong source label.
   //
   // Arc Testnet: Arc USDC (0x3600 precompile) does NOT emit ERC-20 Transfer events,
-  //   so getLogs() returns nothing. This poll is the ONLY detection path.
+  //   so getLogs() returns nothing. This poll is the ONLY detection path for Arc.
   //
-  // Base Sepolia: The public Base Sepolia RPC (sepolia.base.org) returns -32602
-  //   "query exceeds max results 20000" on ANY getLogs call against the USDC contract
-  //   because the contract receives thousands of faucet transfers per block.
-  //   getLogs is completely unusable. Circle's API is the only reliable path here too.
+  // Base Sepolia: The public Base Sepolia RPC returns -32602 on ANY getLogs call.
+  //   This poll is the ONLY reliable path here too.
   //
-  // Both chains use the same idempotency key — "circle-{circleId}" — which matches
-  // what the webhook uses (notification.id == Circle transaction UUID). The webhook
-  // handles the fast path; this poll fills in the real txHash once Circle indexes it.
+  // Idempotency key: "circle-{circleId}" — matches the webhook, preventing
+  // double-credits when the webhook fires before the poll processes the same tx.
   private async runCircleTransactionPoll() {
+    // Delegate entirely to the BASE-SEPOLIA instance so there is exactly one
+    // poll cursor and no risk of two indexers racing to credit the same deposit.
+    if (this.cfg.chain !== "BASE-SEPOLIA") return;
+
     const client = getDcwClient();
     if (!client) {
-      logger.warn(`[usdc-indexer:${this.cfg.chain}] Circle DCW client unavailable — skipping API poll`);
+      logger.warn(`[usdc-indexer:circle-poll] Circle DCW client unavailable — skipping`);
       return;
     }
 
@@ -238,12 +243,14 @@ class ChainIndexer {
     const next = new Date(Date.now() - 120_000).toISOString();
 
     try {
+      // No blockchain filter — Circle's listTransactions does not reliably accept
+      // a blockchain enum for all chains. The userId lookup (walletId / address)
+      // acts as the chain-specific filter. tx.blockchain drives the source label.
       const res  = await client.listTransactions({
-        blockchain: this.cfg.chain as any,
-        txType:     "INBOUND"     as any,
-        state:      "COMPLETE"    as any,
+        txType:   "INBOUND"  as any,
+        state:    "COMPLETE" as any,
         from,
-        pageSize:   50,
+        pageSize: 50,
       } as any);
 
       const txns: any[] = (res.data as any)?.data?.transactions
@@ -256,6 +263,7 @@ class ChainIndexer {
         const walletId:    string | null = tx.walletId ?? null;
         const destAddress: string        = (tx.destinationAddress ?? "").toLowerCase();
         const amount:      string        = tx.amounts?.[0] ?? "0";
+        const txChain:     string | null = tx.blockchain ?? null;
 
         if (!circleId || parseFloat(amount) <= 0) continue;
 
@@ -282,15 +290,15 @@ class ChainIndexer {
 
         if (!userId) {
           logger.debug(
-            { circleId, walletId, destAddress },
-            `[usdc-indexer:${this.cfg.chain}] Circle poll: no user for tx — skipping`,
+            { circleId, walletId, destAddress, txChain },
+            `[usdc-indexer:circle-poll] No user for tx — skipping`,
           );
           continue;
         }
 
         logger.info(
-          { userId, amount, circleId, txHash, chain: this.cfg.chain },
-          `[usdc-indexer:${this.cfg.chain}] Circle API poll: crediting ${parseFloat(amount).toFixed(6)} USDC`,
+          { userId, amount, circleId, txHash, txChain },
+          `[usdc-indexer:circle-poll] Crediting ${parseFloat(amount).toFixed(6)} USDC (chain=${txChain})`,
         );
 
         await this.handleDeposit(
@@ -299,25 +307,23 @@ class ChainIndexer {
           txHash,
           destAddress || walletId || "",
           circleId,
+          txChain ?? undefined,
         );
       }
 
       this.lastCirclePollTime = next;
     } catch (e: any) {
       logger.error(
-        { err: e?.message, chain: this.cfg.chain },
-        `[usdc-indexer:${this.cfg.chain}] Circle API poll failed — check API key and connectivity`,
+        { err: e?.message },
+        `[usdc-indexer:circle-poll] Circle API poll failed — check API key and connectivity`,
       );
     }
   }
 
-  // circleId is provided for Arc Testnet Circle-poll deposits; absent for Base Sepolia Transfer-event deposits.
-  private async handleDeposit(userId: number, amount: string, txHash: string | null, toAddress: string, circleId?: string) {
-    // Idempotency key strategy:
-    //   Circle poll (Arc): depositReference = "circle-{circleId}" — stable even before txHash is indexed.
-    //   Transfer events (Base): depositReference = txHash — always available from getLogs.
-    // This ensures webhook and indexer always agree on the same key for the same deposit,
-    // preventing double-credits when the webhook fires before txHash is populated.
+  // circleId present for Circle-poll deposits; absent for getLogs Transfer-event deposits.
+  // txBlockchain is the chain reported by Circle (e.g. "BASE-SEPOLIA", "ARC-TESTNET").
+  // When provided it drives the source label; falls back to this.cfg.chain otherwise.
+  private async handleDeposit(userId: number, amount: string, txHash: string | null, toAddress: string, circleId?: string, txBlockchain?: string) {
     const depositRef = circleId ? `circle-${circleId}` : (txHash ?? "");
 
     // 1. If we have a real txHash, check whether it was already credited under that hash.
@@ -360,7 +366,7 @@ class ChainIndexer {
         userId,
         amount,
         type:             "crypto",
-        source:           CHAIN_LABELS[this.cfg.chain] ?? `${this.cfg.chain} USDC`,
+        source:           CHAIN_LABELS[txBlockchain ?? this.cfg.chain] ?? `${txBlockchain ?? this.cfg.chain} USDC`,
         status:           "completed",
         depositReference: depositRef || null,
         txHash:           txHash ?? null,
@@ -396,7 +402,7 @@ class ChainIndexer {
       if (!existingJob) {
         await db.insert(bridgeJobsTable).values({
           userId,
-          sourceChain:       this.cfg.chain,
+          sourceChain:       (txBlockchain ?? this.cfg.chain) as SourceChain,
           userWalletAddress: toAddress,
           amount,
           txHash,
