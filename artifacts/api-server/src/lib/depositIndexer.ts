@@ -250,69 +250,85 @@ class ChainIndexer {
       // No blockchain filter — Circle's listTransactions does not reliably accept
       // a blockchain enum for all chains. The userId lookup (walletId / address)
       // acts as the chain-specific filter. tx.blockchain drives the source label.
-      const res  = await client.listTransactions({
-        txType:   "INBOUND"  as any,
-        state:    "COMPLETE" as any,
-        from,
-        pageSize: 50,
-      } as any);
+      //
+      // Paginate via pageAfter (Circle cursor-based pagination) so deposits are
+      // never missed when the 30-minute window contains more than 50 transactions.
+      const PAGE_SIZE = 50;
+      const MAX_PAGES = 20; // guard against runaway loops
+      let pageAfter: string | undefined = undefined;
 
-      const txns: any[] = (res.data as any)?.data?.transactions
-                        ?? (res.data as any)?.transactions
-                        ?? [];
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const res = await client.listTransactions({
+          txType:   "INBOUND"  as any,
+          state:    "COMPLETE" as any,
+          from,
+          pageSize: PAGE_SIZE,
+          ...(pageAfter ? { pageAfter } : {}),
+        } as any);
 
-      for (const tx of txns) {
-        const circleId:    string        = tx.id;
-        const txHash:      string | null = tx.txHash ?? null;
-        const walletId:    string | null = tx.walletId ?? null;
-        const destAddress: string        = (tx.destinationAddress ?? "").toLowerCase();
-        const amount:      string        = tx.amounts?.[0] ?? "0";
-        const txChain:     string | null = tx.blockchain ?? null;
+        const txns: any[] = (res.data as any)?.data?.transactions
+                          ?? (res.data as any)?.transactions
+                          ?? [];
 
-        if (!circleId || parseFloat(amount) <= 0) continue;
+        for (const tx of txns) {
+          const circleId:    string        = tx.id;
+          const txHash:      string | null = tx.txHash ?? null;
+          const walletId:    string | null = tx.walletId ?? null;
+          const destAddress: string        = (tx.destinationAddress ?? "").toLowerCase();
+          const amount:      string        = tx.amounts?.[0] ?? "0";
+          const txChain:     string | null = tx.blockchain ?? null;
 
-        // Resolve the user from walletId (primary → JSON map) then address fallback.
-        let userId: number | undefined;
+          if (!circleId || parseFloat(amount) <= 0) continue;
 
-        if (walletId) {
-          const [p] = await db.select({ id: usersTable.id }).from(usersTable)
-            .where(eq(usersTable.circleWalletId, walletId)).limit(1);
-          userId = p?.id;
+          // Resolve the user from walletId (primary → JSON map) then address fallback.
+          let userId: number | undefined;
+
+          if (walletId) {
+            const [p] = await db.select({ id: usersTable.id }).from(usersTable)
+              .where(eq(usersTable.circleWalletId, walletId)).limit(1);
+            userId = p?.id;
+
+            if (!userId) {
+              const [j] = await db.select({ id: usersTable.id }).from(usersTable)
+                .where(sql`${(usersTable as any).circleWalletIdsJson} LIKE ${"%" + walletId + "%"}`).limit(1);
+              userId = j?.id;
+            }
+          }
+
+          if (!userId && destAddress) {
+            const [a] = await db.select({ id: usersTable.id }).from(usersTable)
+              .where(sql`lower(${usersTable.circleWalletAddress}) = ${destAddress}`).limit(1);
+            userId = a?.id;
+          }
 
           if (!userId) {
-            const [j] = await db.select({ id: usersTable.id }).from(usersTable)
-              .where(sql`${(usersTable as any).circleWalletIdsJson} LIKE ${"%" + walletId + "%"}`).limit(1);
-            userId = j?.id;
+            logger.debug(
+              { circleId, walletId, destAddress, txChain },
+              `[usdc-indexer:circle-poll] No user for tx — skipping`,
+            );
+            continue;
           }
-        }
 
-        if (!userId && destAddress) {
-          const [a] = await db.select({ id: usersTable.id }).from(usersTable)
-            .where(sql`lower(${usersTable.circleWalletAddress}) = ${destAddress}`).limit(1);
-          userId = a?.id;
-        }
-
-        if (!userId) {
-          logger.debug(
-            { circleId, walletId, destAddress, txChain },
-            `[usdc-indexer:circle-poll] No user for tx — skipping`,
+          logger.info(
+            { userId, amount, circleId, txHash, txChain },
+            `[usdc-indexer:circle-poll] Crediting ${parseFloat(amount).toFixed(6)} USDC (chain=${txChain})`,
           );
-          continue;
+
+          await this.handleDeposit(
+            userId,
+            parseFloat(amount).toFixed(6),
+            txHash,
+            destAddress || walletId || "",
+            circleId,
+            txChain ?? undefined,
+          );
         }
 
-        logger.info(
-          { userId, amount, circleId, txHash, txChain },
-          `[usdc-indexer:circle-poll] Crediting ${parseFloat(amount).toFixed(6)} USDC (chain=${txChain})`,
-        );
-
-        await this.handleDeposit(
-          userId,
-          parseFloat(amount).toFixed(6),
-          txHash,
-          destAddress || walletId || "",
-          circleId,
-          txChain ?? undefined,
-        );
+        // Fewer results than a full page means this is the last page.
+        if (txns.length < PAGE_SIZE) break;
+        // Advance the cursor to the last transaction ID for the next page.
+        pageAfter = txns[txns.length - 1]?.id;
+        if (!pageAfter) break;
       }
 
       this.lastCirclePollTime = next;

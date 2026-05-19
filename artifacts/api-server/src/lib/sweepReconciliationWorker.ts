@@ -160,11 +160,23 @@ async function reconcile() {
       if (existing) continue; // already handled this exact balance snapshot
 
       // Check if the deposit was already credited (e.g. by Transfer event indexer or webhook).
-      // If a deposit record with this reconHash exists, balance was credited in a prior run.
+      // Two guards:
+      //   (a) exact reconHash match — this worker already ran for this snapshot
+      //   (b) any deposit for this user/chain credited in the last 3 minutes — covers
+      //       the race where the Circle poll or webhook credited the deposit and inserted
+      //       the bridge job AFTER our active-job check above passed (4-second window).
+      const chainSource = chain === "ARC-TESTNET" ? "Arc Testnet USDC" : "Base Sepolia USDC";
       const [existingDeposit] = await db
         .select({ id: depositsTable.id })
         .from(depositsTable)
-        .where(eq(depositsTable.txHash, reconHash))
+        .where(
+          or(
+            eq(depositsTable.txHash, reconHash),
+            sql`${depositsTable.userId} = ${user.id}
+                AND ${depositsTable.source} = ${chainSource}
+                AND ${depositsTable.creditedAt} > NOW() - INTERVAL '3 minutes'`,
+          )
+        )
         .limit(1);
 
       logger.warn(

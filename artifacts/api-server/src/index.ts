@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { runStartupMigrations } from "@workspace/db";
 import { startDepositIndexer, stopDepositIndexer } from "./lib/depositIndexer.js";
 import { startBridgeWorker, stopBridgeWorker } from "./lib/bridgeWorker.js";
 import { startTreasuryConsolidationWorker, stopTreasuryConsolidationWorker } from "./lib/treasuryConsolidationWorker.js";
@@ -63,35 +64,25 @@ app.listen(port, (err) => {
   // Verify SMTP credentials immediately so misconfigured email is caught on startup
   verifySmtp().catch(() => {});
 
-  // Start deposit indexer (BASE-SEPOLIA and ARC-TESTNET)
-  startDepositIndexer();
-
-  // Start sweep worker — moves user deposits to BASE-SEPOLIA platform treasury
-  startBridgeWorker();
-
-  // Start treasury consolidation worker — bridges Arc treasury USDC → BASE-SEPOLIA
-  startTreasuryConsolidationWorker();
-
-  // Start recurring transfers worker
-  startRecurringWorker();
-
-  // Start subscription billing worker (trial transitions, renewals, retries)
-  startSubscriptionBillingWorker();
-
-  // Start webhook delivery worker (dispatches queued events with exponential backoff)
-  startWebhookDeliveryWorker();
-
-  // Start sweep reconciliation worker — catches unswept USDC on both chains
-  startSweepReconciliationWorker();
-
-  // Start withdrawal reconciliation worker — recovers stale "processing" withdrawals
-  startWithdrawalReconciliationWorker();
-
-  // Start nightly OTP cleanup — deletes expired and used OTP codes
-  startOtpCleanupWorker();
-
-  // Probe Circle Gas Station status (informational, non-blocking)
-  probeGasStationStatus().catch(() => {});
+  // Apply idempotent DB migrations (unique indexes) before starting any workers.
+  // This ensures the double-deposit guard is in place on every cold start.
+  runStartupMigrations()
+    .then(() => {
+      startDepositIndexer();
+      startBridgeWorker();
+      startTreasuryConsolidationWorker();
+      startRecurringWorker();
+      startSubscriptionBillingWorker();
+      startWebhookDeliveryWorker();
+      startSweepReconciliationWorker();
+      startWithdrawalReconciliationWorker();
+      startOtpCleanupWorker();
+      probeGasStationStatus().catch(() => {});
+    })
+    .catch((migrationErr) => {
+      logger.error({ err: migrationErr }, "[startup] Fatal migration error — shutting down");
+      process.exit(1);
+    });
 });
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
