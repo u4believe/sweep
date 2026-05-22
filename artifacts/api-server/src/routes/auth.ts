@@ -457,8 +457,8 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
         .set({ passwordResetToken: resetToken, passwordResetTokenExpiresAt: expiresAt } as any)
         .where(eq(usersTable.id, user.id));
 
-      const appUrl    = process.env.APP_URL?.replace(/\/$/, "") || `http://localhost:${process.env.PORT || 3001}`;
-      const resetUrl  = `${appUrl}/reset-password?token=${resetToken}`;
+      const frontendUrl = (process.env.FRONTEND_URL ?? process.env.APP_URL ?? `http://localhost:5173`).replace(/\/$/, "");
+      const resetUrl    = `${frontendUrl}/reset-password?token=${resetToken}`;
       await sendPasswordResetEmail(normalizedEmail, resetUrl);
     } catch (e: any) {
       console.error("[forgot-password] Error:", e?.message);
