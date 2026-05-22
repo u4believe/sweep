@@ -38,8 +38,13 @@ export const usersTable = pgTable("users", {
   pakCopiedAt:  timestamp("pak_copied_at"),   // set when user confirms they've saved the key
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
-  emailVerified:           boolean("email_verified").notNull().default(false),
-  emailVerificationToken:  text("email_verification_token"),
+  emailVerified:                   boolean("email_verified").notNull().default(false),
+  emailVerificationToken:          text("email_verification_token"),
+  emailVerificationTokenExpiresAt: timestamp("email_verification_token_expires_at"),
+
+  // Password reset — token is a UUID, single-use, expires in 1 hour.
+  passwordResetToken:          text("password_reset_token"),
+  passwordResetTokenExpiresAt: timestamp("password_reset_token_expires_at"),
 });
 
 export const insertUserSchema = createInsertSchema(usersTable).omit({ id: true, createdAt: true, claimedBalance: true });

@@ -7,22 +7,22 @@ import { cn } from "@/lib/utils";
 import { AppLayout } from "@/components/layout";
 
 import { API_BASE } from "@/lib/api";
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
-const IS_DEV = import.meta.env.DEV;
 
-type Step = "credentials" | "otp";
+type Step = "credentials" | "otp" | "unverified";
 
 export default function Login() {
   const queryClient = useQueryClient();
 
-  const [step, setStep]           = useState<Step>("credentials");
-  const [userId, setUserId]       = useState<number | null>(null);
-  const [sentEmail, setSentEmail] = useState("");
-  const [isPending, setIsPending] = useState(false);
-  const [error, setError]         = useState("");
+  const [step, setStep]               = useState<Step>("credentials");
+  const [userId, setUserId]           = useState<number | null>(null);
+  const [sentEmail, setSentEmail]     = useState("");
+  const [isPending, setIsPending]     = useState(false);
+  const [error, setError]             = useState("");
+  const [resentVerification, setResentVerification] = useState(false);
 
   const searchParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
   const verifiedParam = searchParams.get("verified");
+  const errorParam   = searchParams.get("error");
 
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
@@ -48,6 +48,11 @@ export default function Login() {
         body: JSON.stringify({ email: email.toLowerCase().trim(), password }),
       });
       const json = await res.json();
+      if (res.status === 403 && json.code === "EMAIL_NOT_VERIFIED") {
+        setSentEmail(email.toLowerCase().trim());
+        setStep("unverified");
+        return;
+      }
       if (!res.ok) throw new Error(json.message ?? "Login failed");
       setUserId(json.userId);
       setSentEmail(email.toLowerCase().trim());
@@ -104,6 +109,21 @@ export default function Login() {
         : import.meta.env.BASE_URL || "/";
     } catch (err: any) {
       setError(err.message ?? "Incorrect code. Please try again.");
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    setIsPending(true);
+    setResentVerification(false);
+    try {
+      await fetch(`${API_BASE}/api/auth/resend-verification`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: sentEmail }),
+      });
+      setResentVerification(true);
     } finally {
       setIsPending(false);
     }
@@ -167,6 +187,13 @@ export default function Login() {
                   <span>Email verified! You can now sign in.</span>
                 </motion.div>
               )}
+              {errorParam === "link-expired" && (
+                <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}
+                  className="mb-6 flex items-start gap-3 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium">
+                  <Info className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>Your verification link has expired. Log in below and we'll send you a new one.</span>
+                </motion.div>
+              )}
               <div className="text-center mb-8">
                 <h1 className="text-3xl font-display font-bold">Welcome back</h1>
                 <p className="text-muted-foreground mt-2">Log in to claim and manage your USD.</p>
@@ -206,7 +233,10 @@ export default function Login() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-foreground mb-2">Password</label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm font-medium text-foreground">Password</label>
+                      <Link href="/forgot-password" className="text-xs font-medium text-primary hover:underline">Forgot password?</Link>
+                    </div>
                     <div className="relative">
                       <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-muted-foreground">
                         <Lock className="w-5 h-5" />
@@ -242,6 +272,66 @@ export default function Login() {
                     Don't have an account?{" "}
                     <Link href="/register" className="font-semibold text-primary hover:underline">Sign up</Link>
                   </p>
+                </div>
+              </div>
+            </motion.div>
+          ) : step === "unverified" ? (
+            <motion.div
+              key="unverified"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25 }}
+            >
+              <div className="text-center mb-8">
+                <h1 className="text-3xl font-display font-bold">Verify your email</h1>
+                <p className="text-muted-foreground mt-2">
+                  We need to verify{" "}
+                  <span className="font-semibold text-foreground">{sentEmail}</span>{" "}
+                  before you can log in.
+                </p>
+              </div>
+
+              <div className="glass-panel p-8 rounded-3xl">
+                <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 mb-6">
+                  <Info className="w-4 h-4 shrink-0" />
+                  <p className="text-sm">Check your inbox for a verification link. It's valid for 72 hours.</p>
+                </div>
+
+                <AnimatePresence>
+                  {resentVerification && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="mb-6 flex items-start gap-3 px-4 py-3 rounded-xl bg-green-50 border border-green-200 text-green-700 text-sm font-medium overflow-hidden"
+                    >
+                      <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                      <span>Verification email resent! Check your inbox.</span>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <div className="space-y-4">
+                  <motion.button
+                    type="button"
+                    onClick={handleResendVerification}
+                    disabled={isPending}
+                    whileHover={!isPending ? { scale: 1.02, y: -1 } : {}}
+                    whileTap={!isPending ? { scale: 0.98 } : {}}
+                    className="w-full flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl font-bold text-white bg-primary hover:shadow-lg hover:shadow-primary/30 transition-shadow disabled:opacity-70 disabled:cursor-not-allowed"
+                  >
+                    {isPending
+                      ? <Loader2 className="w-5 h-5 animate-spin" />
+                      : <><Send className="w-5 h-5" /><span>Resend Verification Email</span></>
+                    }
+                  </motion.button>
+                  <button
+                    type="button"
+                    onClick={() => { setStep("credentials"); setError(""); }}
+                    className="block mx-auto text-sm text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    ← Back to login
+                  </button>
                 </div>
               </div>
             </motion.div>

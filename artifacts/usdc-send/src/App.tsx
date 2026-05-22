@@ -14,6 +14,8 @@ import DeveloperAuth from "./pages/developer-auth";
 import DeveloperDashboard from "./pages/developer-dashboard";
 import Pay from "./pages/pay";
 import Docs from "./pages/docs";
+import ForgotPassword from "./pages/forgot-password";
+import ResetPassword from "./pages/reset-password";
 import NotFound from "./pages/not-found";
 
 // Wire up base URL and auth token for every generated API hook
@@ -47,6 +49,8 @@ function Router() {
       <Route path="/subscribe/:merchantId" component={Subscribe} />
       <Route path="/pay/:merchantId" component={Pay} />
       <Route path="/developer" component={DeveloperPortal} />
+      <Route path="/forgot-password" component={ForgotPassword} />
+      <Route path="/reset-password" component={ResetPassword} />
       <Route path="/developer/login" component={DeveloperAuth} />
       <Route path="/developer/reset-password" component={DeveloperAuth} />
       <Route path="/developer/dashboard" component={DeveloperDashboard} />

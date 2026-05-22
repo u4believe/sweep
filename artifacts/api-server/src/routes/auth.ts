@@ -6,7 +6,7 @@ import { eq, and, gt } from "drizzle-orm";
 import { generateToken, requireAuth } from "../lib/auth.js";
 import { hashEmail } from "../lib/escrow.js";
 import { createUserCircleWallet, ensureArcTestnetWallet } from "../lib/circle.js";
-import { sendOtpEmail, sendVerificationEmail } from "../lib/email.js";
+import { sendOtpEmail, sendVerificationEmail, sendPasswordResetEmail } from "../lib/email.js";
 import { randomUUID, randomInt } from "node:crypto";
 import {
   RegisterUserBody,
@@ -44,6 +44,24 @@ const resendLimiter = rateLimit({
   message:          { error: "Too many requests", message: "Too many resend attempts. Try again in 10 minutes." },
 });
 
+const forgotPasswordLimiter = rateLimit({
+  windowMs:         15 * 60 * 1000,
+  max:              5,
+  keyGenerator:     (req) => ipKeyGenerator(req),
+  standardHeaders:  true,
+  legacyHeaders:    false,
+  message:          { error: "Too many requests", message: "Too many password reset attempts. Try again in 15 minutes." },
+});
+
+const resetPasswordLimiter = rateLimit({
+  windowMs:         15 * 60 * 1000,
+  max:              5,
+  keyGenerator:     (req) => ipKeyGenerator(req),
+  standardHeaders:  true,
+  legacyHeaders:    false,
+  message:          { error: "Too many requests", message: "Too many reset attempts. Try again in 15 minutes." },
+});
+
 function generateOtp(): string {
   return String(randomInt(100000, 1000000));
 }
@@ -67,17 +85,46 @@ router.post("/register", async (req, res) => {
     }
 
     const { email, password, name } = parsed.data;
+    const normalizedEmail = email.toLowerCase().trim();
 
-    const existing = await db.select().from(usersTable).where(eq(usersTable.email, email.toLowerCase())).limit(1);
-    if (existing.length > 0) {
-      res.status(409).json({ error: "Conflict", message: "Email already registered" });
+    const [existing] = await db.select().from(usersTable).where(eq(usersTable.email, normalizedEmail)).limit(1);
+
+    if (existing) {
+      if ((existing as any).emailVerified) {
+        // Verified account — this email is taken.
+        res.status(409).json({ error: "Conflict", message: "Email already registered" });
+        return;
+      }
+
+      // Unverified account — treat as if they never finished registering.
+      // Re-issue a fresh 72-hour verification link and return the same response
+      // as a new registration so they can complete verification.
+      const verificationToken = randomUUID();
+      const tokenExpiry = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 h
+      await db.update(usersTable)
+        .set({
+          emailVerificationToken:          verificationToken,
+          emailVerificationTokenExpiresAt: tokenExpiry,
+        } as any)
+        .where(eq(usersTable.id, existing.id));
+
+      const appUrl = process.env.APP_URL?.replace(/\/$/, "") || `http://localhost:${process.env.PORT || 3001}`;
+      const verificationUrl = `${appUrl}/api/auth/verify-email?token=${verificationToken}`;
+      await sendVerificationEmail(normalizedEmail, verificationUrl);
+
+      res.status(200).json({
+        requiresEmailVerification: true,
+        resent: true,
+        email: normalizedEmail,
+        message: "A new verification link has been sent to your email.",
+      });
       return;
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
     const emailHash = hashEmail(normalizedEmail);
     const passwordHash = await bcrypt.hash(password, 10);
     const verificationToken = randomUUID();
+    const tokenExpiry = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 h
 
     const [user] = await db.insert(usersTable).values({
       email: normalizedEmail,
@@ -85,7 +132,8 @@ router.post("/register", async (req, res) => {
       passwordHash,
       name,
       emailVerified: false,
-      emailVerificationToken: verificationToken,
+      emailVerificationToken:          verificationToken,
+      emailVerificationTokenExpiresAt: tokenExpiry,
     } as any).returning();
 
     // Provision Circle wallet in background
@@ -135,13 +183,19 @@ router.get("/verify-email", async (req, res) => {
     }
 
     if ((user as any).emailVerified) {
-      // Already verified — just redirect to login
       res.redirect("/login?verified=already");
       return;
     }
 
+    // Check 72-hour expiry (if the column exists).
+    const tokenExpiry: Date | null = (user as any).emailVerificationTokenExpiresAt ?? null;
+    if (tokenExpiry && tokenExpiry < new Date()) {
+      res.redirect("/login?error=link-expired");
+      return;
+    }
+
     await db.update(usersTable)
-      .set({ emailVerified: true, emailVerificationToken: null } as any)
+      .set({ emailVerified: true, emailVerificationToken: null, emailVerificationTokenExpiresAt: null } as any)
       .where(eq(usersTable.id, user.id));
 
     req.log.info({ userId: user.id }, "[auth] Email verified");
@@ -167,8 +221,9 @@ router.post("/resend-verification", async (req, res) => {
 
     if (user && !(user as any).emailVerified) {
       const verificationToken = randomUUID();
+      const tokenExpiry = new Date(Date.now() + 72 * 60 * 60 * 1000);
       await db.update(usersTable)
-        .set({ emailVerificationToken: verificationToken } as any)
+        .set({ emailVerificationToken: verificationToken, emailVerificationTokenExpiresAt: tokenExpiry } as any)
         .where(eq(usersTable.id, user.id));
 
       const appUrl = process.env.APP_URL?.replace(/\/$/, "") || `http://localhost:${process.env.PORT || 3001}`;
@@ -207,6 +262,16 @@ router.post("/login", loginLimiter, async (req, res) => {
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
       res.status(401).json({ error: "Unauthorized", message: "Invalid email or password" });
+      return;
+    }
+
+    // Only fully-registered (verified) users may log in.
+    if (!(user as any).emailVerified) {
+      res.status(403).json({
+        error: "Email not verified",
+        message: "Please verify your email address before logging in. Check your inbox for the verification link.",
+        code: "EMAIL_NOT_VERIFIED",
+      });
       return;
     }
 
@@ -358,6 +423,99 @@ router.post("/resend-otp", resendLimiter, async (req, res) => {
     res.json({ success: true, message: "A new verification code has been sent to your email." });
   } catch (error: any) {
     req.log.error({ err: error }, "Resend OTP error");
+    res.status(500).json({ error: "Internal server error", message: error.message });
+  }
+});
+
+// ─── POST /api/auth/forgot-password ──────────────────────────────────────────
+// Sends a password-reset link. Always returns 200 to prevent email enumeration.
+// Token is a random UUID (128 bits), expires in 1 hour, single-use.
+// Only works for verified accounts — unverified accounts are not real users.
+router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
+  const { email } = req.body as { email?: unknown };
+  if (typeof email !== "string" || !email.trim()) {
+    res.status(400).json({ error: "Validation error", message: "email is required" });
+    return;
+  }
+
+  // Respond immediately — never reveal whether the email exists.
+  res.json({ success: true, message: "If that email is registered, a reset link has been sent." });
+
+  // Process in background so the response time is constant (timing-safe).
+  void (async () => {
+    try {
+      const normalizedEmail = email.toLowerCase().trim();
+      const [user] = await db.select().from(usersTable).where(eq(usersTable.email, normalizedEmail)).limit(1);
+
+      // Only send reset emails to verified accounts.
+      if (!user || !(user as any).emailVerified) return;
+
+      const resetToken = randomUUID();
+      const expiresAt  = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+      await db.update(usersTable)
+        .set({ passwordResetToken: resetToken, passwordResetTokenExpiresAt: expiresAt } as any)
+        .where(eq(usersTable.id, user.id));
+
+      const appUrl    = process.env.APP_URL?.replace(/\/$/, "") || `http://localhost:${process.env.PORT || 3001}`;
+      const resetUrl  = `${appUrl}/reset-password?token=${resetToken}`;
+      await sendPasswordResetEmail(normalizedEmail, resetUrl);
+    } catch (e: any) {
+      console.error("[forgot-password] Error:", e?.message);
+    }
+  })();
+});
+
+// ─── POST /api/auth/reset-password ───────────────────────────────────────────
+// Verifies the reset token and sets a new password.
+// Token is invalidated immediately on use regardless of success.
+router.post("/reset-password", resetPasswordLimiter, async (req, res) => {
+  const { token, password } = req.body as { token?: unknown; password?: unknown };
+
+  if (typeof token !== "string" || !token.trim()) {
+    res.status(400).json({ error: "Validation error", message: "token is required" });
+    return;
+  }
+  if (typeof password !== "string" || password.length < 8) {
+    res.status(400).json({ error: "Validation error", message: "New password must be at least 8 characters" });
+    return;
+  }
+
+  try {
+    const now = new Date();
+    const [user] = await db
+      .select()
+      .from(usersTable)
+      .where(
+        and(
+          eq((usersTable as any).passwordResetToken, token.trim()),
+          gt((usersTable as any).passwordResetTokenExpiresAt, now),
+        ),
+      )
+      .limit(1);
+
+    if (!user) {
+      res.status(400).json({
+        error: "Invalid or expired link",
+        message: "This password reset link is invalid or has expired. Please request a new one.",
+      });
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    // Invalidate the token and save the new password atomically.
+    await db.update(usersTable)
+      .set({
+        passwordHash,
+        passwordResetToken:          null,
+        passwordResetTokenExpiresAt: null,
+      } as any)
+      .where(eq(usersTable.id, user.id));
+
+    res.json({ success: true, message: "Password reset successfully. You can now log in with your new password." });
+  } catch (error: any) {
+    req.log.error({ err: error }, "Reset password error");
     res.status(500).json({ error: "Internal server error", message: error.message });
   }
 });

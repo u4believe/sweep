@@ -362,7 +362,7 @@ export async function sendVerificationEmail(to: string, verificationUrl: string)
           <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Confirm your email address</p>
           <p style="margin:0 0 32px;color:#64748b;font-size:15px;line-height:1.6;">
             Click the button below to verify your email and activate your account.
-            This link expires in <strong>24 hours</strong>.
+            This link expires in <strong>72 hours</strong>.
           </p>
           <div style="text-align:center;margin-bottom:32px;">
             <a href="${verificationUrl}"
@@ -403,6 +403,77 @@ export async function sendVerificationEmail(to: string, verificationUrl: string)
     html,
   }).catch((err: any) => {
     console.error(`[verify-email] Failed to send to ${to}: ${err?.message}`);
+  });
+}
+
+export async function sendPasswordResetEmail(to: string, resetUrl: string): Promise<void> {
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;">
+    <tr><td align="center">
+      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
+        <tr><td align="center" style="padding-bottom:24px;">
+          <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
+            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
+          </div>
+          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
+        </td></tr>
+        <tr><td style="background:#fff;border-radius:20px;padding:40px 36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
+          <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#fef9c3;margin-bottom:20px;">
+            <span style="width:8px;height:8px;border-radius:50%;background:#ca8a04;display:inline-block;"></span>
+            <span style="font-size:12px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.5px;">Security Alert</span>
+          </div>
+          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Reset your password</p>
+          <p style="margin:0 0 32px;color:#64748b;font-size:15px;line-height:1.6;">
+            We received a request to reset the password on your SweepUSDC account.
+            Click the button below to choose a new password. This link expires in <strong>1 hour</strong>.
+          </p>
+          <div style="text-align:center;margin-bottom:32px;">
+            <a href="${resetUrl}"
+               style="display:inline-block;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;font-weight:700;font-size:15px;padding:14px 36px;border-radius:12px;text-decoration:none;">
+              Reset my password
+            </a>
+          </div>
+          <p style="margin:0;color:#94a3b8;font-size:13px;line-height:1.6;">
+            Or copy this link into your browser:<br>
+            <a href="${resetUrl}" style="color:#2563eb;word-break:break-all;">${resetUrl}</a>
+          </p>
+          <p style="margin:16px 0 0;color:#94a3b8;font-size:13px;">
+            If you did not request a password reset, you can safely ignore this email.
+            Your password will not change unless you click the link above.
+          </p>
+        </td></tr>
+        <tr><td style="padding:24px 0;text-align:center;">
+          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.log(`\n──────────────────────────────────────────────`);
+    console.log(`  PASSWORD RESET LINK for ${to}`);
+    console.log(`  URL: ${resetUrl}`);
+    console.log(`──────────────────────────────────────────────\n`);
+    return;
+  }
+
+  transporter.sendMail({
+    from: FROM,
+    to,
+    subject: "Reset your SweepUSDC password",
+    html,
+  }).catch((err: any) => {
+    console.error(`[password-reset-email] Failed to send to ${to}: ${err?.message}`);
   });
 }
 
