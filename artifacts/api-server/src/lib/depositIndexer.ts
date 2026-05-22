@@ -346,7 +346,7 @@ class ChainIndexer {
   private async handleDeposit(userId: number, amount: string, txHash: string | null, toAddress: string, circleId?: string, txBlockchain?: string) {
     const depositRef = circleId ? `circle-${circleId}` : (txHash ?? "");
 
-    // 1. If we have a real txHash, check whether it was already credited under that hash.
+    // 1. Already credited by txHash — fast exit.
     if (txHash) {
       const [existingByHash] = await db
         .select({ id: depositsTable.id })
@@ -359,57 +359,81 @@ class ChainIndexer {
       }
     }
 
-    // 2. Check whether a record already exists under the same depositReference
-    //    (webhook may have inserted it early, possibly without a txHash yet).
+    // 2. Check by depositReference. The webhook may have already inserted a "pending"
+    //    record (before on-chain confirmation). Promote it to "completed" here.
+    let skipInsert = false;
     if (depositRef) {
       const [existingByRef] = await db
-        .select({ id: depositsTable.id, currentTxHash: depositsTable.txHash })
+        .select({ id: depositsTable.id, currentTxHash: depositsTable.txHash, status: depositsTable.status })
         .from(depositsTable)
         .where(eq(depositsTable.depositReference, depositRef))
         .limit(1);
 
       if (existingByRef) {
-        // Already credited — just patch in the real txHash if it was missing.
-        if (!existingByRef.currentTxHash && txHash) {
-          await db.update(depositsTable)
-            .set({ txHash })
-            .where(eq(depositsTable.id, existingByRef.id));
-          logger.info({ txHash, depositRef, userId }, `[usdc-indexer:${this.cfg.chain}] Patched missing txHash on existing deposit`);
+        if (existingByRef.status === "pending") {
+          // Promote pending → completed and credit balance atomically.
+          await db.transaction(async (tx: typeof db) => {
+            await tx.update(depositsTable)
+              .set({
+                status:     "completed",
+                txHash:     txHash ?? existingByRef.currentTxHash ?? null,
+                creditedAt: new Date(),
+              })
+              .where(eq(depositsTable.id, existingByRef.id));
+            await tx.update(usersTable)
+              .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })
+              .where(eq(usersTable.id, userId));
+          });
+          logger.info(
+            { txHash, depositRef, userId, amount },
+            `[usdc-indexer:${this.cfg.chain}] Promoted pending→completed, credited balance`,
+          );
+          skipInsert = true; // skip new insert below, go straight to bridge job
+        } else {
+          // Already completed — patch txHash if missing.
+          if (!existingByRef.currentTxHash && txHash) {
+            await db.update(depositsTable)
+              .set({ txHash })
+              .where(eq(depositsTable.id, existingByRef.id));
+            logger.info({ txHash, depositRef, userId }, `[usdc-indexer:${this.cfg.chain}] Patched missing txHash on existing deposit`);
+          }
+          return;
         }
-        return;
       }
     }
 
-    // 3. Not credited yet — insert and credit atomically.
-    const credited = await db.transaction(async (tx) => {
-      const [inserted] = await tx.insert(depositsTable).values({
-        userId,
-        amount,
-        type:             "crypto",
-        source:           CHAIN_LABELS[txBlockchain ?? this.cfg.chain] ?? `${txBlockchain ?? this.cfg.chain} USDC`,
-        status:           "completed",
-        depositReference: depositRef || null,
-        txHash:           txHash ?? null,
-        creditedAt:       new Date(),
-      }).onConflictDoNothing().returning({ id: depositsTable.id });
+    // 3. Not credited yet — insert and credit atomically (skipped after pending promotion).
+    if (!skipInsert) {
+      const credited = await db.transaction(async (tx: typeof db) => {
+        const [inserted] = await tx.insert(depositsTable).values({
+          userId,
+          amount,
+          type:             "crypto",
+          source:           CHAIN_LABELS[txBlockchain ?? this.cfg.chain] ?? `${txBlockchain ?? this.cfg.chain} USDC`,
+          status:           "completed",
+          depositReference: depositRef || null,
+          txHash:           txHash ?? null,
+          creditedAt:       new Date(),
+        }).onConflictDoNothing().returning({ id: depositsTable.id });
 
-      if (!inserted) return false;
+        if (!inserted) return false;
 
-      await tx.update(usersTable)
-        .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })
-        .where(eq(usersTable.id, userId));
+        await tx.update(usersTable)
+          .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })
+          .where(eq(usersTable.id, userId));
 
-      return true;
-    });
+        return true;
+      });
 
-    if (!credited) return;
+      if (!credited) return;
 
-    logger.info(
-      { txHash, userId, amount, chain: this.cfg.chain },
-      `[usdc-indexer:${this.cfg.chain}] Credited deposit`,
-    );
+      logger.info(
+        { txHash, userId, amount, chain: this.cfg.chain },
+        `[usdc-indexer:${this.cfg.chain}] Credited deposit`,
+      );
+    }
 
-    // Enqueue bridge job — sweep USDC to the ARC-TESTNET platform treasury.
+    // 4. Enqueue bridge job — reached by both new inserts and pending promotions.
     // ARC-TESTNET:  Same-chain Circle DCW sweep (sweepUsdcToPlatformWallet).
     // BASE-SEPOLIA: CCTP V2 depositForBurn → Arc treasury (cctpDepositForBurnFromBase).
     try {
@@ -432,7 +456,6 @@ class ChainIndexer {
           { txHash, userId, amount, chain: this.cfg.chain },
           `[usdc-indexer:${this.cfg.chain}] Bridge job enqueued`,
         );
-        // Kick the bridge worker immediately — don't wait for its 5s poll interval
         triggerBridgeWorker();
       }
     } catch (e: any) {

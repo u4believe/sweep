@@ -90,7 +90,7 @@ async function reconcile() {
 
   let jobsCreated = 0;
 
-  for (const chain of SUPPORTED_SOURCE_CHAINS as SourceChain[]) {
+  for (const chain of [...SUPPORTED_SOURCE_CHAINS] as SourceChain[]) {
     const rpcUrl   = CHAIN_RPC_URLS[chain];
     const usdcAddr = CHAIN_USDC_ADDRESSES[chain];
 
@@ -159,12 +159,14 @@ async function reconcile() {
 
       if (existing) continue; // already handled this exact balance snapshot
 
-      // Check if the deposit was already credited (e.g. by Transfer event indexer or webhook).
-      // Two guards:
+      // Check if the deposit was already handled (credited or pending).
+      // Three guards:
       //   (a) exact reconHash match — this worker already ran for this snapshot
-      //   (b) any deposit for this user/chain credited in the last 3 minutes — covers
-      //       the race where the Circle poll or webhook credited the deposit and inserted
-      //       the bridge job AFTER our active-job check above passed (4-second window).
+      //   (b) any deposit credited in the last 3 minutes — covers the race where
+      //       the Circle poll or webhook ran just before this check
+      //   (c) any "pending" deposit — webhook fired early (PENDING state) and the
+      //       balance hasn't been credited yet, but the deposit IS being tracked.
+      //       Don't double-credit by running a reconciliation sweep on top of it.
       const chainSource = chain === "ARC-TESTNET" ? "Arc Testnet USDC" : "Base Sepolia USDC";
       const [existingDeposit] = await db
         .select({ id: depositsTable.id })
@@ -175,6 +177,9 @@ async function reconcile() {
             sql`${depositsTable.userId} = ${user.id}
                 AND ${depositsTable.source} = ${chainSource}
                 AND ${depositsTable.creditedAt} > NOW() - INTERVAL '3 minutes'`,
+            sql`${depositsTable.userId} = ${user.id}
+                AND ${depositsTable.source} = ${chainSource}
+                AND ${depositsTable.status} = 'pending'`,
           )
         )
         .limit(1);

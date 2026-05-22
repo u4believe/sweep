@@ -14,6 +14,47 @@ import {
 import { triggerBridgeWorker } from "../lib/bridgeWorker.js";
 import { sendDepositConfirmedEmail } from "../lib/email.js";
 
+// Map Circle blockchain identifiers → human-readable display labels.
+// These labels must match what the frontend's explorer URL matcher expects.
+const CIRCLE_CHAIN_LABELS: Record<string, string> = {
+  "BASE-SEPOLIA":  "Base Sepolia USDC",
+  "ARC-TESTNET":   "Arc Testnet USDC",
+  "ETH-SEPOLIA":   "Ethereum Sepolia USDC",
+  "AVAX-FUJI":     "Avalanche Fuji USDC",
+  "ARB-SEPOLIA":   "Arbitrum Sepolia USDC",
+  "MATIC-AMOY":    "Polygon Amoy USDC",
+  "SOL-DEVNET":    "Solana Devnet USDC",
+  "ETH":           "Ethereum USDC",
+  "BASE":          "Base USDC",
+  "ARB":           "Arbitrum USDC",
+  "AVAX":          "Avalanche USDC",
+  "MATIC":         "Polygon USDC",
+};
+
+function resolveChainLabel(blockchain: string | null | undefined): string {
+  if (!blockchain) return "USDC";
+  return CIRCLE_CHAIN_LABELS[blockchain.toUpperCase()] ?? `${blockchain} USDC`;
+}
+
+// Resolve chain from walletId when Circle's webhook omits the blockchain field.
+async function resolveChainFromWallet(walletId: string | undefined, userId: number): Promise<string | null> {
+  if (!walletId) return null;
+  const [user] = await db
+    .select({ circleWalletId: usersTable.circleWalletId, walletIdsJson: (usersTable as any).circleWalletIdsJson })
+    .from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+  if (!user) return null;
+  if (user.circleWalletId === walletId) return "BASE-SEPOLIA";
+  if (user.walletIdsJson) {
+    try {
+      const map = JSON.parse(user.walletIdsJson) as Record<string, string>;
+      for (const [chain, id] of Object.entries(map)) {
+        if (id === walletId) return chain;
+      }
+    } catch { /* ignore */ }
+  }
+  return null;
+}
+
 const router: IRouter = Router();
 
 // ─── GET /api/deposit/addresses ───────────────────────────────────────────────
@@ -276,7 +317,10 @@ router.post("/circle/webhook", async (req, res) => {
       `[circle/webhook] Inbound: state=${state} walletId=${walletId} address=${destinationAddress} amounts=${JSON.stringify(amounts)} txHash=${txHash} txId=${txId} chain=${blockchain}`,
     );
 
-    if (state !== "COMPLETED" && state !== "COMPLETE") return;
+    // Accept both PENDING (show deposit in UI early) and COMPLETE (credit balance).
+    const isComplete = state === "COMPLETE" || state === "COMPLETED";
+    const isPending  = state === "PENDING"  || state === "CONFIRMED" || state === "INITIATED";
+    if (!isComplete && !isPending) return;
     if (!amounts?.length) return;
 
     const amount = String(amounts[0] ?? "0");
@@ -298,8 +342,6 @@ router.post("/circle/webhook", async (req, res) => {
       dbUser = byPrimary;
 
       // 2. Search circleWalletIdsJson for non-primary chain wallet IDs (e.g. ARC-TESTNET)
-      //    The JSON is a map of chain→walletId; a LIKE search on the UUID is safe
-      //    because UUIDs contain only hex chars and hyphens (no SQL wildcards).
       if (!dbUser) {
         const [byJson] = await db
           .select({ id: usersTable.id })
@@ -311,8 +353,7 @@ router.post("/circle/webhook", async (req, res) => {
     }
 
     if (!dbUser && destinationAddress) {
-      // 3. Destination address match — works because SCA wallets share the same
-      //    on-chain address across all chains (same CREATE2 derivation).
+      // 3. Destination address match (SCA wallets share address across chains).
       const [byAddr] = await db
         .select({ id: usersTable.id })
         .from(usersTable)
@@ -326,32 +367,64 @@ router.post("/circle/webhook", async (req, res) => {
       return;
     }
 
-    // Always use "circle-{txId}" as the stable idempotency key — txId is always
-    // present in the webhook payload, unlike txHash which may not be indexed yet.
-    // This key matches what the deposit indexer uses for the same transaction,
-    // preventing double-credits when the indexer runs after the webhook.
+    // Resolve the chain label. Circle sometimes omits `blockchain` in the webhook
+    // payload; fall back to looking up the chain from the walletId.
+    const resolvedChain = blockchain ?? await resolveChainFromWallet(walletId, dbUser.id);
+    const sourceLabel   = resolveChainLabel(resolvedChain);
+    const sourceChain   = (resolvedChain?.toUpperCase() as SourceChain | undefined);
+
+    // "circle-{txId}" is the stable idempotency key — txId is always present,
+    // unlike txHash which may be absent on PENDING notifications.
     const depositRef = txId ? `circle-${txId}` : (txHash ?? null);
 
-    // Check by depositReference — catches the normal case.
+    // ── Check for existing record ─────────────────────────────────────────
     if (depositRef) {
-      const [dupByRef] = await db
-        .select({ id: depositsTable.id, currentTxHash: depositsTable.txHash })
+      const [existing] = await db
+        .select({ id: depositsTable.id, currentTxHash: depositsTable.txHash, status: depositsTable.status })
         .from(depositsTable)
         .where(eq(depositsTable.depositReference, depositRef))
         .limit(1);
-      if (dupByRef) {
-        // Already credited — patch in real txHash if the record is still missing it.
-        if (!dupByRef.currentTxHash && txHash) {
-          await db.update(depositsTable)
-            .set({ txHash })
-            .where(eq(depositsTable.id, dupByRef.id));
-          console.info(`[circle/webhook] Patched missing txHash on deposit ref=${depositRef}`);
+
+      if (existing) {
+        if (existing.status === "pending" && isComplete) {
+          // Promote: pending deposit → completed, now credit balance.
+          const promoted = await db.transaction(async (tx: typeof db) => {
+            const updated = await tx.update(depositsTable)
+              .set({
+                status:     "completed",
+                txHash:     txHash ?? existing.currentTxHash ?? null,
+                source:     sourceLabel,
+                creditedAt: new Date(),
+              })
+              .where(eq(depositsTable.id, existing.id))
+              .returning({ id: depositsTable.id });
+            if (!updated.length) return false;
+            await tx.update(usersTable)
+              .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })
+              .where(eq(usersTable.id, dbUser.id));
+            return true;
+          });
+
+          if (!promoted) return;
+          console.info(`[circle/webhook] Promoted pending→completed ${amount} USDC, user ${dbUser.id} from ${resolvedChain}`);
+
+          // Send confirmation email and enqueue bridge job (same as normal COMPLETE flow below).
+          const [eu] = await db.select({ email: usersTable.email }).from(usersTable).where(eq(usersTable.id, dbUser.id)).limit(1);
+          if (eu) sendDepositConfirmedEmail(eu.email, parseFloat(amount).toFixed(2), "crypto", sourceLabel).catch(() => {});
+          void enqueueBridgeJobIfNeeded(dbUser.id, sourceChain, destinationAddress, amount, txHash);
+          return;
+        }
+
+        // Already at completed (or same pending state) — just patch txHash if missing.
+        if (!existing.currentTxHash && txHash) {
+          await db.update(depositsTable).set({ txHash, source: sourceLabel }).where(eq(depositsTable.id, existing.id));
+          console.info(`[circle/webhook] Patched missing txHash ref=${depositRef}`);
         }
         return;
       }
     }
 
-    // Check by txHash — catches edge cases where the indexer inserted first using the real hash.
+    // Check by txHash — catches edge cases where the indexer inserted first.
     if (txHash) {
       const [dupByHash] = await db
         .select({ id: depositsTable.id })
@@ -361,15 +434,30 @@ router.post("/circle/webhook", async (req, res) => {
       if (dupByHash) return;
     }
 
-    // Credit inside a transaction: INSERT first, balance update second.
-    // onConflictDoNothing relies on the unique index on deposit_reference / tx_hash
-    // (see schema migration). If the INSERT is skipped the balance is NOT touched.
-    const credited = await db.transaction(async (tx) => {
+    if (isPending && !isComplete) {
+      // Insert a "pending" record so the deposit appears in the UI immediately.
+      // Balance is NOT credited yet — only credited when COMPLETE arrives.
+      await db.insert(depositsTable).values({
+        userId:           dbUser.id,
+        amount:           parseFloat(amount).toFixed(6),
+        type:             "crypto",
+        source:           sourceLabel,
+        status:           "pending",
+        depositReference: depositRef,
+        txHash:           txHash ?? null,
+        // creditedAt intentionally null — will be set on COMPLETE
+      }).onConflictDoNothing();
+      console.info(`[circle/webhook] Pending deposit ${amount} USDC to user ${dbUser.id} from ${resolvedChain}`);
+      return;
+    }
+
+    // isComplete and no existing record — normal credit flow.
+    const credited = await db.transaction(async (tx: typeof db) => {
       const [inserted] = await tx.insert(depositsTable).values({
         userId:           dbUser.id,
         amount:           parseFloat(amount).toFixed(6),
         type:             "crypto",
-        source:           `${blockchain ?? "Circle"} USDC`,
+        source:           sourceLabel,
         status:           "completed",
         depositReference: depositRef,
         txHash:           txHash ?? null,
@@ -386,11 +474,11 @@ router.post("/circle/webhook", async (req, res) => {
     });
 
     if (!credited) {
-      console.info(`[circle/webhook] Duplicate deposit (conflict on insert) — skipping balance update ref=${depositRef}`);
+      console.info(`[circle/webhook] Duplicate deposit (conflict on insert) — skipping ref=${depositRef}`);
       return;
     }
 
-    console.info(`[circle/webhook] Credited ${amount} USDC to user ${dbUser.id} from ${blockchain}`);
+    console.info(`[circle/webhook] Credited ${amount} USDC to user ${dbUser.id} from ${resolvedChain}`);
 
     const [cryptoUserEmail] = await db
       .select({ email: usersTable.email })
@@ -398,49 +486,51 @@ router.post("/circle/webhook", async (req, res) => {
       .where(eq(usersTable.id, dbUser.id))
       .limit(1);
     if (cryptoUserEmail) {
-      sendDepositConfirmedEmail(cryptoUserEmail.email, parseFloat(amount).toFixed(2), "crypto", `${blockchain ?? "Circle"} USDC`).catch(() => {});
+      sendDepositConfirmedEmail(cryptoUserEmail.email, parseFloat(amount).toFixed(2), "crypto", sourceLabel).catch(() => {});
     }
 
-    // Enqueue bridge job to sweep USDC to Arc treasury.
-    // depositIndexer handles on-chain detection; webhook is the fast path.
-    const sourceChain = (blockchain?.toUpperCase() as SourceChain | undefined);
-    if (sourceChain && destinationAddress) {
-      const platformAddress = getPlatformWalletAddress();
-      // Don't bridge if the destination IS the platform treasury (it's already there).
-      if (!platformAddress || destinationAddress.toLowerCase() !== platformAddress.toLowerCase()) {
-        try {
-          let existingJob: { id: number } | undefined;
-          if (txHash) {
-            const [found] = await db
-              .select({ id: bridgeJobsTable.id })
-              .from(bridgeJobsTable)
-              .where(eq(bridgeJobsTable.txHash, txHash))
-              .limit(1);
-            existingJob = found;
-          }
-
-          if (!existingJob) {
-            await db.insert(bridgeJobsTable).values({
-              userId:            dbUser.id,
-              sourceChain,
-              userWalletAddress: destinationAddress,
-              amount:            parseFloat(amount).toFixed(6),
-              txHash:            txHash ?? null,
-              status:            "pending",
-            });
-            console.info(`[circle/webhook] Bridge job enqueued for ${amount} USDC on ${sourceChain}`);
-            // Kick the bridge worker immediately so the sweep doesn't wait for its poll interval
-            triggerBridgeWorker();
-          }
-        } catch (e: any) {
-          console.warn(`[circle/webhook] Bridge job insert failed: ${e?.message}`);
-        }
-      }
-    }
+    void enqueueBridgeJobIfNeeded(dbUser.id, sourceChain, destinationAddress, amount, txHash);
   } catch (err: any) {
     console.error("[circle/webhook] Error:", err?.message);
   }
 });
+
+// ─── Helper: enqueue bridge job (idempotent) ──────────────────────────────────
+async function enqueueBridgeJobIfNeeded(
+  userId:      number,
+  sourceChain: SourceChain | undefined,
+  destAddress: string | undefined,
+  amount:      string,
+  txHash:      string | null | undefined,
+): Promise<void> {
+  if (!sourceChain || !destAddress) return;
+  const platformAddress = getPlatformWalletAddress();
+  if (platformAddress && destAddress.toLowerCase() === platformAddress.toLowerCase()) return;
+
+  try {
+    if (txHash) {
+      const [found] = await db
+        .select({ id: bridgeJobsTable.id })
+        .from(bridgeJobsTable)
+        .where(eq(bridgeJobsTable.txHash, txHash))
+        .limit(1);
+      if (found) return;
+    }
+
+    await db.insert(bridgeJobsTable).values({
+      userId,
+      sourceChain,
+      userWalletAddress: destAddress,
+      amount:            parseFloat(amount).toFixed(6),
+      txHash:            txHash ?? null,
+      status:            "pending",
+    });
+    console.info(`[circle/webhook] Bridge job enqueued for ${amount} USDC on ${sourceChain}`);
+    triggerBridgeWorker();
+  } catch (e: any) {
+    console.warn(`[circle/webhook] Bridge job insert failed: ${e?.message}`);
+  }
+}
 
 // ─── GET /api/deposit/history ─────────────────────────────────────────────────
 router.get("/history", requireAuth, async (req, res) => {
