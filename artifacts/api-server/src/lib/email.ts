@@ -1,12 +1,18 @@
-// ─── Resend transport ─────────────────────────────────────────────────────────
-// Resend sends over HTTPS — 3,000 emails/month free (100/day).
+// ─── Brevo transport ──────────────────────────────────────────────────────────
+// Brevo sends over HTTPS — 300 emails/day free (resets midnight UTC).
 //
 // Setup:
-//   1. Sign up at https://resend.com
-//   2. API Keys → Create API Key
-//   3. Domains → Add and verify your domain
-//   4. Add to .env:  RESEND_API_KEY=re_xxxxxxxxxxxx
-//                    RESEND_FROM=SweepUSDC <no-reply@yourdomain.com>
+//   1. Sign up at https://app.brevo.com
+//   2. SMTP & API → API Keys → Generate a new API key
+//   3. Senders & IP → Senders → add and verify your sender email
+//   4. Add to .env:  BREVO_API_KEY=xkeysib-xxxxxxxxxxxx
+//                    BREVO_FROM=SweepUSDC <no-reply@yourdomain.com>
+
+function _parseSender(from: string): { name: string; email: string } {
+  const m = from.match(/^(.+?)\s*<([^>]+)>$/);
+  if (m) return { name: m[1].trim(), email: m[2].trim() };
+  return { name: "SweepUSDC", email: from };
+}
 
 // ─── Per-email cooldown ───────────────────────────────────────────────────────
 // Prevents the same address from receiving more than one email every 2 minutes,
@@ -32,7 +38,7 @@ function _setCooldown(email: string): void {
 
 // Shim that matches the nodemailer sendMail interface used throughout this file
 function getTransporter() {
-  const key = process.env.RESEND_API_KEY;
+  const key = process.env.BREVO_API_KEY;
   if (!key) return null;
   return {
     sendMail: async (opts: { from?: string; to: string; subject: string; html: string }) => {
@@ -42,37 +48,38 @@ function getTransporter() {
         return { id: "cooldown-suppressed" };
       }
       _setCooldown(recipient);
-      const res = await fetch("https://api.resend.com/emails", {
+      const sender = _parseSender(opts.from ?? FROM);
+      const res = await fetch("https://api.brevo.com/v3/smtp/email", {
         method:  "POST",
-        headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
+        headers: { "api-key": key, "Content-Type": "application/json" },
         body:    JSON.stringify({
-          from:    opts.from ?? FROM,
-          to:      [opts.to],
-          subject: opts.subject,
-          html:    opts.html,
+          sender,
+          to:          [{ email: opts.to }],
+          subject:     opts.subject,
+          htmlContent: opts.html,
         }),
       });
       if (!res.ok) {
         const body = await res.text().catch(() => "");
-        throw new Error(`Resend API error ${res.status}: ${body}`);
+        throw new Error(`Brevo API error ${res.status}: ${body}`);
       }
       return res.json();
     },
   };
 }
 
-const FROM = process.env.RESEND_FROM ?? process.env.SMTP_FROM ?? "SweepUSDC <no-reply@usdcsend.app>";
+const FROM = process.env.BREVO_FROM ?? process.env.RESEND_FROM ?? process.env.SMTP_FROM ?? "SweepUSDC <no-reply@usdcsend.app>";
 
 export async function verifySmtp(): Promise<void> {
-  const key = process.env.RESEND_API_KEY;
+  const key = process.env.BREVO_API_KEY;
   if (!key) {
-    console.warn("\n⚠️  RESEND_API_KEY not set — emails will NOT be delivered.");
-    console.warn("   1. Sign up at https://resend.com");
-    console.warn("   2. API Keys → Create API Key");
-    console.warn("   3. Add RESEND_API_KEY=re_xxx and RESEND_FROM=You <you@domain.com> to .env\n");
+    console.warn("\n⚠️  BREVO_API_KEY not set — emails will NOT be delivered.");
+    console.warn("   1. Sign up at https://app.brevo.com (free — 300 emails/day)");
+    console.warn("   2. SMTP & API → API Keys → Generate a new API key");
+    console.warn("   3. Add BREVO_API_KEY=xkeysib-xxx and BREVO_FROM=You <you@domain.com> to .env\n");
     return;
   }
-  console.info(`✅  Resend ready — sending from "${FROM}"`);
+  console.info(`✅  Brevo ready — sending from "${FROM}"`);
 }
 
 export async function sendRecurringSuccessEmail(
