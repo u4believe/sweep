@@ -12,6 +12,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app: Express = express();
 
+// Trust the first proxy (Cloudflare / Railway ingress) so req.ip and
+// rate-limiters see the real client IP from X-Forwarded-For.
+app.set("trust proxy", 1);
+
 // ─── Security headers (helmet) ───────────────────────────────────────────────
 // Sets: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection,
 // Strict-Transport-Security (HSTS), Referrer-Policy, and more.

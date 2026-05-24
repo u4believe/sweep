@@ -3,13 +3,15 @@ import { Link } from "wouter";
 import { Mail, ArrowRight, Loader2, CheckCircle2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AppLayout } from "@/components/layout";
+import { TurnstileWidget } from "@/components/TurnstileWidget";
 import { API_BASE } from "@/lib/api";
 
 export default function ForgotPassword() {
-  const [email, setEmail]       = useState("");
+  const [email, setEmail]         = useState("");
   const [isPending, setIsPending] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError]         = useState("");
+  const [cfToken, setCfToken]     = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,7 +22,7 @@ export default function ForgotPassword() {
       await fetch(`${API_BASE}/api/auth/forgot-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.toLowerCase().trim() }),
+        body: JSON.stringify({ email: email.toLowerCase().trim(), cfToken }),
       });
       setSubmitted(true);
     } catch {
@@ -129,6 +131,8 @@ export default function ForgotPassword() {
                       />
                     </div>
                   </div>
+
+                  <TurnstileWidget onVerify={setCfToken} onExpire={() => setCfToken("")} />
 
                   <motion.button
                     type="submit"

@@ -3,9 +3,9 @@ import { Link } from "wouter";
 import { Mail, Lock, User, ArrowRight, Loader2, CheckCircle2, RefreshCw } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AppLayout } from "@/components/layout";
+import { TurnstileWidget } from "@/components/TurnstileWidget";
 
 import { API_BASE } from "@/lib/api";
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 type Step = "form" | "check-email";
 
@@ -15,6 +15,7 @@ export default function Register() {
   const [isPending, setIsPending] = useState(false);
   const [error, setError]         = useState("");
   const [resent, setResent]       = useState(false);
+  const [cfToken, setCfToken]     = useState("");
 
   const [name,     setName]     = useState("");
   const [email,    setEmail]    = useState("");
@@ -30,7 +31,7 @@ export default function Register() {
       const res  = await fetch(`${API_BASE}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email: email.toLowerCase().trim(), password }),
+        body: JSON.stringify({ name, email: email.toLowerCase().trim(), password, cfToken }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Registration failed");
@@ -127,6 +128,8 @@ export default function Register() {
                           placeholder="••••••••" autoComplete="new-password" required />
                       </div>
                     </div>
+
+                    <TurnstileWidget onVerify={setCfToken} onExpire={() => setCfToken("")} />
 
                     <motion.button type="submit" disabled={isPending}
                       whileHover={!isPending ? { scale: 1.02, y: -1 } : {}} whileTap={!isPending ? { scale: 0.98 } : {}}

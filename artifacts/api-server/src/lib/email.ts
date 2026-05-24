@@ -8,12 +8,40 @@
 //   4. Add to .env:  RESEND_API_KEY=re_xxxxxxxxxxxx
 //                    RESEND_FROM=SweepUSDC <no-reply@yourdomain.com>
 
+// ─── Per-email cooldown ───────────────────────────────────────────────────────
+// Prevents the same address from receiving more than one email every 2 minutes,
+// regardless of which endpoint triggered it. Stops rotating-IP bot floods cold.
+const _emailCooldowns = new Map<string, number>();
+const EMAIL_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
+
+function _isOnCooldown(email: string): boolean {
+  const last = _emailCooldowns.get(email);
+  return !!last && Date.now() - last < EMAIL_COOLDOWN_MS;
+}
+
+function _setCooldown(email: string): void {
+  _emailCooldowns.set(email, Date.now());
+  // Prune stale entries to avoid unbounded growth
+  if (_emailCooldowns.size > 1000) {
+    const cutoff = Date.now() - EMAIL_COOLDOWN_MS;
+    for (const [k, v] of _emailCooldowns) {
+      if (v < cutoff) _emailCooldowns.delete(k);
+    }
+  }
+}
+
 // Shim that matches the nodemailer sendMail interface used throughout this file
 function getTransporter() {
   const key = process.env.RESEND_API_KEY;
   if (!key) return null;
   return {
     sendMail: async (opts: { from?: string; to: string; subject: string; html: string }) => {
+      const recipient = opts.to.toLowerCase();
+      if (_isOnCooldown(recipient)) {
+        console.log(`[email] Cooldown suppressed send to ${recipient}`);
+        return { id: "cooldown-suppressed" };
+      }
+      _setCooldown(recipient);
       const res = await fetch("https://api.resend.com/emails", {
         method:  "POST",
         headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },

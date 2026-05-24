@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import rateLimit from "express-rate-limit";
 import bcrypt from "bcrypt";
 import { db, usersTable, otpCodesTable, escrowsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
@@ -15,12 +15,52 @@ import {
 
 const router: IRouter = Router();
 
+// ─── Real IP resolution ───────────────────────────────────────────────────────
+// When behind Cloudflare, CF-Connecting-IP is the real client IP.
+// Falls back to Express's req.ip (which uses X-Forwarded-For when trust proxy=1).
+function realIp(req: any): string {
+  return (
+    (req.headers["cf-connecting-ip"] as string | undefined) ||
+    req.ip ||
+    "unknown"
+  );
+}
+
+// ─── Cloudflare Turnstile verification ───────────────────────────────────────
+// Server-side token verification. Returns true if TURNSTILE_SECRET_KEY is not
+// configured (dev mode bypass) so development isn't blocked.
+async function verifyTurnstile(token: string | undefined): Promise<boolean> {
+  const secret = process.env.TURNSTILE_SECRET_KEY;
+  if (!secret) return true; // not configured — allow through
+  if (!token)  return false;
+  try {
+    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ secret, response: token }),
+    });
+    const data = await res.json() as { success: boolean };
+    return data.success === true;
+  } catch {
+    return true; // on network error don't block real users
+  }
+}
+
 // ─── Rate limiters ────────────────────────────────────────────────────────────
+
+const registerLimiter = rateLimit({
+  windowMs:         60 * 60 * 1000, // 1 hour
+  max:              5,
+  keyGenerator:     (req) => realIp(req),
+  standardHeaders:  true,
+  legacyHeaders:    false,
+  message:          { error: "Too many requests", message: "Too many registration attempts. Try again in 1 hour." },
+});
 
 const loginLimiter = rateLimit({
   windowMs:         15 * 60 * 1000,
   max:              10,
-  keyGenerator:     (req) => ipKeyGenerator(req),
+  keyGenerator:     (req) => realIp(req),
   standardHeaders:  true,
   legacyHeaders:    false,
   message:          { error: "Too many requests", message: "Too many login attempts. Try again in 15 minutes." },
@@ -29,7 +69,7 @@ const loginLimiter = rateLimit({
 const otpLimiter = rateLimit({
   windowMs:         10 * 60 * 1000,
   max:              5,
-  keyGenerator:     (req) => String((req.body as any)?.userId ?? ipKeyGenerator(req)),
+  keyGenerator:     (req) => String((req.body as any)?.userId ?? realIp(req)),
   standardHeaders:  true,
   legacyHeaders:    false,
   message:          { error: "Too many requests", message: "Too many verification attempts. Try again in 10 minutes." },
@@ -38,16 +78,25 @@ const otpLimiter = rateLimit({
 const resendLimiter = rateLimit({
   windowMs:         10 * 60 * 1000,
   max:              3,
-  keyGenerator:     (req) => String((req.body as any)?.userId ?? ipKeyGenerator(req)),
+  keyGenerator:     (req) => String((req.body as any)?.userId ?? realIp(req)),
   standardHeaders:  true,
   legacyHeaders:    false,
   message:          { error: "Too many requests", message: "Too many resend attempts. Try again in 10 minutes." },
 });
 
+const resendVerificationLimiter = rateLimit({
+  windowMs:         60 * 60 * 1000, // 1 hour
+  max:              5,
+  keyGenerator:     (req) => realIp(req),
+  standardHeaders:  true,
+  legacyHeaders:    false,
+  message:          { error: "Too many requests", message: "Too many resend attempts. Try again in 1 hour." },
+});
+
 const forgotPasswordLimiter = rateLimit({
   windowMs:         15 * 60 * 1000,
   max:              5,
-  keyGenerator:     (req) => ipKeyGenerator(req),
+  keyGenerator:     (req) => realIp(req),
   standardHeaders:  true,
   legacyHeaders:    false,
   message:          { error: "Too many requests", message: "Too many password reset attempts. Try again in 15 minutes." },
@@ -56,7 +105,7 @@ const forgotPasswordLimiter = rateLimit({
 const resetPasswordLimiter = rateLimit({
   windowMs:         15 * 60 * 1000,
   max:              5,
-  keyGenerator:     (req) => ipKeyGenerator(req),
+  keyGenerator:     (req) => realIp(req),
   standardHeaders:  true,
   legacyHeaders:    false,
   message:          { error: "Too many requests", message: "Too many reset attempts. Try again in 15 minutes." },
@@ -76,7 +125,7 @@ async function issueOtp(userId: number, type: "register" | "login"): Promise<str
 // ─── POST /api/auth/register ──────────────────────────────────────────────────
 // Creates user account and sends an email verification link.
 // The user must click the link before they can perform any transactions.
-router.post("/register", async (req, res) => {
+router.post("/register", registerLimiter, async (req, res) => {
   try {
     const parsed = RegisterUserBody.safeParse(req.body);
     if (!parsed.success) {
@@ -85,6 +134,11 @@ router.post("/register", async (req, res) => {
     }
 
     const { email, password, name } = parsed.data;
+    const { cfToken } = req.body as { cfToken?: string };
+    if (!(await verifyTurnstile(cfToken))) {
+      res.status(400).json({ error: "Bot check failed", message: "Please complete the security check." });
+      return;
+    }
     const normalizedEmail = email.toLowerCase().trim();
 
     const [existing] = await db.select().from(usersTable).where(eq(usersTable.email, normalizedEmail)).limit(1);
@@ -208,7 +262,7 @@ router.get("/verify-email", async (req, res) => {
 
 // ─── POST /api/auth/resend-verification ──────────────────────────────────────
 // Sends a fresh verification email for an unverified account.
-router.post("/resend-verification", async (req, res) => {
+router.post("/resend-verification", resendVerificationLimiter, async (req, res) => {
   const { email } = req.body as { email?: unknown };
   if (typeof email !== "string" || !email.trim()) {
     res.status(400).json({ error: "Validation error", message: "email is required" });
@@ -432,9 +486,14 @@ router.post("/resend-otp", resendLimiter, async (req, res) => {
 // Token is a random UUID (128 bits), expires in 1 hour, single-use.
 // Only works for verified accounts — unverified accounts are not real users.
 router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
-  const { email } = req.body as { email?: unknown };
+  const { email, cfToken } = req.body as { email?: unknown; cfToken?: string };
   if (typeof email !== "string" || !email.trim()) {
     res.status(400).json({ error: "Validation error", message: "email is required" });
+    return;
+  }
+
+  if (!(await verifyTurnstile(cfToken))) {
+    res.status(400).json({ error: "Bot check failed", message: "Please complete the security check." });
     return;
   }
 
