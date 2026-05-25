@@ -4,7 +4,8 @@ import { Request, Response, NextFunction } from "express";
 import { db, developerApiKeysTable, developersTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 
-const JWT_SECRET = process.env.JWT_SECRET!;
+const JWT_SECRET     = process.env.JWT_SECRET!;
+const DEV_JWT_SECRET = process.env.DEV_JWT_SECRET!;
 
 // ─── In-memory rate limit store (per API key, per minute window) ───────────────
 // For production, replace with Redis. Good enough for single-instance deployments.
@@ -132,7 +133,7 @@ export async function requireApiKey(req: Request, res: Response, next: NextFunct
 
   // ── Developer JWT path (dashboard UI calls) ───────────────────────────────────
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as any;
+    const payload = jwt.verify(token, DEV_JWT_SECRET) as any;
     if (payload.type !== "developer") {
       res.status(401).json({ error: "Unauthorized", message: "Invalid API key format. Keys must start with live_sk_ or test_sk_" });
       return;
