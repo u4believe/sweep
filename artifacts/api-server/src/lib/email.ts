@@ -19,7 +19,7 @@ function _parseSender(from: string): { name: string; email: string } {
 // or IP triggered it. Stops rotating-IP bot floods cold.
 const _emailTimestamps = new Map<string, number[]>();
 const EMAIL_WINDOW_MS      = 60 * 1000; // 1 minute rolling window
-const EMAIL_MAX_PER_WINDOW = 2;
+const EMAIL_MAX_PER_WINDOW = 4;
 
 function _isOnCooldown(email: string): boolean {
   const now  = Date.now();
