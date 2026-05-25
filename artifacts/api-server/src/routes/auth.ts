@@ -1,5 +1,4 @@
 import { Router, type IRouter } from "express";
-import rateLimit from "express-rate-limit";
 import bcrypt from "bcrypt";
 import { db, usersTable, otpCodesTable, escrowsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
@@ -46,70 +45,6 @@ async function verifyTurnstile(token: string | undefined): Promise<boolean> {
   }
 }
 
-// ─── Rate limiters ────────────────────────────────────────────────────────────
-
-const registerLimiter = rateLimit({
-  windowMs:         60 * 60 * 1000, // 1 hour
-  max:              5,
-  keyGenerator:     (req) => realIp(req),
-  standardHeaders:  true,
-  legacyHeaders:    false,
-  message:          { error: "Too many requests", message: "Too many registration attempts. Try again in 1 hour." },
-});
-
-const loginLimiter = rateLimit({
-  windowMs:         15 * 60 * 1000,
-  max:              10,
-  keyGenerator:     (req) => realIp(req),
-  standardHeaders:  true,
-  legacyHeaders:    false,
-  message:          { error: "Too many requests", message: "Too many login attempts. Try again in 15 minutes." },
-});
-
-const otpLimiter = rateLimit({
-  windowMs:         10 * 60 * 1000,
-  max:              5,
-  keyGenerator:     (req) => String((req.body as any)?.userId ?? realIp(req)),
-  standardHeaders:  true,
-  legacyHeaders:    false,
-  message:          { error: "Too many requests", message: "Too many verification attempts. Try again in 10 minutes." },
-});
-
-const resendLimiter = rateLimit({
-  windowMs:         10 * 60 * 1000,
-  max:              3,
-  keyGenerator:     (req) => String((req.body as any)?.userId ?? realIp(req)),
-  standardHeaders:  true,
-  legacyHeaders:    false,
-  message:          { error: "Too many requests", message: "Too many resend attempts. Try again in 10 minutes." },
-});
-
-const resendVerificationLimiter = rateLimit({
-  windowMs:         60 * 60 * 1000, // 1 hour
-  max:              5,
-  keyGenerator:     (req) => realIp(req),
-  standardHeaders:  true,
-  legacyHeaders:    false,
-  message:          { error: "Too many requests", message: "Too many resend attempts. Try again in 1 hour." },
-});
-
-const forgotPasswordLimiter = rateLimit({
-  windowMs:         15 * 60 * 1000,
-  max:              5,
-  keyGenerator:     (req) => realIp(req),
-  standardHeaders:  true,
-  legacyHeaders:    false,
-  message:          { error: "Too many requests", message: "Too many password reset attempts. Try again in 15 minutes." },
-});
-
-const resetPasswordLimiter = rateLimit({
-  windowMs:         15 * 60 * 1000,
-  max:              5,
-  keyGenerator:     (req) => realIp(req),
-  standardHeaders:  true,
-  legacyHeaders:    false,
-  message:          { error: "Too many requests", message: "Too many reset attempts. Try again in 15 minutes." },
-});
 
 function generateOtp(): string {
   return String(randomInt(100000, 1000000));
@@ -125,7 +60,7 @@ async function issueOtp(userId: number, type: "register" | "login"): Promise<str
 // ─── POST /api/auth/register ──────────────────────────────────────────────────
 // Creates user account and sends an email verification link.
 // The user must click the link before they can perform any transactions.
-router.post("/register", registerLimiter, async (req, res) => {
+router.post("/register", async (req, res) => {
   try {
     const parsed = RegisterUserBody.safeParse(req.body);
     if (!parsed.success) {
@@ -262,7 +197,7 @@ router.get("/verify-email", async (req, res) => {
 
 // ─── POST /api/auth/resend-verification ──────────────────────────────────────
 // Sends a fresh verification email for an unverified account.
-router.post("/resend-verification", resendVerificationLimiter, async (req, res) => {
+router.post("/resend-verification", async (req, res) => {
   const { email } = req.body as { email?: unknown };
   if (typeof email !== "string" || !email.trim()) {
     res.status(400).json({ error: "Validation error", message: "email is required" });
@@ -296,7 +231,7 @@ router.post("/resend-verification", resendVerificationLimiter, async (req, res) 
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
 // Step 1: validates credentials, sends OTP.
 // Returns { requiresOtp: true, userId } — JWT issued after verify-otp.
-router.post("/login", loginLimiter, async (req, res) => {
+router.post("/login", async (req, res) => {
   try {
     const parsed = LoginUserBody.safeParse(req.body);
     if (!parsed.success) {
@@ -376,7 +311,7 @@ router.post("/login", loginLimiter, async (req, res) => {
 
 // ─── POST /api/auth/verify-otp ────────────────────────────────────────────────
 // Step 2 (both flows): verifies OTP, issues JWT.
-router.post("/verify-otp", otpLimiter, async (req, res) => {
+router.post("/verify-otp", async (req, res) => {
   try {
     const { userId, code, type } = req.body as { userId?: unknown; code?: unknown; type?: unknown };
 
@@ -457,7 +392,7 @@ router.post("/verify-otp", otpLimiter, async (req, res) => {
 
 // ─── POST /api/auth/resend-otp ────────────────────────────────────────────────
 // Resend OTP for a pending verification.
-router.post("/resend-otp", resendLimiter, async (req, res) => {
+router.post("/resend-otp", async (req, res) => {
   try {
     const { userId, type } = req.body as { userId?: unknown; type?: unknown };
 
@@ -485,7 +420,7 @@ router.post("/resend-otp", resendLimiter, async (req, res) => {
 // Sends a password-reset link. Always returns 200 to prevent email enumeration.
 // Token is a random UUID (128 bits), expires in 1 hour, single-use.
 // Only works for verified accounts — unverified accounts are not real users.
-router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
+router.post("/forgot-password", async (req, res) => {
   const { email, cfToken } = req.body as { email?: unknown; cfToken?: string };
   if (typeof email !== "string" || !email.trim()) {
     res.status(400).json({ error: "Validation error", message: "email is required" });
@@ -528,7 +463,7 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
 // ─── POST /api/auth/reset-password ───────────────────────────────────────────
 // Verifies the reset token and sets a new password.
 // Token is invalidated immediately on use regardless of success.
-router.post("/reset-password", resetPasswordLimiter, async (req, res) => {
+router.post("/reset-password", async (req, res) => {
   const { token, password } = req.body as { token?: unknown; password?: unknown };
 
   if (typeof token !== "string" || !token.trim()) {

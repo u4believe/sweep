@@ -15,23 +15,27 @@ function _parseSender(from: string): { name: string; email: string } {
 }
 
 // ─── Per-email cooldown ───────────────────────────────────────────────────────
-// Prevents the same address from receiving more than one email every 2 minutes,
-// regardless of which endpoint triggered it. Stops rotating-IP bot floods cold.
-const _emailCooldowns = new Map<string, number>();
-const EMAIL_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
+// Allows up to 2 emails per minute per address, regardless of which endpoint
+// or IP triggered it. Stops rotating-IP bot floods cold.
+const _emailTimestamps = new Map<string, number[]>();
+const EMAIL_WINDOW_MS      = 60 * 1000; // 1 minute rolling window
+const EMAIL_MAX_PER_WINDOW = 2;
 
 function _isOnCooldown(email: string): boolean {
-  const last = _emailCooldowns.get(email);
-  return !!last && Date.now() - last < EMAIL_COOLDOWN_MS;
+  const now  = Date.now();
+  const hits = (_emailTimestamps.get(email) ?? []).filter(t => now - t < EMAIL_WINDOW_MS);
+  return hits.length >= EMAIL_MAX_PER_WINDOW;
 }
 
 function _setCooldown(email: string): void {
-  _emailCooldowns.set(email, Date.now());
-  // Prune stale entries to avoid unbounded growth
-  if (_emailCooldowns.size > 1000) {
-    const cutoff = Date.now() - EMAIL_COOLDOWN_MS;
-    for (const [k, v] of _emailCooldowns) {
-      if (v < cutoff) _emailCooldowns.delete(k);
+  const now  = Date.now();
+  const hits = (_emailTimestamps.get(email) ?? []).filter(t => now - t < EMAIL_WINDOW_MS);
+  hits.push(now);
+  _emailTimestamps.set(email, hits);
+  // Prune fully-expired entries to avoid unbounded growth
+  if (_emailTimestamps.size > 1000) {
+    for (const [k, v] of _emailTimestamps) {
+      if (v.every(t => now - t >= EMAIL_WINDOW_MS)) _emailTimestamps.delete(k);
     }
   }
 }
