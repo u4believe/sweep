@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { Mail, ArrowRight, Loader2, CheckCircle2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { toast } from "sonner";
 import { AppLayout } from "@/components/layout";
 import { TurnstileWidget } from "@/components/TurnstileWidget";
 import { API_BASE } from "@/lib/api";
@@ -25,6 +26,7 @@ export default function ForgotPassword() {
         body: JSON.stringify({ email: email.toLowerCase().trim(), cfToken }),
       });
       setSubmitted(true);
+      toast.success(`Password reset link sent to ${email.toLowerCase().trim()}`, { style: { fontWeight: "bold", color: "#16a34a" } });
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {

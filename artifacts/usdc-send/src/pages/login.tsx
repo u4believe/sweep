@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { Mail, Lock, ArrowRight, Loader2, Send, ShieldCheck, RefreshCw, Info, CheckCircle2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AppLayout } from "@/components/layout";
 
@@ -57,6 +58,7 @@ export default function Login() {
       setUserId(json.userId);
       setSentEmail(email.toLowerCase().trim());
       setStep("otp");
+      toast.success(`Verification code sent to ${email.toLowerCase().trim()}`, { style: { fontWeight: "bold", color: "#16a34a" } });
     } catch (err: any) {
       setError(err.message ?? "Failed to log in. Please check your credentials.");
     } finally {
@@ -124,6 +126,7 @@ export default function Login() {
         body: JSON.stringify({ email: sentEmail }),
       });
       setResentVerification(true);
+      toast.success(`Verification email sent to ${sentEmail}`, { style: { fontWeight: "bold", color: "#16a34a" } });
     } finally {
       setIsPending(false);
     }
@@ -143,6 +146,7 @@ export default function Login() {
       if (!res.ok) throw new Error(json.message ?? "Failed to resend");
       setOtp(["", "", "", "", "", ""]);
       setTimeout(() => otpRefs.current[0]?.focus(), 50);
+      toast.success("A new verification code has been sent to your email", { style: { fontWeight: "bold", color: "#16a34a" } });
     } catch (err: any) {
       setError(err.message ?? "Failed to resend code.");
     } finally {

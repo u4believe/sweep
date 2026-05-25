@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { Mail, Lock, User, ArrowRight, Loader2, CheckCircle2, RefreshCw } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { toast } from "sonner";
 import { AppLayout } from "@/components/layout";
 import { TurnstileWidget } from "@/components/TurnstileWidget";
 
@@ -37,6 +38,7 @@ export default function Register() {
       if (!res.ok) throw new Error(json.message ?? "Registration failed");
       setSentEmail(json.email ?? email.toLowerCase().trim());
       setStep("check-email");
+      toast.success(`Verification email sent to ${json.email ?? email.toLowerCase().trim()}`, { style: { fontWeight: "bold", color: "#16a34a" } });
     } catch (err: any) {
       setError(err.message ?? "Failed to create account. Please try again.");
     } finally {
@@ -55,6 +57,7 @@ export default function Register() {
         body: JSON.stringify({ email: sentEmail }),
       });
       setResent(true);
+      toast.success(`Verification email resent to ${sentEmail}`, { style: { fontWeight: "bold", color: "#16a34a" } });
     } catch {
       setError("Failed to resend. Please try again.");
     } finally {
