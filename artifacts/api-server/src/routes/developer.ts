@@ -387,7 +387,7 @@ router.post("/forgot-password", async (req, res) => {
       .set({ resetToken: tokenHash, resetTokenExpiresAt: expiresAt })
       .where(eq(developersTable.id, developer.id));
 
-    const origin   = process.env.APP_ORIGIN ?? "http://localhost:5173";
+    const origin   = (process.env.FRONTEND_URL ?? process.env.APP_ORIGIN ?? "http://localhost:5173").replace(/\/$/, "");
     const resetUrl = `${origin}/developer/reset-password?token=${plaintext}`;
 
     await sendDevPasswordResetEmail(developer.email, resetUrl);
