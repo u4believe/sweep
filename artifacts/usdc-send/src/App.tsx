@@ -1,5 +1,6 @@
 import { Switch, Route, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Analytics } from "@vercel/analytics/react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -70,6 +71,7 @@ function App() {
         </WouterRouter>
         <Toaster />
         <SonnerToaster position="top-center" richColors closeButton />
+        <Analytics />
       </TooltipProvider>
     </QueryClientProvider>
   );
