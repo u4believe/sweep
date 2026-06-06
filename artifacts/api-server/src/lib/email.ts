@@ -1,11 +1,16 @@
 // ─── Email transport ──────────────────────────────────────────────────────────
-// Priority:
-//   1. Brevo API  — BREVO_API_KEY set → 300 emails/day free, recommended for prod
-//   2. SMTP       — SMTP_HOST + SMTP_USER + SMTP_PASS set → Gmail or any SMTP relay
-//   3. Resend API — RESEND_API_KEY set → HTTPS fallback when SMTP is not configured
-//   4. Console    — none set → emails are printed to stdout only (dev/CI fallback)
+// Provider priority with automatic fallback:
+//   1. Brevo API  — BREVO_API_KEY set
+//   2. SMTP       — SMTP_HOST + SMTP_USER + SMTP_PASS set
+//   3. Resend API — RESEND_API_KEY set
+//   4. Console    — none set → emails printed to stdout (dev/CI only)
+//
+// All configured providers are tried in order. If one fails (e.g. daily limit
+// exhausted, auth error, service outage) the next is attempted automatically.
 
 import nodemailer from "nodemailer";
+
+type MailOpts = { from?: string; to: string; subject: string; html: string };
 
 function _parseSender(from: string): { name: string; email: string } {
   const m = from.match(/^(.+?)\s*<([^>]+)>$/);
@@ -14,10 +19,8 @@ function _parseSender(from: string): { name: string; email: string } {
 }
 
 // ─── Per-email cooldown ───────────────────────────────────────────────────────
-// Allows up to 2 emails per minute per address, regardless of which endpoint
-// or IP triggered it. Stops rotating-IP bot floods cold.
 const _emailTimestamps = new Map<string, number[]>();
-const EMAIL_WINDOW_MS      = 60 * 1000; // 1 minute rolling window
+const EMAIL_WINDOW_MS      = 60 * 1000;
 const EMAIL_MAX_PER_WINDOW = 4;
 
 function _isOnCooldown(email: string): boolean {
@@ -31,7 +34,6 @@ function _setCooldown(email: string): void {
   const hits = (_emailTimestamps.get(email) ?? []).filter(t => now - t < EMAIL_WINDOW_MS);
   hits.push(now);
   _emailTimestamps.set(email, hits);
-  // Prune fully-expired entries to avoid unbounded growth
   if (_emailTimestamps.size > 1000) {
     for (const [k, v] of _emailTimestamps) {
       if (v.every(t => now - t >= EMAIL_WINDOW_MS)) _emailTimestamps.delete(k);
@@ -41,130 +43,135 @@ function _setCooldown(email: string): void {
 
 const FROM = process.env.BREVO_FROM ?? process.env.RESEND_FROM ?? process.env.SMTP_FROM ?? "SweepUSDC <no-reply@usdcsend.app>";
 
-// Returns a sendMail-compatible transporter.
-// Priority: Brevo API → SMTP (nodemailer) → Resend API → null (console-only).
+// ─── Individual provider send functions ───────────────────────────────────────
+
+async function _sendViaBrevo(opts: MailOpts, apiKey: string): Promise<void> {
+  const sender = _parseSender(opts.from ?? FROM);
+  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method:  "POST",
+    headers: { "api-key": apiKey, "Content-Type": "application/json" },
+    body:    JSON.stringify({
+      sender,
+      to:          [{ email: opts.to }],
+      subject:     opts.subject,
+      htmlContent: opts.html,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Brevo ${res.status}: ${body}`);
+  }
+}
+
+async function _sendViaResend(opts: MailOpts, apiKey: string): Promise<void> {
+  const res = await fetch("https://api.resend.com/emails", {
+    method:  "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body:    JSON.stringify({ from: opts.from ?? FROM, to: [opts.to], subject: opts.subject, html: opts.html }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Resend ${res.status}: ${body}`);
+  }
+}
+
+// ─── Transporter with automatic provider fallback ────────────────────────────
+// Builds an ordered list of every configured provider and tries each in turn.
+// A provider failure logs a warning and the next provider is attempted.
 function getTransporter() {
-  // ── 1. Brevo ──────────────────────────────────────────────────────────────
-  const brevoKey = process.env.BREVO_API_KEY;
-  if (brevoKey) {
-    return {
-      sendMail: async (opts: { from?: string; to: string; subject: string; html: string }) => {
-        const recipient = opts.to.toLowerCase();
-        if (_isOnCooldown(recipient)) {
-          console.log(`[email] Cooldown suppressed send to ${recipient}`);
-          return { id: "cooldown-suppressed" };
-        }
-        _setCooldown(recipient);
-        const sender = _parseSender(opts.from ?? FROM);
-        const res = await fetch("https://api.brevo.com/v3/smtp/email", {
-          method:  "POST",
-          headers: { "api-key": brevoKey, "Content-Type": "application/json" },
-          body:    JSON.stringify({
-            sender,
-            to:          [{ email: opts.to }],
-            subject:     opts.subject,
-            htmlContent: opts.html,
-          }),
-        });
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          throw new Error(`Brevo API error ${res.status}: ${body}`);
-        }
-        return res.json();
-      },
-    };
-  }
-
-  // ── 2. SMTP (nodemailer) ──────────────────────────────────────────────────
-  const smtpHost = process.env.SMTP_HOST;
-  const smtpUser = process.env.SMTP_USER;
-  const smtpPass = process.env.SMTP_PASS;
-  if (smtpHost && smtpUser && smtpPass) {
-    const port   = parseInt(process.env.SMTP_PORT ?? "587", 10);
-    const secure = port === 465; // 465 = implicit TLS; 587 = STARTTLS
-    // family:4 forces IPv4 — WSL2 cannot route IPv6 addresses returned by smtp.gmail.com
-    const transportOpts: any = { host: smtpHost, port, secure, auth: { user: smtpUser, pass: smtpPass }, family: 4 };
-    const nm = nodemailer.createTransport(transportOpts);
-    return {
-      sendMail: async (opts: { from?: string; to: string; subject: string; html: string }) => {
-        const recipient = opts.to.toLowerCase();
-        if (_isOnCooldown(recipient)) {
-          console.log(`[email] Cooldown suppressed send to ${recipient}`);
-          return { messageId: "cooldown-suppressed" };
-        }
-        _setCooldown(recipient);
-        return nm.sendMail({ from: opts.from ?? FROM, to: opts.to, subject: opts.subject, html: opts.html });
-      },
-    };
-  }
-
-  // ── 3. Resend API (HTTPS — fallback when SMTP is not configured) ──────────
+  const brevoKey  = process.env.BREVO_API_KEY;
   const resendKey = process.env.RESEND_API_KEY;
-  if (resendKey) {
-    return {
-      sendMail: async (opts: { from?: string; to: string; subject: string; html: string }) => {
-        const recipient = opts.to.toLowerCase();
-        if (_isOnCooldown(recipient)) {
-          console.log(`[email] Cooldown suppressed send to ${recipient}`);
-          return { id: "cooldown-suppressed" };
-        }
-        _setCooldown(recipient);
-        const res = await fetch("https://api.resend.com/emails", {
-          method:  "POST",
-          headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
-          body:    JSON.stringify({ from: opts.from ?? FROM, to: [opts.to], subject: opts.subject, html: opts.html }),
-        });
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          throw new Error(`Resend API error ${res.status}: ${body}`);
-        }
-        return res.json();
-      },
-    };
+  const smtpHost  = process.env.SMTP_HOST;
+  const smtpUser  = process.env.SMTP_USER;
+  const smtpPass  = process.env.SMTP_PASS;
+
+  type Provider = { name: string; send: (opts: MailOpts) => Promise<void> };
+  const providers: Provider[] = [];
+
+  if (brevoKey) {
+    providers.push({ name: "Brevo", send: (opts) => _sendViaBrevo(opts, brevoKey) });
   }
 
-  // ── 4. No transport configured ────────────────────────────────────────────
-  return null;
+  if (smtpHost && smtpUser && smtpPass) {
+    const port = parseInt(process.env.SMTP_PORT ?? "587", 10);
+    const nm   = nodemailer.createTransport({
+      host: smtpHost, port, secure: port === 465,
+      auth: { user: smtpUser, pass: smtpPass },
+      family: 4,
+    } as any);
+    providers.push({
+      name: "SMTP",
+      send: (opts) => nm.sendMail({ from: opts.from ?? FROM, to: opts.to, subject: opts.subject, html: opts.html }) as any,
+    });
+  }
+
+  if (resendKey) {
+    providers.push({ name: "Resend", send: (opts) => _sendViaResend(opts, resendKey) });
+  }
+
+  if (providers.length === 0) return null;
+
+  return {
+    sendMail: async (opts: MailOpts) => {
+      const recipient = opts.to.toLowerCase();
+      if (_isOnCooldown(recipient)) {
+        console.log(`[email] Cooldown suppressed send to ${recipient}`);
+        return;
+      }
+      _setCooldown(recipient);
+
+      let lastError: unknown;
+      for (const provider of providers) {
+        try {
+          await provider.send(opts);
+          if (providers.length > 1) {
+            console.info(`[email] Sent via ${provider.name} to ${recipient}`);
+          }
+          return;
+        } catch (err: any) {
+          lastError = err;
+          console.warn(`[email] ${provider.name} failed — ${err?.message ?? err}${providers.indexOf(provider) < providers.length - 1 ? " — trying next provider" : ""}`);
+        }
+      }
+      throw lastError;
+    },
+  };
 }
 
 export async function verifySmtp(): Promise<void> {
-  if (process.env.BREVO_API_KEY) {
-    console.info(`✅  Brevo ready — sending from "${FROM}"`);
-    return;
-  }
+  const active: string[] = [];
 
-  const smtpHost = process.env.SMTP_HOST;
-  const smtpUser = process.env.SMTP_USER;
-  const smtpPass = process.env.SMTP_PASS;
-  if (smtpHost && smtpUser && smtpPass) {
+  if (process.env.BREVO_API_KEY)  active.push("Brevo");
+
+  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     const port = parseInt(process.env.SMTP_PORT ?? "587", 10);
-    console.info(`✅  SMTP configured — ${smtpUser} via ${smtpHost}:${port} — sending from "${FROM}"`);
-
-    // Probe the connection in the background with a short timeout so startup
-    // isn't blocked by a 30-second SMTP handshake delay (common in WSL2).
-    const verifyOpts: any = { host: smtpHost, port, secure: port === 465, auth: { user: smtpUser, pass: smtpPass }, family: 4 };
-    const nm = nodemailer.createTransport(verifyOpts);
+    active.push(`SMTP (${process.env.SMTP_USER} via ${process.env.SMTP_HOST}:${port})`);
+    const nm = nodemailer.createTransport({
+      host: process.env.SMTP_HOST, port, secure: port === 465,
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+      family: 4,
+    } as any);
     Promise.race([
       nm.verify(),
-      new Promise<never>((_, rej) => setTimeout(() => rej(new Error("SMTP verify timed out after 8 s")), 8_000)),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timed out after 8 s")), 8_000)),
     ])
-      .then(() => console.info(`✅  SMTP connection verified — ${smtpUser}`))
-      .catch((err: any) => {
-        console.error(`❌  SMTP connection failed: ${err.message}`);
-        console.error(`   👉  Check SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS in .env`);
-      });
+      .then(() => console.info(`✅  SMTP connection verified — ${process.env.SMTP_USER}`))
+      .catch((err: any) => console.error(`❌  SMTP connection failed: ${err.message}`));
+  }
+
+  if (process.env.RESEND_API_KEY) active.push("Resend");
+
+  if (active.length === 0) {
+    console.warn("\n⚠️  No email transport configured — emails will NOT be delivered.");
+    console.warn("   Set BREVO_API_KEY, RESEND_API_KEY, or SMTP_HOST + SMTP_USER + SMTP_PASS\n");
     return;
   }
 
-  if (process.env.RESEND_API_KEY) {
-    console.info(`✅  Resend ready (SMTP not configured) — sending from "${FROM}"`);
-    return;
+  const chain = active.join(" → ");
+  console.info(`✅  Email providers ready: ${chain} — sending from "${FROM}"`);
+  if (active.length > 1) {
+    console.info(`   Fallback enabled: if a provider fails, the next in chain is tried automatically.`);
   }
-
-  console.warn("\n⚠️  No email transport configured — emails will NOT be delivered.");
-  console.warn("   Option A (prod):  BREVO_API_KEY + BREVO_FROM");
-  console.warn("   Option B (local): SMTP_HOST + SMTP_PORT + SMTP_USER + SMTP_PASS + SMTP_FROM");
-  console.warn("   Option C:         RESEND_API_KEY + RESEND_FROM\n");
 }
 
 export async function sendRecurringSuccessEmail(
