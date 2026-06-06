@@ -166,6 +166,9 @@ importers:
       '@circle-fin/developer-controlled-wallets':
         specifier: ^10.2.0
         version: 10.2.0
+      '@solana/web3.js':
+        specifier: 1.98.4
+        version: 1.98.4(bufferutil@4.1.0)(typescript@5.9.3)
       '@types/nodemailer':
         specifier: ^7.0.11
         version: 7.0.11
@@ -584,6 +587,7 @@ packages:
     resolution: {integrity: sha512-Q7PsrsRRdnIS70DoOLiVHc2lVkI2UiK/ABKhI7YeUhUq5iNRG7s/INMW0AtlQHo9C6hqfDKTXlIXQvZFh9Bu8g==}
     peerDependencies:
       '@solana/kit': ^5.0.0
+      '@solana/web3.js': ^1.98.2
 
   '@circle-fin/adapter-viem-v2@1.8.2':
     resolution: {integrity: sha512-UoxtFEVg+Oh00NOydRDuzZKBXrJrnJVva6hshQf2VXFwIvhk7sv3BIl4hhBHOM3/RFWYd1XdvusizlyYUj/Dfg==}
@@ -4169,6 +4173,7 @@ packages:
 
   uuid@8.3.2:
     resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   vary@1.1.2:
@@ -4476,7 +4481,7 @@ snapshots:
 
   '@circle-fin/adapter-circle-wallets@1.2.5(@solana/sysvars@5.5.1(typescript@5.9.3))(@tanstack/query-core@5.90.20)(@types/node@25.3.5)(@types/react@19.2.14)(bufferutil@4.1.0)(react@19.1.0)(typescript@5.9.3)(use-sync-external-store@1.6.0(react@19.1.0))(ws@8.20.0(bufferutil@4.1.0))':
     dependencies:
-      '@circle-fin/adapter-solana-kit': 1.4.4(@solana/kit@5.5.1(bufferutil@4.1.0)(typescript@5.9.3))(bufferutil@4.1.0)(typescript@5.9.3)
+      '@circle-fin/adapter-solana-kit': 1.4.4(@solana/kit@5.5.1(bufferutil@4.1.0)(typescript@5.9.3))(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3))(bufferutil@4.1.0)(typescript@5.9.3)
       '@circle-fin/adapter-viem-v2': 1.8.2(bufferutil@4.1.0)(typescript@5.9.3)(viem@2.48.0(bufferutil@4.1.0)(typescript@5.9.3)(zod@4.3.6))
       '@circle-fin/developer-controlled-wallets': 9.6.0
       '@circle-fin/smart-contract-platform': 9.6.0
@@ -4506,7 +4511,7 @@ snapshots:
       - utf-8-validate
       - ws
 
-  '@circle-fin/adapter-solana-kit@1.4.4(@solana/kit@5.5.1(bufferutil@4.1.0)(typescript@5.9.3))(bufferutil@4.1.0)(typescript@5.9.3)':
+  '@circle-fin/adapter-solana-kit@1.4.4(@solana/kit@5.5.1(bufferutil@4.1.0)(typescript@5.9.3))(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3))(bufferutil@4.1.0)(typescript@5.9.3)':
     dependencies:
       '@coral-xyz/anchor': 0.31.1(bufferutil@4.1.0)(typescript@5.9.3)
       '@ethersproject/address': 5.8.0

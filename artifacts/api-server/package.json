@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
-    "start": "NODE_OPTIONS='--max-old-space-size=4096' node ./dist/index.mjs",
+    "start": "NODE_OPTIONS='--max-old-space-size=4096' node --dns-result-order=ipv4first --env-file=.env ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -14,6 +14,7 @@
     "@circle-fin/adapter-viem-v2": "^1.8.2",
     "@circle-fin/app-kit": "^1.0.0",
     "@circle-fin/developer-controlled-wallets": "^10.2.0",
+    "@solana/web3.js": "1.98.4",
     "@types/nodemailer": "^7.0.11",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",

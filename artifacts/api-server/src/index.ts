@@ -2,15 +2,15 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { runStartupMigrations } from "@workspace/db";
 import { startDepositIndexer, stopDepositIndexer } from "./lib/depositIndexer.js";
-import { startBridgeWorker, stopBridgeWorker } from "./lib/bridgeWorker.js";
-import { startTreasuryConsolidationWorker, stopTreasuryConsolidationWorker } from "./lib/treasuryConsolidationWorker.js";
 import { startRecurringWorker, stopRecurringWorker } from "./lib/recurringWorker.js";
 import { startSubscriptionBillingWorker, stopSubscriptionBillingWorker } from "./lib/subscriptionBillingWorker.js";
 import { startWebhookDeliveryWorker, stopWebhookDeliveryWorker } from "./lib/webhookDelivery.js";
 import { startSweepReconciliationWorker, stopSweepReconciliationWorker } from "./lib/sweepReconciliationWorker.js";
 import { startWithdrawalReconciliationWorker, stopWithdrawalReconciliationWorker } from "./lib/withdrawalReconciliationWorker.js";
 import { startOtpCleanupWorker, stopOtpCleanupWorker } from "./lib/otpCleanupWorker.js";
-import { probeGasStationStatus } from "./lib/circle.js";
+import { startArcDepositWorker, stopArcDepositWorker } from "./lib/arcDepositWorker.js";
+import { probeGasStationStatus, ensureTreasurySolanaAtaSeeded } from "./lib/circle.js";
+import { provisionGatewayDelegate, GATEWAY_SUPPORTED_CHAINS } from "./lib/gatewaySweep.js";
 import { verifySmtp } from "./lib/email.js";
 
 // ─── Required environment variable validation ─────────────────────────────────
@@ -19,7 +19,6 @@ import { verifySmtp } from "./lib/email.js";
 const REQUIRED_ENV: { key: string; minLength?: number }[] = [
   { key: "DATABASE_URL" },
   { key: "JWT_SECRET",        minLength: 32 },
-  { key: "DEV_JWT_SECRET",    minLength: 32 },
   { key: "PASSPORT_SECRET",   minLength: 32 },
   { key: "CIRCLE_API_KEY" },
   { key: "CIRCLE_WEBHOOK_SECRET" },
@@ -69,15 +68,23 @@ app.listen(port, (err) => {
   runStartupMigrations()
     .then(() => {
       startDepositIndexer();
-      startBridgeWorker();
-      startTreasuryConsolidationWorker();
       startRecurringWorker();
       startSubscriptionBillingWorker();
       startWebhookDeliveryWorker();
       startSweepReconciliationWorker();
       startWithdrawalReconciliationWorker();
       startOtpCleanupWorker();
+      startArcDepositWorker();
       probeGasStationStatus().catch(() => {});
+      ensureTreasurySolanaAtaSeeded().catch(() => {});
+      // Auto-provision addDelegate for any Gateway-supported chain that hasn't
+      // been delegated yet (e.g. Arc Testnet added to GATEWAY_SUPPORTED_CHAINS).
+      // Idempotent — safe to re-run on every startup.
+      if (process.env.CIRCLE_GATEWAY_SIGNER_ADDRESS && GATEWAY_SUPPORTED_CHAINS.has("ARC-TESTNET")) {
+        provisionGatewayDelegate().catch((err: any) => {
+          logger.warn({ err: err?.message }, "[startup] Gateway delegate provisioning failed (non-fatal)");
+        });
+      }
     })
     .catch((migrationErr) => {
       logger.error({ err: migrationErr }, "[startup] Fatal migration error — shutting down");
@@ -90,14 +97,13 @@ app.listen(port, (err) => {
 function shutdown() {
   logger.info("Shutdown signal received");
   stopDepositIndexer();
-  stopBridgeWorker();
-  stopTreasuryConsolidationWorker();
   stopRecurringWorker();
   stopSubscriptionBillingWorker();
   stopWebhookDeliveryWorker();
   stopSweepReconciliationWorker();
   stopWithdrawalReconciliationWorker();
   stopOtpCleanupWorker();
+  stopArcDepositWorker();
   process.exit(0);
 }
 

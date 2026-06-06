@@ -1,53 +1,53 @@
 /**
  * Sweep reconciliation worker.
  *
- * Runs every 60 seconds and scans every user wallet on BASE-SEPOLIA and
- * ARC-TESTNET for unswept USDC — balances > 0 with no active bridge job.
+ * Runs every 60 seconds and checks every user wallet on ALL deposit-enabled
+ * chains for unswept USDC.
  *
- * This catches USDC that slipped through due to:
- *   - Circle DCW transactions that were accepted but failed on-chain
- *   - Bridge job insert failures (DB error after balance was credited)
- *   - Server restarts that reset in-memory balance tracking
- *   - Transfer event indexer RPC failures (Base Sepolia getLogs errors)
- *   - Any other scenario where the deposit indexer missed the on-chain event
+ * Arc Testnet is handled separately via on-chain eth_call (USDC.balanceOf)
+ * because Circle's wallet balance API doesn't index Arc USDC tokens.
  *
- * When unswept USDC is found with no deposit record, this worker credits
- * the user's balance AND creates the bridge job, so users are never left
- * with USDC swept away but no platform balance credited.
- *
- * Idempotency: the synthetic tx_hash `recon-{chain}-{address8}-{rawBalance}`
- * ensures the same (wallet, balance snapshot) never creates duplicate jobs
- * or credits — even if this worker races with the deposit indexer.
+ * Sweep-only: does NOT credit balances. Crediting is handled exclusively by
+ * the Circle API poll (depositIndexer) using real on-chain txHashes as the
+ * unique key. Crediting without a real txHash causes double-credits.
  */
 
-import { ethers } from "ethers";
-import { db, usersTable, depositsTable, bridgeJobsTable } from "@workspace/db";
-import { eq, sql, or } from "drizzle-orm";
+import { db, usersTable } from "@workspace/db";
+import { sql } from "drizzle-orm";
 import { logger } from "./logger.js";
-import { triggerBridgeWorker } from "./bridgeWorker.js";
-import {
-  SUPPORTED_SOURCE_CHAINS,
-  CHAIN_RPC_URLS,
-  CHAIN_USDC_ADDRESSES,
-  type SourceChain,
-} from "./circle.js";
+import { getWalletUsdcBalance } from "./circle.js";
+import { arcTestnetSweep, evmGatewaySweep, solanaSweep, getArcOnChainUsdcBalance } from "./gatewaySweep.js";
+import { DEPOSIT_CHAINS, type ChainKey } from "./gatewayConfig.js";
 
 const POLL_INTERVAL_MS  = 60_000;   // full scan every 60 s
 const MIN_SWEEP_USDC    = 0.000001; // ignore dust
-
-const ERC20_ABI = [
-  "function balanceOf(address) view returns (uint256)",
-  "function decimals() view returns (uint8)",
-];
 
 let _running = false;
 let _timer: ReturnType<typeof setTimeout> | null = null;
 let _busy   = false;
 
+// Cooldown: don't re-sweep the same (userId, chain, balanceSnapshot) within 10 minutes.
+// Prevents infinite retry floods when on-chain execution fails or is slow to confirm.
+const _recentSweeps    = new Map<string, number>();
+const SWEEP_COOLDOWN_MS = 10 * 60_000;
+
+function _isSweepOnCooldown(key: string): boolean {
+  const t = _recentSweeps.get(key);
+  return !!t && Date.now() - t < SWEEP_COOLDOWN_MS;
+}
+function _markSwept(key: string): void {
+  _recentSweeps.set(key, Date.now());
+  // Prune stale entries
+  if (_recentSweeps.size > 500) {
+    const cutoff = Date.now() - SWEEP_COOLDOWN_MS;
+    for (const [k, v] of _recentSweeps) if (v < cutoff) _recentSweeps.delete(k);
+  }
+}
+
 export function startSweepReconciliationWorker() {
   if (_running) return;
   _running = true;
-  logger.info("[sweep-reconciliation] Worker started");
+  logger.info("[sweep-reconciliation] Worker started (all deposit chains via Circle DCW)");
   void poll();
 }
 
@@ -73,10 +73,10 @@ async function poll() {
 }
 
 async function reconcile() {
-  // Load all users that have Circle wallets
   const users = await db
     .select({
       id:                  usersTable.id,
+      circleWalletId:      usersTable.circleWalletId,
       primaryAddress:      usersTable.circleWalletAddress,
       walletIdsJson:       (usersTable as any).circleWalletIdsJson,
       walletAddressesJson: (usersTable as any).circleWalletAddressesJson,
@@ -86,152 +86,126 @@ async function reconcile() {
 
   if (users.length === 0) return;
 
-  const platformAddress = (process.env.CIRCLE_PLATFORM_WALLET_ADDRESS ?? "").toLowerCase();
+  let sweepsTriggered = 0;
 
-  let jobsCreated = 0;
-
-  for (const chain of [...SUPPORTED_SOURCE_CHAINS] as SourceChain[]) {
-    const rpcUrl   = CHAIN_RPC_URLS[chain];
-    const usdcAddr = CHAIN_USDC_ADDRESSES[chain];
-
-    let provider: ethers.JsonRpcProvider;
-    let usdc: ethers.Contract;
-    let decimals: number;
-
-    try {
-      provider = new ethers.JsonRpcProvider(rpcUrl);
-      usdc     = new ethers.Contract(usdcAddr, ERC20_ABI, provider);
-      decimals = Number(await usdc.decimals());
-    } catch (e: any) {
-      logger.warn({ chain, err: e?.message }, "[sweep-reconciliation] Could not connect to RPC — skipping chain");
-      continue;
-    }
+  // ── Non-Arc chains: Circle wallet balance API ─────────────────────────────
+  // Arc Testnet is skipped here because Circle's API never returns Arc USDC
+  // token balances. Arc is handled separately below via on-chain eth_call.
+  for (const chainCfg of DEPOSIT_CHAINS) {
+    const chain = chainCfg.key as ChainKey;
+    if (chain === "ARC-TESTNET") continue;
 
     for (const user of users) {
-      // Resolve this user's wallet address for the current chain
-      let address: string | null = null;
-      if (user.walletAddressesJson) {
+      let walletId: string | undefined;
+      if (user.walletIdsJson) {
         try {
-          const map = JSON.parse(user.walletAddressesJson) as Record<string, string>;
-          address = map[chain]?.toLowerCase() ?? null;
+          const ids = JSON.parse(user.walletIdsJson) as Record<string, string>;
+          walletId = ids[chain];
         } catch { /* fall through */ }
       }
-      if (!address && user.primaryAddress) address = user.primaryAddress.toLowerCase();
-      if (!address) continue;
+      if (!walletId && chain === "BASE-SEPOLIA" && user.circleWalletId) {
+        walletId = user.circleWalletId;
+      }
+      if (!walletId) continue;
 
-      // Never watch the platform treasury — it's not a user wallet
-      if (address === platformAddress) continue;
-
-      // Check on-chain balance
-      let rawBalance: bigint;
+      let balance: number;
       try {
-        rawBalance = await usdc.balanceOf(address);
+        balance = parseFloat(await getWalletUsdcBalance(walletId));
       } catch (e: any) {
-        logger.debug({ chain, address, err: e?.message }, "[sweep-reconciliation] balanceOf failed");
+        logger.warn({ chain, walletId, err: e?.message }, "[sweep-reconciliation] Balance fetch failed");
         continue;
       }
 
-      if (rawBalance === 0n) continue;
-
-      const balance = parseFloat(ethers.formatUnits(rawBalance, decimals));
       if (balance < MIN_SWEEP_USDC) continue;
 
-      // Check whether an active bridge job already exists for this wallet+chain
-      const [activeJob] = await db
-        .select({ id: bridgeJobsTable.id })
-        .from(bridgeJobsTable)
-        .where(
-          sql`${bridgeJobsTable.sourceChain} = ${chain}
-          AND lower(${bridgeJobsTable.userWalletAddress}) = lower(${address})
-          AND ${bridgeJobsTable.status} IN ('pending', 'processing', 'retry')`
-        )
-        .limit(1);
+      let address: string | null = null;
+      if (user.walletAddressesJson) {
+        try {
+          const addrs = JSON.parse(user.walletAddressesJson) as Record<string, string>;
+          address = addrs[chain]?.toLowerCase() ?? null;
+        } catch { /* fall through */ }
+      }
+      if (!address && user.primaryAddress) address = user.primaryAddress.toLowerCase();
+      if (!address) address = walletId;
 
-      if (activeJob) continue; // already being swept
-
-      // No active job — check idempotency via synthetic hash
-      const reconHash = `recon-${chain}-${address.slice(2, 10)}-${rawBalance.toString()}`;
-      const [existing] = await db
-        .select({ id: bridgeJobsTable.id })
-        .from(bridgeJobsTable)
-        .where(eq(bridgeJobsTable.txHash, reconHash))
-        .limit(1);
-
-      if (existing) continue; // already handled this exact balance snapshot
-
-      // Check if the deposit was already handled (credited or pending).
-      // Three guards:
-      //   (a) exact reconHash match — this worker already ran for this snapshot
-      //   (b) any deposit credited in the last 3 minutes — covers the race where
-      //       the Circle poll or webhook ran just before this check
-      //   (c) any "pending" deposit — webhook fired early (PENDING state) and the
-      //       balance hasn't been credited yet, but the deposit IS being tracked.
-      //       Don't double-credit by running a reconciliation sweep on top of it.
-      const chainSource = chain === "ARC-TESTNET" ? "Arc Testnet USDC" : "Base Sepolia USDC";
-      const [existingDeposit] = await db
-        .select({ id: depositsTable.id })
-        .from(depositsTable)
-        .where(
-          or(
-            eq(depositsTable.txHash, reconHash),
-            sql`${depositsTable.userId} = ${user.id}
-                AND ${depositsTable.source} = ${chainSource}
-                AND ${depositsTable.creditedAt} > NOW() - INTERVAL '3 minutes'`,
-            sql`${depositsTable.userId} = ${user.id}
-                AND ${depositsTable.source} = ${chainSource}
-                AND ${depositsTable.status} = 'pending'`,
-          )
-        )
-        .limit(1);
+      const rawBalanceStr = Math.round(balance * 1_000_000).toString();
 
       logger.warn(
-        { userId: user.id, chain, address, balance, reconHash, alreadyCredited: !!existingDeposit },
-        "[sweep-reconciliation] Found unswept USDC — creating reconciliation bridge job",
+        { userId: user.id, chain, address, balance },
+        "[sweep-reconciliation] Found unswept USDC — sweep only, crediting handled by Circle poll",
       );
 
-      // Credit user balance only if not already credited for this exact snapshot.
-      // This fires when the deposit indexer missed the Transfer event (RPC failure, downtime, etc.)
-      if (!existingDeposit) {
-        await db.update(usersTable)
-          .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${balance}` })
-          .where(eq(usersTable.id, user.id));
+      const cooldownKey = `${user.id}:${chain}:${rawBalanceStr}`;
+      if (_isSweepOnCooldown(cooldownKey)) {
+        logger.debug({ userId: user.id, chain }, "[sweep-reconciliation] Sweep on cooldown — skipping retry");
+        continue;
+      }
+      _markSwept(cooldownKey);
 
-        await db.insert(depositsTable).values({
-          userId:           user.id,
-          amount:           balance.toFixed(6),
-          type:             "crypto",
-          source:           chain === "ARC-TESTNET" ? "Arc Testnet USDC" : "Base Sepolia USDC",
-          status:           "completed",
-          depositReference: reconHash,
-          txHash:           reconHash,
-          creditedAt:       new Date(),
-        });
-
-        logger.info(
-          { userId: user.id, chain, address, balance },
-          "[sweep-reconciliation] Credited missed deposit",
-        );
+      if (chainCfg.type === "evm") {
+        evmGatewaySweep({ userWalletId: walletId, chainKey: chain, amount: balance.toFixed(6) })
+          .then(() => logger.info({ userId: user.id, chain }, "[sweep-reconciliation] EVM sweep completed"))
+          .catch((err: any) => logger.error(
+            { err: err?.message, userId: user.id, chain },
+            "[sweep-reconciliation] EVM sweep failed",
+          ));
+      } else if (chain === "SOL-DEVNET") {
+        solanaSweep({ userSolanaWalletId: walletId, amount: balance.toFixed(6) })
+          .then(() => logger.info({ userId: user.id, chain }, "[sweep-reconciliation] Solana sweep completed"))
+          .catch((err: any) => logger.error(
+            { err: err?.message, userId: user.id, chain },
+            "[sweep-reconciliation] Solana sweep failed",
+          ));
       }
 
-      await db.insert(bridgeJobsTable).values({
-        userId:            user.id,
-        sourceChain:       chain,
-        userWalletAddress: address,
-        amount:            balance.toFixed(6),
-        txHash:            reconHash,
-        status:            "pending",
-      });
-
-      jobsCreated++;
+      sweepsTriggered++;
     }
   }
 
-  if (jobsCreated > 0) {
-    logger.info(
-      { jobsCreated },
-      "[sweep-reconciliation] Reconciliation complete — bridge jobs created",
+  // ── Arc Testnet: on-chain eth_call (USDC.balanceOf) ───────────────────────
+  // Sweep-only fallback. Crediting is handled by arcDepositWorker which queries
+  // Circle per-wallet. This section only sweeps any unswept on-chain USDC that
+  // the arc deposit worker may have missed or whose sweep failed.
+  for (const user of users) {
+    const arcAddress = user.primaryAddress;
+    if (!arcAddress) continue;
+
+    let arcWalletId: string | undefined;
+    if (user.walletIdsJson) {
+      try {
+        arcWalletId = (JSON.parse(user.walletIdsJson) as Record<string, string>)["ARC-TESTNET"];
+      } catch { /* fall through */ }
+    }
+    if (!arcWalletId) continue;
+
+    let balance: number;
+    try {
+      balance = await getArcOnChainUsdcBalance(arcAddress);
+    } catch { continue; }
+
+    if (balance < MIN_SWEEP_USDC) continue;
+
+    const cooldownKey = `${user.id}:ARC-TESTNET:${Math.round(balance * 1_000_000)}`;
+    if (_isSweepOnCooldown(cooldownKey)) continue;
+    _markSwept(cooldownKey);
+
+    logger.warn(
+      { userId: user.id, address: arcAddress, balance },
+      "[sweep-reconciliation] Found unswept Arc USDC — sweeping to treasury",
     );
-    triggerBridgeWorker();
+
+    arcTestnetSweep({ userWalletId: arcWalletId, userAddress: arcAddress, amount: balance.toFixed(6) })
+      .then(txId => logger.info({ userId: user.id, txId }, "[sweep-reconciliation] Arc sweep completed"))
+      .catch((err: any) => logger.error(
+        { err: err?.message, userId: user.id },
+        "[sweep-reconciliation] Arc sweep failed",
+      ));
+
+    sweepsTriggered++;
+  }
+
+  if (sweepsTriggered > 0) {
+    logger.info({ sweepsTriggered }, "[sweep-reconciliation] Reconciliation complete");
   } else {
     logger.debug("[sweep-reconciliation] All user wallets clean — no unswept USDC found");
   }

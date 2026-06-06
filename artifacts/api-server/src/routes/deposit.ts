@@ -9,10 +9,13 @@ import {
   createMockWireDeposit,
   getPlatformWalletAddress,
   SUPPORTED_SOURCE_CHAINS,
+  ensureAllChainWallets,
   type SourceChain,
 } from "../lib/circle.js";
 import { triggerBridgeWorker } from "../lib/bridgeWorker.js";
 import { sendDepositConfirmedEmail } from "../lib/email.js";
+import { evmGatewaySweep, solanaSweep, arcTestnetSweep } from "../lib/gatewaySweep.js";
+import { getChain, isDepositChain, type ChainKey } from "../lib/gatewayConfig.js";
 
 // Map Circle blockchain identifiers → human-readable display labels.
 // These labels must match what the frontend's explorer URL matcher expects.
@@ -65,8 +68,9 @@ router.get("/addresses", requireAuth, async (req, res) => {
     const user = (req as any).user;
     const [dbUser] = await db
       .select({
-        circleWalletAddress:      usersTable.circleWalletAddress,
+        circleWalletAddress:       usersTable.circleWalletAddress,
         circleWalletAddressesJson: (usersTable as any).circleWalletAddressesJson,
+        circleWalletIdsJson:       (usersTable as any).circleWalletIdsJson,
       })
       .from(usersTable)
       .where(eq(usersTable.id, user.userId))
@@ -79,16 +83,32 @@ router.get("/addresses", requireAuth, async (req, res) => {
 
     // Build per-chain address map
     let addresses: Record<string, string> = {};
+    let idsJson: string | null   = dbUser.circleWalletIdsJson ?? null;
+    let addrsJson: string | null = dbUser.circleWalletAddressesJson ?? null;
 
-    if ((dbUser as any).circleWalletAddressesJson) {
-      try {
-        addresses = JSON.parse((dbUser as any).circleWalletAddressesJson);
-      } catch { /* fall through */ }
+    if (addrsJson) {
+      try { addresses = JSON.parse(addrsJson); } catch { /* fall through */ }
     }
 
     // Backfill primary address for BASE-SEPOLIA if multi-chain map is missing
     if (Object.keys(addresses).length === 0 && dbUser.circleWalletAddress) {
       addresses = { "BASE-SEPOLIA": dbUser.circleWalletAddress };
+    }
+
+    // If any deposit-enabled chain is missing (e.g. SOL-DEVNET), provision it now.
+    const missingChain = SUPPORTED_SOURCE_CHAINS.find(c => !addresses[c]);
+    if (missingChain) {
+      try {
+        const backfill = await ensureAllChainWallets(idsJson, addrsJson);
+        if (backfill) {
+          addresses = JSON.parse(backfill.addrsJson);
+          await db.update(usersTable)
+            .set({ circleWalletIdsJson: backfill.idsJson, circleWalletAddressesJson: backfill.addrsJson } as any)
+            .where(eq(usersTable.id, user.userId));
+        }
+      } catch (e: any) {
+        req.log.warn({ err: e?.message }, "[deposit/addresses] Chain wallet backfill failed");
+      }
     }
 
     // Return in consistent order
@@ -388,7 +408,7 @@ router.post("/circle/webhook", async (req, res) => {
       if (existing) {
         if (existing.status === "pending" && isComplete) {
           // Promote: pending deposit → completed, now credit balance.
-          const promoted = await db.transaction(async (tx: typeof db) => {
+          const promoted = await db.transaction(async (tx: any) => {
             const updated = await tx.update(depositsTable)
               .set({
                 status:     "completed",
@@ -411,7 +431,7 @@ router.post("/circle/webhook", async (req, res) => {
           // Send confirmation email and enqueue bridge job (same as normal COMPLETE flow below).
           const [eu] = await db.select({ email: usersTable.email }).from(usersTable).where(eq(usersTable.id, dbUser.id)).limit(1);
           if (eu) sendDepositConfirmedEmail(eu.email, parseFloat(amount).toFixed(2), "crypto", sourceLabel).catch(() => {});
-          void enqueueBridgeJobIfNeeded(dbUser.id, sourceChain, destinationAddress, amount, txHash);
+          void triggerGatewaySweep(dbUser.id, resolvedChain ?? "", amount);
           return;
         }
 
@@ -424,14 +444,37 @@ router.post("/circle/webhook", async (req, res) => {
       }
     }
 
-    // Check by txHash — catches edge cases where the indexer inserted first.
+    // Check by txHash — catches the case where the indexer's CONFIRMED pass inserted
+    // a pending record first (depositRef may differ, so the check above missed it).
     if (txHash) {
       const [dupByHash] = await db
-        .select({ id: depositsTable.id })
+        .select({ id: depositsTable.id, status: depositsTable.status })
         .from(depositsTable)
         .where(eq(depositsTable.txHash, txHash))
         .limit(1);
-      if (dupByHash) return;
+      if (dupByHash) {
+        if (dupByHash.status === "pending" && isComplete) {
+          // Promote the pending record and credit balance — don't strand it.
+          const promoted = await db.transaction(async (tx: any) => {
+            const updated = await tx.update(depositsTable)
+              .set({ status: "completed", source: sourceLabel, creditedAt: new Date() })
+              .where(eq(depositsTable.id, dupByHash.id))
+              .returning({ id: depositsTable.id });
+            if (!updated.length) return false;
+            await tx.update(usersTable)
+              .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })
+              .where(eq(usersTable.id, dbUser.id));
+            return true;
+          });
+          if (promoted) {
+            console.info(`[circle/webhook] Promoted pending→completed by txHash match, user ${dbUser.id} from ${resolvedChain}`);
+            const [eu] = await db.select({ email: usersTable.email }).from(usersTable).where(eq(usersTable.id, dbUser.id)).limit(1);
+            if (eu) sendDepositConfirmedEmail(eu.email, parseFloat(amount).toFixed(2), "crypto", sourceLabel).catch(() => {});
+            void triggerGatewaySweep(dbUser.id, resolvedChain ?? "", amount);
+          }
+        }
+        return;
+      }
     }
 
     if (isPending && !isComplete) {
@@ -452,7 +495,7 @@ router.post("/circle/webhook", async (req, res) => {
     }
 
     // isComplete and no existing record — normal credit flow.
-    const credited = await db.transaction(async (tx: typeof db) => {
+    const credited = await db.transaction(async (tx: any) => {
       const [inserted] = await tx.insert(depositsTable).values({
         userId:           dbUser.id,
         amount:           parseFloat(amount).toFixed(6),
@@ -489,11 +532,92 @@ router.post("/circle/webhook", async (req, res) => {
       sendDepositConfirmedEmail(cryptoUserEmail.email, parseFloat(amount).toFixed(2), "crypto", sourceLabel).catch(() => {});
     }
 
-    void enqueueBridgeJobIfNeeded(dbUser.id, sourceChain, destinationAddress, amount, txHash);
+    if (!resolvedChain) {
+      console.warn(`[circle/webhook] Could not resolve chain for walletId=${walletId} — sweep skipped. Add blockchain field to webhook or ensure circleWalletIdsJson has the wallet ID.`);
+    }
+    void triggerGatewaySweep(dbUser.id, resolvedChain ?? "", amount);
   } catch (err: any) {
     console.error("[circle/webhook] Error:", err?.message);
   }
 });
+
+// ─── Helper: trigger Gateway sweep after a deposit is credited ────────────────
+// For EVM chains: approve() + depositFor() from user SCA via Gas Station.
+// For Solana: Step-1 SPL transfer + Step-2 treasury deposit() on Gateway program.
+// Skipped if the chain has no deposit support or if the wallet ID is unknown.
+async function triggerGatewaySweep(
+  userId:   number,
+  chainKey: string,
+  amount:   string,
+): Promise<void> {
+  console.info(`[deposit] triggerGatewaySweep: userId=${userId} chain=${chainKey || "(none)"} amount=${amount}`);
+  if (!chainKey || !isDepositChain(chainKey)) {
+    console.warn(`[deposit] triggerGatewaySweep: chain="${chainKey}" is not a deposit chain — sweep skipped`);
+    return;
+  }
+
+  const [user] = await db
+    .select({
+      circleWalletId:  usersTable.circleWalletId,
+      walletIdsJson:   (usersTable as any).circleWalletIdsJson,
+    })
+    .from(usersTable)
+    .where(eq(usersTable.id, userId))
+    .limit(1);
+
+  if (!user) return;
+
+  let walletId: string | undefined;
+
+  if (user.walletIdsJson) {
+    try {
+      const map = JSON.parse(user.walletIdsJson) as Record<string, string>;
+      walletId = map[chainKey];
+    } catch { /* ignore */ }
+  }
+
+  // Fall back to primary wallet ID (BASE-SEPOLIA)
+  if (!walletId && chainKey === "BASE-SEPOLIA" && user.circleWalletId) {
+    walletId = user.circleWalletId;
+  }
+
+  if (!walletId) {
+    console.warn(`[deposit] triggerGatewaySweep: no wallet ID for chain=${chainKey} user=${userId} — sweep skipped`);
+    return;
+  }
+
+  const chain = getChain(chainKey);
+
+  try {
+    if (chainKey === "ARC-TESTNET") {
+      // Arc USDC is a native precompile — must use createContractExecutionTransaction,
+      // not createTransaction (which Circle processes as an off-chain internal ledger
+      // transfer that never lands on-chain and never reaches the Unified Balance).
+      await arcTestnetSweep({ userWalletId: walletId, amount });
+      console.info(`[deposit] Arc sweep submitted: user=${userId}`);
+    } else if (chain.type === "evm") {
+      const { approveTxId, depositForTxId } = await evmGatewaySweep({
+        userWalletId: walletId,
+        chainKey:     chainKey as ChainKey,
+        amount,
+      });
+      console.info(
+        `[deposit] Gateway sweep submitted: approve=${approveTxId} depositFor=${depositForTxId} user=${userId} chain=${chainKey}`,
+      );
+    } else if (chainKey === "SOL-DEVNET") {
+      // solanaSweep runs Step-1 (SPL transfer) then polls until confirmed,
+      // then fires Step-2 (treasury → Gateway program deposit()).
+      await solanaSweep({ userSolanaWalletId: walletId, amount });
+      console.info(`[deposit] Solana full sweep completed: user=${userId}`);
+    }
+  } catch (err: any) {
+    // Log but don't throw — the user was already credited; reconciliation workers
+    // will catch any USDC left on the user SCA.
+    console.error(
+      `[deposit] triggerGatewaySweep failed: chain=${chainKey} user=${userId} err=${err?.message}`,
+    );
+  }
+}
 
 // ─── Helper: enqueue bridge job (idempotent) ──────────────────────────────────
 async function enqueueBridgeJobIfNeeded(

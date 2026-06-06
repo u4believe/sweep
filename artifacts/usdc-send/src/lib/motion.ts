@@ -12,11 +12,6 @@ export const fadeUp: Variants = {
   show: { opacity: 1, y: 0, transition: easeOut },
 };
 
-export const fadeDown: Variants = {
-  hidden: { opacity: 0, y: -16 },
-  show: { opacity: 1, y: 0, transition: easeOut },
-};
-
 export const fadeIn: Variants = {
   hidden: { opacity: 0 },
   show: { opacity: 1, transition: { duration: 0.4 } },
@@ -25,11 +20,6 @@ export const fadeIn: Variants = {
 export const scaleIn: Variants = {
   hidden: { opacity: 0, scale: 0.93 },
   show: { opacity: 1, scale: 1, transition: springGentle },
-};
-
-export const slideLeft: Variants = {
-  hidden: { opacity: 0, x: -32 },
-  show: { opacity: 1, x: 0, transition: easeOut },
 };
 
 export const slideRight: Variants = {
@@ -48,13 +38,6 @@ export const staggerContainer = (stagger = 0.1, delayStart = 0): Variants => ({
     },
   },
 });
-
-// ── Page-level transition (used with AnimatePresence in App.tsx) ───────────────
-export const pageTransition: Variants = {
-  hidden: { opacity: 0, y: 12 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: "easeOut" } },
-  exit: { opacity: 0, y: -8, transition: { duration: 0.25, ease: "easeIn" } },
-};
 
 // ── Error/shake animation ──────────────────────────────────────────────────────
 export const shake: Variants = {

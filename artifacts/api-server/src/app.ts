@@ -16,6 +16,19 @@ const app: Express = express();
 // rate-limiters see the real client IP from X-Forwarded-For.
 app.set("trust proxy", 1);
 
+// ─── HTTP → HTTPS redirect ────────────────────────────────────────────────────
+// In production, redirect any plain HTTP request to HTTPS.
+// Works with Cloudflare and Railway which forward the original protocol in
+// X-Forwarded-Proto (Express exposes it as req.protocol when trust proxy=1).
+if (process.env.NODE_ENV === "production") {
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.protocol !== "https") {
+      return res.redirect(301, `https://${req.headers.host}${req.url}`);
+    }
+    next();
+  });
+}
+
 // ─── Security headers (helmet) ───────────────────────────────────────────────
 // Sets: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection,
 // Strict-Transport-Security (HSTS), Referrer-Policy, and more.

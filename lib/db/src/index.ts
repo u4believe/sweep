@@ -10,7 +10,9 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Cap at 8 to stay under PgBouncer's pool_size:15 and leave headroom for
+// other clients (migrations, admin tools) sharing the same PgBouncer pool.
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 8 });
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";
@@ -28,6 +30,9 @@ export async function runStartupMigrations(): Promise<void> {
 
       CREATE UNIQUE INDEX IF NOT EXISTS deposits_deposit_reference_unique
         ON deposits(deposit_reference) WHERE deposit_reference IS NOT NULL;
+
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS login_attempts integer NOT NULL DEFAULT 0;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until timestamp;
     `);
     console.info("[db-migration] Unique indexes verified on deposits table.");
   } catch (err: any) {

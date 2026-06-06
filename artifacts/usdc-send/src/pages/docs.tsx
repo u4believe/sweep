@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  ChevronRight, ChevronDown, Menu, X, ExternalLink,
+  ChevronRight, ChevronDown, Menu, X,
   Copy, Check, ArrowLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -50,20 +50,6 @@ const SECTIONS = [
     ],
   },
   {
-    id: "developer-api",
-    label: "Developer API",
-    children: [
-      { id: "api-overview",           label: "Overview" },
-      { id: "api-authentication",     label: "Authentication" },
-      { id: "api-keys",               label: "API Keys" },
-      { id: "checkout-api",           label: "Checkout Payments" },
-      { id: "plans-api",              label: "Subscription Plans" },
-      { id: "webhooks",               label: "Webhooks" },
-      { id: "confirmation-codes",     label: "Confirmation Codes" },
-      { id: "rate-limits",            label: "Rate Limits" },
-    ],
-  },
-  {
     id: "architecture",
     label: "Architecture",
     children: [
@@ -95,8 +81,6 @@ const SECTIONS = [
       { id: "ref-withdraw",           label: "Withdraw" },
       { id: "ref-recurring",          label: "Recurring" },
       { id: "ref-subscriptions",      label: "Subscriptions" },
-      { id: "ref-developer",          label: "Developer" },
-      { id: "ref-v1",                 label: "V1 (Merchant API)" },
     ],
   },
 ];
@@ -201,37 +185,6 @@ function InfoBox({ title, children, type = "info" }: { title?: string; children:
     <div className={cn("my-4 p-4 rounded-xl border text-sm leading-relaxed", styles[type])}>
       {title && <p className="font-semibold mb-1">{title}</p>}
       {children}
-    </div>
-  );
-}
-
-function PropTable({ rows }: { rows: { name: string; type: string; required?: boolean; description: string }[] }) {
-  return (
-    <div className="my-4 overflow-x-auto rounded-xl border border-border">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="bg-secondary/50 border-b border-border">
-            <th className="text-left px-4 py-2.5 font-semibold text-foreground">Parameter</th>
-            <th className="text-left px-4 py-2.5 font-semibold text-foreground">Type</th>
-            <th className="text-left px-4 py-2.5 font-semibold text-foreground">Required</th>
-            <th className="text-left px-4 py-2.5 font-semibold text-foreground">Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={r.name} className={cn("border-b border-border last:border-0", i % 2 === 0 ? "bg-white" : "bg-secondary/20")}>
-              <td className="px-4 py-2.5 font-mono text-[13px] text-violet-700">{r.name}</td>
-              <td className="px-4 py-2.5 font-mono text-[13px] text-blue-600">{r.type}</td>
-              <td className="px-4 py-2.5">
-                {r.required
-                  ? <Badge color="red">required</Badge>
-                  : <Badge color="gray">optional</Badge>}
-              </td>
-              <td className="px-4 py-2.5 text-muted-foreground">{r.description}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 }
@@ -402,15 +355,9 @@ export default function Docs() {
                 <strong className="text-foreground">Base Sepolia</strong> networks, with cross-chain bridging via
                 Circle's CCTP V2 protocol.
               </p>
-              <p className="text-muted-foreground leading-relaxed mb-4">
-                Sweep exposes a REST API that lets merchants embed one-time checkouts, recurring subscription
-                billing, and webhook notifications into their own applications using API keys — similar to Stripe.
-                End-users interact through a React dashboard to send, receive, fund, and withdraw USDC.
-              </p>
-              <div className="grid sm:grid-cols-3 gap-4 my-6">
+              <div className="grid sm:grid-cols-2 gap-4 my-6">
                 {[
                   { label: "User Platform",  desc: "Send, receive, and manage USDC from a dashboard" },
-                  { label: "Merchant API",   desc: "Embed payments into any app with an API key" },
                   { label: "Subscriptions",  desc: "Create and bill recurring plans on-chain" },
                 ].map((card) => (
                   <div key={card.label} className="p-4 rounded-xl border border-border bg-secondary/30">
@@ -673,194 +620,6 @@ Authorization: Bearer <passport_token>
               </SubSection>
             </Section>
 
-            {/* ── Developer API ── */}
-            <Section id="developer-api" title="Developer API">
-
-              <SubSection id="api-overview" title="Overview">
-                <p className="text-muted-foreground text-sm leading-relaxed mb-3">
-                  The Sweep Developer API lets you embed payments into your own application. Register
-                  at the Developer Portal to receive API keys. All API endpoints are prefixed with{" "}
-                  <code className="bg-secondary px-1.5 py-0.5 rounded text-xs">/v1/</code> and accept
-                  JSON request bodies. Responses are JSON.
-                </p>
-                <div className="p-4 rounded-xl border border-border bg-secondary/30 text-sm my-4">
-                  <p className="font-semibold text-foreground mb-2">Base URL</p>
-                  <code className="text-violet-700">https://workspaceapi-server-production-2c68.up.railway.app</code>
-                </div>
-              </SubSection>
-
-              <SubSection id="api-authentication" title="Authentication">
-                <p className="text-muted-foreground text-sm leading-relaxed mb-3">
-                  Authenticate API requests by passing your API key in the{" "}
-                  <code className="bg-secondary px-1.5 py-0.5 rounded text-xs">Authorization</code> header:
-                </p>
-                <CodeBlock language="bash">{`curl https://workspaceapi-server-production-2c68.up.railway.app/v1/plans \\
-  -H "Authorization: Bearer sweep_live_xxxxxxxxxxxxxxxx"`}</CodeBlock>
-                <InfoBox type="warning" title="Keep keys secret">
-                  API keys grant full access to your merchant account. Never expose them in client-side code
-                  or public repositories. Use environment variables on your server.
-                </InfoBox>
-              </SubSection>
-
-              <SubSection id="api-keys" title="API Keys">
-                <p className="text-muted-foreground text-sm leading-relaxed mb-3">
-                  When you register as a developer, two API keys are generated and shown <strong className="text-foreground">once</strong>:
-                </p>
-                <div className="grid sm:grid-cols-2 gap-3 my-4">
-                  <div className="p-3 rounded-xl border border-emerald-200 bg-emerald-50">
-                    <p className="font-semibold text-emerald-700 text-sm mb-1">Live Key</p>
-                    <code className="text-[11px] text-emerald-600">sweep_live_...</code>
-                    <p className="text-xs text-emerald-700 mt-1">Processes real on-chain transactions.</p>
-                  </div>
-                  <div className="p-3 rounded-xl border border-amber-200 bg-amber-50">
-                    <p className="font-semibold text-amber-700 text-sm mb-1">Test Key</p>
-                    <code className="text-[11px] text-amber-600">sweep_test_...</code>
-                    <p className="text-xs text-amber-700 mt-1">Sandbox mode — no real transfers occur.</p>
-                  </div>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Keys are stored as bcrypt hashes in the database. Lost keys must be regenerated from
-                  the Developer Dashboard — there is no recovery.
-                </p>
-              </SubSection>
-
-              <SubSection id="checkout-api" title="Checkout Payments">
-                <p className="text-muted-foreground text-sm leading-relaxed mb-3">
-                  Generate a checkout session for one-time payments. Share the returned URL with your customer.
-                </p>
-                <CodeBlock language="bash">{`POST /api/pay/checkout
-Authorization: Bearer sweep_live_xxxxxxxx
-Content-Type: application/json
-
-{
-  "amount": "29.99",
-  "currency": "USDC",
-  "description": "Annual license",
-  "successUrl": "https://yourapp.com/success",
-  "cancelUrl": "https://yourapp.com/cancel"
-}`}</CodeBlock>
-                <CodeBlock language="json">{`{
-  "checkoutUrl": "https://sweepusdc-testnet.xyz/pay/merchant_abc123",
-  "sessionId": "ses_abc123",
-  "expiresAt": "2025-06-01T12:00:00.000Z"
-}`}</CodeBlock>
-                <PropTable rows={[
-                  { name: "amount",      type: "string",  required: true,  description: "Payment amount as a decimal string e.g. \"29.99\"" },
-                  { name: "currency",    type: "string",  required: true,  description: "Always \"USDC\" for now" },
-                  { name: "description", type: "string",  required: false, description: "Shown on the checkout page" },
-                  { name: "successUrl",  type: "string",  required: false, description: "Redirect URL after successful payment" },
-                  { name: "cancelUrl",   type: "string",  required: false, description: "Redirect URL if user cancels" },
-                ]} />
-              </SubSection>
-
-              <SubSection id="plans-api" title="Subscription Plans">
-                <p className="text-muted-foreground text-sm leading-relaxed mb-3">
-                  Manage subscription plans via the V1 API. Plans are tied to your merchant account.
-                </p>
-                <div className="space-y-1">
-                  <Endpoint method="GET"    path="/v1/plans"        description="List all your subscription plans" />
-                  <Endpoint method="POST"   path="/v1/plans"        description="Create a new subscription plan" />
-                  <Endpoint method="PATCH"  path="/v1/plans/:id"    description="Update plan name, description, or trial days" />
-                  <Endpoint method="DELETE" path="/v1/plans/:id"    description="Archive a plan (existing subscribers continue)" />
-                  <Endpoint method="GET"    path="/v1/plans/:id/subscribers" description="List all subscribers on a plan" />
-                </div>
-              </SubSection>
-
-              <SubSection id="webhooks" title="Webhooks">
-                <p className="text-muted-foreground text-sm leading-relaxed mb-3">
-                  Register a HTTPS endpoint to receive real-time event notifications. Each delivery is
-                  signed with an HMAC-SHA256 signature using your webhook secret.
-                </p>
-                <CodeBlock language="bash">{`POST /v1/webhooks
-Authorization: Bearer sweep_live_xxxxxxxx
-
-{
-  "url": "https://yourapp.com/webhooks/sweep",
-  "events": ["payment.completed", "subscription.billed", "subscription.cancelled"]
-}`}</CodeBlock>
-                <p className="text-sm font-semibold text-foreground mt-4 mb-2">Verifying signatures</p>
-                <CodeBlock language="typescript">{`import crypto from "crypto";
-
-function verifyWebhook(payload: string, signature: string, secret: string): boolean {
-  const expected = crypto
-    .createHmac("sha256", secret)
-    .update(payload)
-    .digest("hex");
-  return crypto.timingSafeEqual(
-    Buffer.from(expected, "hex"),
-    Buffer.from(signature, "hex"),
-  );
-}`}</CodeBlock>
-                <p className="text-sm font-semibold text-foreground mt-4 mb-2">Event types</p>
-                <div className="space-y-1 text-sm">
-                  {[
-                    ["payment.completed",        "A checkout payment was successfully processed"],
-                    ["subscription.billed",      "A subscription renewal was charged"],
-                    ["subscription.cancelled",   "A subscription was cancelled by the user"],
-                    ["subscription.trial_ended", "A trial period expired and billing began"],
-                  ].map(([event, desc]) => (
-                    <div key={event} className="flex items-start gap-3 py-1.5 border-b border-border last:border-0">
-                      <code className="text-[12px] text-violet-700 shrink-0">{event}</code>
-                      <span className="text-muted-foreground">{desc}</span>
-                    </div>
-                  ))}
-                </div>
-                <InfoBox type="tip" title="Retry policy">
-                  Failed webhook deliveries are retried with exponential back-off: 1min, 5min, 30min, 2hr, 24hr.
-                  After 5 failures the delivery is marked permanently failed.
-                </InfoBox>
-              </SubSection>
-
-              <SubSection id="confirmation-codes" title="Confirmation Codes">
-                <p className="text-muted-foreground text-sm leading-relaxed mb-3">
-                  Confirmation codes let your application verify a user's identity before executing
-                  sensitive operations (e.g. large transfers, account changes). Request a code tied to
-                  a specific action, then verify the OTP the user receives by email.
-                </p>
-                <CodeBlock language="typescript">{`// 1. Request a confirmation code
-POST /api/subscriptions/confirmation-code/request-otp
-Authorization: Bearer <user_token>
-{ "action": "large-transfer", "amount": "1000.00" }
-
-// 2. Generate / exchange the verified code
-POST /api/subscriptions/confirmation-code/generate
-Authorization: Bearer <user_token>
-{ "otp": "847291", "action": "large-transfer" }
-→ { "confirmationCode": "CONF-XXXXXXXX" }`}</CodeBlock>
-              </SubSection>
-
-              <SubSection id="rate-limits" title="Rate Limits">
-                <p className="text-muted-foreground text-sm leading-relaxed mb-3">
-                  API endpoints are rate-limited per IP using express-rate-limit v8 with IPv6 normalisation.
-                </p>
-                <div className="overflow-x-auto rounded-xl border border-border my-3">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-secondary/50 border-b border-border">
-                        <th className="text-left px-4 py-2.5 font-semibold">Endpoint group</th>
-                        <th className="text-left px-4 py-2.5 font-semibold">Limit</th>
-                        <th className="text-left px-4 py-2.5 font-semibold">Window</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {[
-                        ["Login / Register",   "10 requests",  "15 minutes"],
-                        ["OTP verification",   "5 attempts",   "10 minutes"],
-                        ["Withdrawals",        "5 requests",   "1 hour"],
-                        ["General API",        "100 requests", "1 minute"],
-                      ].map(([group, limit, window]) => (
-                        <tr key={group}>
-                          <td className="px-4 py-2.5 text-foreground">{group}</td>
-                          <td className="px-4 py-2.5 text-muted-foreground">{limit}</td>
-                          <td className="px-4 py-2.5 text-muted-foreground">{window}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </SubSection>
-            </Section>
-
             {/* ── Architecture ── */}
             <Section id="architecture" title="Architecture">
 
@@ -968,7 +727,6 @@ await resend.emails.send({
               <SubSection id="auth-model" title="Auth Model">
                 <p className="text-muted-foreground text-sm leading-relaxed mb-3">
                   User sessions use short-lived JWTs signed with <code className="bg-secondary px-1.5 py-0.5 rounded text-xs">JWT_SECRET</code>.
-                  Developer API keys are stored as bcrypt hashes — the raw key is never persisted.
                   All passwords are hashed with bcrypt (10 rounds). OTP codes expire after 10 minutes
                   and are single-use.
                 </p>
@@ -1032,8 +790,7 @@ await resend.emails.send({
             <Section id="api-reference" title="API Reference">
               <InfoBox type="info">
                 All endpoints below require <code className="text-xs">Authorization: Bearer &lt;token&gt;</code> unless
-                marked <Badge color="gray">public</Badge>. User tokens come from the login OTP flow.
-                Developer API tokens are your API keys.
+                marked <Badge color="gray">public</Badge>. Tokens come from the login OTP flow.
               </InfoBox>
 
               <SubSection id="ref-auth" title="Auth Endpoints">
@@ -1082,36 +839,11 @@ await resend.emails.send({
                 <Endpoint method="POST"   path="/api/subscriptions/confirmation-code/generate"       description="Exchange OTP for a confirmation code" />
               </SubSection>
 
-              <SubSection id="ref-developer" title="Developer">
-                <Endpoint method="POST"   path="/api/developer/register"    description="Create a developer account" auth={false} />
-                <Endpoint method="POST"   path="/api/developer/login"       description="Developer login, receive JWT" auth={false} />
-                <Endpoint method="GET"    path="/api/developer/me"          description="Get developer profile" />
-                <Endpoint method="POST"   path="/api/developer/keys/regenerate" description="Regenerate API keys" />
-                <Endpoint method="POST"   path="/api/developer/forgot-password" description="Request password reset email" auth={false} />
-                <Endpoint method="POST"   path="/api/developer/reset-password"  description="Set a new password via reset token" auth={false} />
-              </SubSection>
-
-              <SubSection id="ref-v1" title="V1 (Merchant API)">
-                <Endpoint method="GET"    path="/v1/plans"                  description="List your subscription plans" />
-                <Endpoint method="POST"   path="/v1/plans"                  description="Create a subscription plan" />
-                <Endpoint method="PATCH"  path="/v1/plans/:id"              description="Update a plan" />
-                <Endpoint method="DELETE" path="/v1/plans/:id"              description="Archive a plan" />
-                <Endpoint method="GET"    path="/v1/plans/:id/subscribers"  description="List subscribers on a plan" />
-                <Endpoint method="GET"    path="/v1/subscriptions"          description="List all subscriptions to your plans" />
-                <Endpoint method="GET"    path="/v1/passport/verify"        description="Verify a Sweep Passport token" />
-                <Endpoint method="POST"   path="/v1/webhooks"               description="Register a webhook endpoint" />
-                <Endpoint method="GET"    path="/v1/webhooks"               description="List your webhook endpoints" />
-                <Endpoint method="DELETE" path="/v1/webhooks/:id"           description="Delete a webhook endpoint" />
-                <Endpoint method="GET"    path="/v1/payments"               description="List checkout payments" />
-              </SubSection>
             </Section>
 
             {/* Footer */}
-            <div className="border-t border-border pt-8 mt-8 flex items-center justify-between text-xs text-muted-foreground">
+            <div className="border-t border-border pt-8 mt-8 text-xs text-muted-foreground">
               <span>Sweep Docs — v1.0</span>
-              <Link href={`${BASE}/developer`} className="flex items-center gap-1 hover:text-foreground transition-colors">
-                Developer Portal <ExternalLink className="w-3 h-3" />
-              </Link>
             </div>
           </div>
         </main>

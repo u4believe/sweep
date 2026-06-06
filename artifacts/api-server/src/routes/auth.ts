@@ -4,7 +4,7 @@ import { db, usersTable, otpCodesTable, escrowsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
 import { generateToken, requireAuth } from "../lib/auth.js";
 import { hashEmail } from "../lib/escrow.js";
-import { createUserCircleWallet, ensureArcTestnetWallet } from "../lib/circle.js";
+import { createUserCircleWallet, ensureAllChainWallets } from "../lib/circle.js";
 import { sendOtpEmail, sendVerificationEmail, sendPasswordResetEmail } from "../lib/email.js";
 import { randomUUID, randomInt } from "node:crypto";
 import {
@@ -228,6 +228,9 @@ router.post("/resend-verification", async (req, res) => {
   }
 });
 
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCK_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
+
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
 // Step 1: validates credentials, sends OTP.
 // Returns { requiresOtp: true, userId } — JWT issued after verify-otp.
@@ -244,14 +247,52 @@ router.post("/login", async (req, res) => {
 
     const [user] = await db.select().from(usersTable).where(eq(usersTable.email, normalizedEmail)).limit(1);
     if (!user) {
-      res.status(401).json({ error: "Unauthorized", message: "Invalid email or password" });
+      res.status(401).json({ error: "Unauthorized", message: "Invalid credentials" });
+      return;
+    }
+
+    // ── Lockout check ─────────────────────────────────────────────────────────
+    const lockedUntil: Date | null = (user as any).lockedUntil ?? null;
+    if (lockedUntil && lockedUntil > new Date()) {
+      res.status(429).json({
+        error: "Account locked",
+        message: `Too many failed login attempts. Your account is locked until ${lockedUntil.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })} UTC.`,
+        lockedUntil: lockedUntil.toISOString(),
+      });
       return;
     }
 
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
-      res.status(401).json({ error: "Unauthorized", message: "Invalid email or password" });
+      const newAttempts = ((user as any).loginAttempts ?? 0) + 1;
+      if (newAttempts >= LOGIN_MAX_ATTEMPTS) {
+        const lockExpiry = new Date(Date.now() + LOGIN_LOCK_DURATION_MS);
+        await db.update(usersTable)
+          .set({ loginAttempts: 0, lockedUntil: lockExpiry } as any)
+          .where(eq(usersTable.id, user.id));
+        req.log.warn({ userId: user.id, ip: realIp(req) }, "[auth] Account locked after too many failed login attempts");
+        res.status(429).json({
+          error: "Account locked",
+          message: `Too many failed login attempts. Your account is locked until ${lockExpiry.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })} UTC.`,
+          lockedUntil: lockExpiry.toISOString(),
+        });
+      } else {
+        await db.update(usersTable)
+          .set({ loginAttempts: newAttempts } as any)
+          .where(eq(usersTable.id, user.id));
+          res.status(401).json({
+          error: "Unauthorized",
+          message: "Invalid credentials.",
+        });
+      }
       return;
+    }
+
+    // Reset failed attempt counter on successful password verification.
+    if ((user as any).loginAttempts > 0 || (user as any).lockedUntil) {
+      await db.update(usersTable)
+        .set({ loginAttempts: 0, lockedUntil: null } as any)
+        .where(eq(usersTable.id, user.id));
     }
 
     // Only fully-registered (verified) users may log in.
@@ -282,10 +323,10 @@ router.post("/login", async (req, res) => {
         }
       })();
     } else {
-      // Backfill Arc Testnet wallet if missing (existing users pre-dating dual-chain provisioning)
+      // Backfill wallets for any chains missing from circleWalletIdsJson
       (async () => {
         try {
-          const result = await ensureArcTestnetWallet(
+          const result = await ensureAllChainWallets(
             user.circleWalletIdsJson as string | null,
             (user as any).circleWalletAddressesJson as string | null,
           );
@@ -295,7 +336,7 @@ router.post("/login", async (req, res) => {
               .where(eq(usersTable.id, user.id));
           }
         } catch (e: any) {
-          console.warn(`[Circle] Arc wallet backfill failed for user ${user.id}:`, e?.message || e);
+          console.warn(`[Circle] Chain wallet backfill failed for user ${user.id}:`, e?.message || e);
         }
       })();
     }
@@ -536,10 +577,10 @@ router.get("/me", requireAuth, async (req, res) => {
         }
       })();
     } else {
-      // Backfill Arc Testnet wallet if missing (existing users pre-dating dual-chain provisioning)
+      // Backfill wallets for any chains missing from circleWalletIdsJson
       (async () => {
         try {
-          const result = await ensureArcTestnetWallet(
+          const result = await ensureAllChainWallets(
             dbUser.circleWalletIdsJson as string | null,
             (dbUser as any).circleWalletAddressesJson as string | null,
           );
@@ -549,7 +590,7 @@ router.get("/me", requireAuth, async (req, res) => {
               .where(eq(usersTable.id, dbUser.id));
           }
         } catch (e: any) {
-          console.warn(`[Circle] Arc wallet backfill failed for user ${dbUser.id}:`, e?.message || e);
+          console.warn(`[Circle] Chain wallet backfill failed for user ${dbUser.id}:`, e?.message || e);
         }
       })();
     }

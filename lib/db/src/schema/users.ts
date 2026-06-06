@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, decimal, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, decimal, boolean, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -45,6 +45,13 @@ export const usersTable = pgTable("users", {
   // Password reset — token is a UUID, single-use, expires in 1 hour.
   passwordResetToken:          text("password_reset_token"),
   passwordResetTokenExpiresAt: timestamp("password_reset_token_expires_at"),
+
+  // ── Login lockout ─────────────────────────────────────────────────────────
+  // Incremented on each failed login attempt; reset to 0 on success.
+  // When loginAttempts reaches 5, lockedUntil is set to now + 4 hours and
+  // loginAttempts is reset so the counter starts fresh after the ban expires.
+  loginAttempts: integer("login_attempts").notNull().default(0),
+  lockedUntil:   timestamp("locked_until"),
 });
 
 export const insertUserSchema = createInsertSchema(usersTable).omit({ id: true, createdAt: true, claimedBalance: true });

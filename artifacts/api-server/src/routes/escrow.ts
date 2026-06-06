@@ -206,6 +206,10 @@ router.post("/send/platform", requireAuth, requireEmailVerified, async (req, res
       res.status(400).json({ error: "Invalid amount", message: "Amount must be a positive number" });
       return;
     }
+    if (numAmount < 1) {
+      res.status(400).json({ error: "Invalid amount", message: "Minimum transfer amount is $1.00" });
+      return;
+    }
     if (numAmount > 1_000_000) {
       res.status(400).json({ error: "Invalid amount", message: "Amount exceeds the maximum single-transfer limit" });
       return;

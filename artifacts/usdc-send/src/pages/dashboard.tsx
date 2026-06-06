@@ -13,7 +13,6 @@ import {
   Clock,
   CheckCircle2,
   AlertCircle,
-  Building2,
   Loader2,
   ExternalLink,
   Copy,
@@ -68,28 +67,40 @@ import { AppLayout, Navbar } from "@/components/layout";
 import { fadeUp, scaleIn, staggerContainer, fadeIn } from "@/lib/motion";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
-// Block explorer URLs — keys are substrings matched against the network field
-const EXPLORER_BASE: Array<{ match: string; url: string }> = [
-  { match: "base sepolia",       url: "https://sepolia.basescan.org/tx/" },
-  { match: "ethereum sepolia",   url: "https://sepolia.etherscan.io/tx/" },
-  { match: "polygon amoy",       url: "https://amoy.polygonscan.com/tx/" },
-  { match: "arc",                url: "https://testnet.arcscan.app/tx/" },
-  { match: "arb-sepolia",        url: "https://sepolia.arbiscan.io/tx/" },
-  { match: "arbitrum sepolia",   url: "https://sepolia.arbiscan.io/tx/" },
-  { match: "avax-fuji",          url: "https://testnet.snowtrace.io/tx/" },
-  { match: "avalanche fuji",     url: "https://testnet.snowtrace.io/tx/" },
+// Block explorer TX-page prefixes, matched against the network/source field.
+// Ordered from most-specific to least-specific to avoid "arc" matching "arbitrum".
+const EXPLORER_BASE: Array<{ match: string; url: string; solana?: boolean }> = [
+  { match: "arb",              url: "https://sepolia.arbiscan.io/tx/" },
+  { match: "optimism",         url: "https://testnet-explorer.optimism.io/tx/" },
+  { match: "op-sepolia",       url: "https://testnet-explorer.optimism.io/tx/" },
+  { match: "polygon",          url: "https://amoy.polygonscan.com/tx/" },
+  { match: "matic",            url: "https://amoy.polygonscan.com/tx/" },
+  { match: "avalanche",        url: "https://testnet.avascan.info/blockchain/c/tx/" },
+  { match: "avax",             url: "https://testnet.avascan.info/blockchain/c/tx/" },
+  { match: "ethereum",         url: "https://sepolia.etherscan.io/tx/" },
+  { match: "eth-sepolia",      url: "https://sepolia.etherscan.io/tx/" },
+  { match: "unichain",         url: "https://unichain-sepolia.blockscout.com/tx/" },
+  { match: "hyperevm",         url: "https://testnet.hyperliquid.xyz/tx/" },
+  { match: "base",             url: "https://sepolia.basescan.org/tx/" },
+  { match: "arc",              url: "https://testnet.arcscan.app/tx/" },
+  { match: "solana",           url: "https://explorer.solana.com/tx/", solana: true },
+  { match: "sol-devnet",       url: "https://explorer.solana.com/tx/", solana: true },
 ];
 
-// Only show explorer links for real on-chain hashes (0x + 64 hex chars).
-// Circle transaction IDs are UUIDs and synthetic bsync-* hashes are not real hashes.
-const isOnChainHash = (h: string) => /^0x[0-9a-fA-F]{64}$/.test(h);
+// EVM: 0x + 64 hex chars.  Solana: base58, 87–88 chars (no 0x prefix).
+const isEvmHash    = (h: string) => /^0x[0-9a-fA-F]{64}$/.test(h);
+const isSolanaHash = (h: string) => /^[1-9A-HJ-NP-Za-km-z]{87,88}$/.test(h);
+const isOnChainHash = (h: string) => isEvmHash(h) || isSolanaHash(h);
 
 function getExplorerUrl(network: string, txHash: string): string | null {
   if (!txHash || !isOnChainHash(txHash)) return null;
-  // Normalize separators so "BASE-SEPOLIA USDC" matches the "base sepolia" entry.
   const lower = network.toLowerCase().replace(/[-_]/g, " ");
-  const entry = EXPLORER_BASE.find((e) => lower.includes(e.match));
-  return entry ? entry.url + txHash : null;
+  const entry  = EXPLORER_BASE.find((e) => lower.includes(e.match.replace(/-/g, " ")));
+  if (!entry) return null;
+  // Solana explorer needs ?cluster=devnet appended after the signature
+  return entry.solana
+    ? `${entry.url}${txHash}?cluster=devnet`
+    : `${entry.url}${txHash}`;
 }
 
 interface UnifiedTx {
@@ -605,29 +616,51 @@ export default function Dashboard() {
   const bal = balance as FullBalance | undefined;
 
   // Unified transaction history (deposits + withdrawals + escrow)
+  const [txPage, setTxPage] = useState(1);
   const { data: txHistory, error: txHistoryError, isError: isTxHistoryError, isLoading: isTxHistoryLoading } = useQuery({
-    queryKey: ["/api/user/history"],
+    queryKey: ["/api/user/history", txPage],
     enabled: !!user,
-    staleTime: 0,                   // always consider data stale — refetch eagerly
-    refetchInterval: 5_000,         // poll every 5 s (matches indexer cadence)
-    refetchOnWindowFocus: true,     // refresh instantly when user switches back to tab
+    staleTime: 0,
+    refetchInterval: 5_000,
+    refetchOnWindowFocus: true,
     refetchIntervalInBackground: false,
     queryFn: async () => {
-      const res = await fetch(`${API_BASE}/api/user/history`, {
+      const res = await fetch(`${API_BASE}/api/user/history?page=${txPage}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(`${res.status}: ${(body as any).message ?? res.statusText}`);
       }
-      const data = await res.json() as { transactions: UnifiedTx[]; total: number };
+      const data = await res.json() as { transactions: UnifiedTx[]; total: number; page: number; totalPages: number };
       return data;
     },
   });
 
   const [selectedTx, setSelectedTx] = useState<UnifiedTx | null>(null);
 
-  const invalidateHistory = () => queryClient.invalidateQueries({ queryKey: ["/api/user/history"] });
+  // Fetch all deposit addresses (EVM + Solana) for the address strip and panel.
+  const { data: depositAddressData } = useQuery({
+    queryKey: ["/api/deposit/addresses"],
+    enabled: !!user,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE}/api/deposit/addresses`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+      });
+      return res.ok ? (await res.json() as { addresses: Record<string, string> }) : { addresses: {} };
+    },
+  });
+  const depositAddresses = depositAddressData?.addresses ?? {};
+  // Pick the first available EVM address and the Solana address.
+  const evmAddress = depositAddresses["BASE-SEPOLIA"] ?? depositAddresses["ARC-TESTNET"] ??
+    Object.entries(depositAddresses).find(([k]) => k !== "SOL-DEVNET")?.[1];
+  const solanaAddress = depositAddresses["SOL-DEVNET"];
+
+  const invalidateHistory = () => {
+    setTxPage(1);
+    queryClient.invalidateQueries({ queryKey: ["/api/user/history"] });
+  };
 
   const withdrawCryptoMutation = useWithdrawCrypto({
     mutation: {
@@ -803,31 +836,41 @@ export default function Dashboard() {
                   </motion.div>
                 </div>
 
-                {/* Deposit address strip */}
-                {circleWallet && (
+                {/* Deposit address strip — EVM + Solana */}
+                {(evmAddress || solanaAddress) && (
                   <motion.div variants={fadeUp}
-                    className="glass-panel p-4 rounded-2xl flex items-center justify-between gap-4 bg-gradient-to-r from-violet-50/80 to-blue-50/80 border border-violet-100"
+                    className="glass-panel p-4 rounded-2xl space-y-3 bg-gradient-to-r from-violet-50/80 to-blue-50/80 border border-violet-100"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center shrink-0 shadow-lg shadow-violet-200">
-                        <ShieldCheck className="w-4 h-4 text-white" />
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center shrink-0 shadow shadow-violet-200">
+                        <ShieldCheck className="w-3.5 h-3.5 text-white" />
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-violet-700 mb-0.5 flex items-center gap-1.5">
-                          Deposit Address
-                          <span className="px-1.5 py-0.5 rounded-full bg-violet-100 text-[10px] font-bold text-violet-600">Circle Wallet</span>
-                        </p>
-                        <p className="font-mono text-xs text-muted-foreground truncate">{circleWallet}</p>
+                      <p className="text-xs font-semibold text-violet-700">Your Deposit Addresses</p>
+                    </div>
+
+                    {evmAddress && (
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-0.5">EVM Networks</p>
+                          <p className="font-mono text-xs text-foreground truncate">{evmAddress}</p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <CopyButton text={evmAddress} />
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <CopyButton text={circleWallet} />
-                      <a href={`https://sepolia.basescan.org/address/${circleWallet}`} target="_blank" rel="noopener noreferrer"
-                        className="p-1 rounded hover:bg-secondary transition-colors" title="View on Base Sepolia explorer"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" />
-                      </a>
-                    </div>
+                    )}
+
+                    {solanaAddress && (
+                      <div className="flex items-center justify-between gap-3 pt-2 border-t border-violet-100">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-0.5">Solana</p>
+                          <p className="font-mono text-xs text-foreground truncate">{solanaAddress}</p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <CopyButton text={solanaAddress} />
+                        </div>
+                      </div>
+                    )}
                   </motion.div>
                 )}
 
@@ -862,6 +905,7 @@ export default function Dashboard() {
                     ) : (
                       <motion.div variants={staggerContainer(0.06)} className="space-y-2">
                         {txHistory.transactions.map((tx) => {
+
                           const isIn = tx.direction === "in";
                           const isCrypto = tx.currency === "USDC";
                           const statusColor =
@@ -869,6 +913,8 @@ export default function Dashboard() {
                               ? "text-green-600"
                               : tx.status === "pending" || tx.status === "pending_transfer"
                               ? "text-amber-600"
+                              : tx.status === "failed" || tx.status === "cancelled"
+                              ? "text-red-600"
                               : "text-muted-foreground";
                           const explorerUrl = getExplorerUrl(tx.network, tx.txHash ?? "");
                           const label = isCrypto
@@ -890,7 +936,7 @@ export default function Dashboard() {
                                 <div className="min-w-0 flex-1">
                                   <div className="flex items-center gap-2">
                                     <p className="font-semibold text-foreground text-sm">{label}</p>
-                                    <span className="text-xs px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground">{tx.category === "withdrawal" && isCrypto ? "Arc Testnet" : tx.network}</span>
+                                    <span className="text-xs px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground">{tx.network}</span>
                                   </div>
                                   <p className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap mt-0.5">
                                     <span>{format(new Date(tx.createdAt), "MMM d, yyyy · h:mm a")}</span>
@@ -931,7 +977,7 @@ export default function Dashboard() {
                                               <CopyButton text={tx.txHash} />
                                             </div>
                                           )}
-                                          {explorerUrl && !(tx.category === "withdrawal" && isCrypto) && (
+                                          {explorerUrl && (
                                             <a href={explorerUrl} target="_blank" rel="noopener noreferrer"
                                               className="flex items-center gap-1 text-primary hover:underline mt-1"
                                               onClick={(e) => e.stopPropagation()}
@@ -955,6 +1001,28 @@ export default function Dashboard() {
                           );
                         })}
                       </motion.div>
+                    )}
+                    {/* Pagination controls */}
+                    {txHistory && txHistory.totalPages > 1 && (
+                      <div className="flex items-center justify-between pt-4 border-t border-border/50 mt-2">
+                        <button
+                          onClick={() => setTxPage(p => Math.max(1, p - 1))}
+                          disabled={txPage <= 1}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary/60 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <ChevronLeft className="w-4 h-4" /> Previous
+                        </button>
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          Page {txHistory.page} of {txHistory.totalPages}
+                        </span>
+                        <button
+                          onClick={() => setTxPage(p => Math.min(txHistory.totalPages, p + 1))}
+                          disabled={txPage >= txHistory.totalPages}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary/60 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        >
+                          Next <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 </motion.div>
@@ -1129,39 +1197,104 @@ export default function Dashboard() {
 
 // ─── Withdrawal sub-forms ─────────────────────────────────────────────────────
 
-const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
-const WITHDRAWAL_FEE = 0.10;
+const WITHDRAWAL_CHAINS = [
+  { key: "ARC-TESTNET",       label: "Arc",       type: "evm",    minWithdrawal: 1,  platformFee: 0.10 },
+  { key: "BASE-SEPOLIA",      label: "Base",      type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
+  { key: "ARB-SEPOLIA",       label: "Arbitrum",  type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
+  { key: "OP-SEPOLIA",        label: "Optimism",  type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
+  { key: "MATIC-AMOY",        label: "Polygon",   type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
+  { key: "AVAX-FUJI",         label: "Avalanche", type: "evm",    minWithdrawal: 5,  platformFee: 0.35 },
+  { key: "UNICHAIN-SEPOLIA",  label: "Unichain",  type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
+  { key: "HYPEREVM-TESTNET",  label: "HyperEVM",  type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
+  { key: "ETH-SEPOLIA",       label: "Ethereum",  type: "evm",    minWithdrawal: 20, platformFee: 2.75 },
+  { key: "SOL-DEVNET",        label: "Solana",    type: "solana", minWithdrawal: 5,  platformFee: 0.40 },
+] as const;
 
-function CryptoWithdrawalForm({ mutation, maxAmount, circleWalletAddress, hasTransactionPassword }: { mutation: any; maxAmount: string; circleWalletAddress?: string; hasTransactionPassword?: boolean }) {
+const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
+const SOL_ADDR_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+function CryptoWithdrawalForm({
+  mutation,
+  maxAmount,
+  circleWalletAddress,
+  hasTransactionPassword,
+}: {
+  mutation: any;
+  maxAmount: string;
+  circleWalletAddress?: string;
+  hasTransactionPassword?: boolean;
+}) {
+  const [selectedChain, setSelectedChain] = useState<typeof WITHDRAWAL_CHAINS[number] | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg,   setErrorMsg]   = useState<string | null>(null);
   const [txnPwd,     setTxnPwd]     = useState("");
+  const [networkOpen, setNetworkOpen] = useState(false);
+  const networkDropdownRef = useRef<HTMLDivElement>(null);
 
-  const schema = z.object({
-    walletAddress: z.string().regex(EVM_RE, "Invalid EVM address — must be 0x followed by 40 hex characters"),
-    amount: z
-      .string()
-      .refine((v) => Number(v) > 0, "Amount must be positive")
-      .refine(
-        (v) => Number(v) + WITHDRAWAL_FEE <= Number(maxAmount),
-        `Insufficient balance — you need amount + $${WITHDRAWAL_FEE.toFixed(2)} fee`,
-      ),
-  });
+  useEffect(() => {
+    if (!networkOpen) return;
+    function onClickOutside(e: MouseEvent) {
+      if (networkDropdownRef.current && !networkDropdownRef.current.contains(e.target as Node)) {
+        setNetworkOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [networkOpen]);
 
-  const { register, handleSubmit, formState: { errors }, reset, setValue, watch } = useForm({ resolver: zodResolver(schema) });
+  const { register, handleSubmit, formState: { errors }, reset, setValue, watch, setError, clearErrors } =
+    useForm<{ walletAddress: string; amount: string }>();
+
   const watchedAddr   = watch("walletAddress", "");
   const watchedAmount = watch("amount", "");
-  const addrValid     = EVM_RE.test(watchedAddr ?? "");
-  const addrDirty     = (watchedAddr ?? "").length > 0;
   const parsedAmount  = parseFloat(watchedAmount) || 0;
-  const totalAmount   = parsedAmount > 0 ? parsedAmount + WITHDRAWAL_FEE : 0;
+  const netAmount     = selectedChain && parsedAmount > selectedChain.platformFee ? parsedAmount - selectedChain.platformFee : 0;
+  const addrRe        = selectedChain?.type === "solana" ? SOL_ADDR_RE : EVM_ADDR_RE;
+  const addrDirty     = (watchedAddr ?? "").length > 0;
+  const addrValid     = addrRe.test(watchedAddr ?? "");
 
-  const onSubmit = async (data: any) => {
+  const onSubmit = async (data: { walletAddress: string; amount: string }) => {
     setSuccessMsg(null);
     setErrorMsg(null);
+
+    if (!selectedChain) {
+      setErrorMsg("Please select a destination network.");
+      return;
+    }
+
+    const gross = parseFloat(data.amount);
+
+    if (!addrRe.test(data.walletAddress)) {
+      setError("walletAddress", {
+        message: selectedChain.type === "evm"
+          ? "Invalid EVM address — must be 0x followed by 40 hex characters"
+          : "Invalid Solana address",
+      });
+      return;
+    }
+    if (isNaN(gross) || gross < selectedChain.minWithdrawal) {
+      setError("amount", { message: `Minimum withdrawal on ${selectedChain.label} is $${selectedChain.minWithdrawal.toFixed(2)}` });
+      return;
+    }
+    if (gross <= selectedChain.platformFee) {
+      setError("amount", { message: `Amount must exceed the $${selectedChain.platformFee.toFixed(2)} platform fee` });
+      return;
+    }
+    if (gross > parseFloat(maxAmount || "0")) {
+      setError("amount", { message: `Insufficient balance — you have $${parseFloat(maxAmount || "0").toFixed(2)}` });
+      return;
+    }
+
     try {
-      await mutation.mutateAsync({ data: { ...data, ...(hasTransactionPassword && txnPwd ? { transactionPassword: txnPwd } : {}) } });
-      setSuccessMsg(`Withdrawal of ${formatCurrency(data.amount)} USD initiated.`);
+      const payload: Record<string, string> = {
+        walletAddress: data.walletAddress,
+        amount:        gross.toFixed(2),
+        chainKey:      selectedChain.key,
+      };
+      if (hasTransactionPassword && txnPwd) payload.transactionPassword = txnPwd;
+
+      await mutation.mutateAsync({ data: payload });
+      setSuccessMsg(`Withdrawal of $${netAmount.toFixed(2)} USDC to ${selectedChain.label} submitted.`);
       setTxnPwd("");
       reset();
     } catch (e: any) {
@@ -1192,13 +1325,83 @@ function CryptoWithdrawalForm({ mutation, maxAmount, circleWalletAddress, hasTra
         {errorMsg && <InlineError message={errorMsg} />}
       </AnimatePresence>
 
+      {/* Chain selector */}
+      <motion.div variants={fadeUp}>
+        <label className="block text-sm font-medium text-foreground mb-2">Destination Network</label>
+        <div className="relative" ref={networkDropdownRef}>
+          <button
+            type="button"
+            onClick={() => setNetworkOpen(o => !o)}
+            className="w-full flex items-center justify-between gap-2 px-4 py-3 rounded-xl bg-white border-2 border-border hover:border-primary/50 focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all outline-none"
+          >
+            <span className={cn("text-sm", selectedChain ? "font-medium text-foreground" : "text-muted-foreground")}>
+              {selectedChain ? selectedChain.label : "Select blockchain"}
+            </span>
+            {networkOpen
+              ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" />
+              : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />
+            }
+          </button>
+
+          <AnimatePresence>
+            {networkOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: -6, scaleY: 0.96 }}
+                animate={{ opacity: 1, y: 0, scaleY: 1 }}
+                exit={{ opacity: 0, y: -6, scaleY: 0.96 }}
+                transition={{ duration: 0.13 }}
+                style={{ transformOrigin: "top" }}
+                className="absolute z-50 top-full mt-1.5 w-full bg-white border border-border rounded-xl shadow-lg overflow-hidden"
+              >
+                <div className="max-h-60 overflow-y-auto">
+                  {WITHDRAWAL_CHAINS.map((chain) => (
+                    <button
+                      key={chain.key}
+                      type="button"
+                      onClick={() => {
+                        setSelectedChain(chain);
+                        setNetworkOpen(false);
+                        clearErrors("walletAddress");
+                        setValue("walletAddress", "");
+                      }}
+                      className={cn(
+                        "w-full flex items-center justify-between px-4 py-2.5 text-sm transition-colors hover:bg-secondary/60",
+                        selectedChain?.key === chain.key
+                          ? "bg-primary/5 text-primary font-semibold"
+                          : "text-foreground",
+                      )}
+                    >
+                      <span>{chain.label}</span>
+                      <span className="text-xs text-muted-foreground">
+                        Min ${chain.minWithdrawal.toFixed(2)} · Fee ${chain.platformFee.toFixed(2)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {selectedChain && (
+          <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground px-0.5">
+            <span>Min: <strong className="text-foreground">${selectedChain.minWithdrawal.toFixed(2)}</strong></span>
+            <span className="text-border">•</span>
+            <span>Fee: <strong className="text-foreground">${selectedChain.platformFee.toFixed(2)}</strong></span>
+          </div>
+        )}
+      </motion.div>
+
+      {/* Address */}
       <motion.div variants={fadeUp}>
         <div className="flex items-center justify-between mb-2">
-          <label className="block text-sm font-medium text-foreground">Destination Wallet Address</label>
-          {circleWalletAddress && (
+          <label className="block text-sm font-medium text-foreground">
+            {selectedChain?.type === "solana" ? "Solana Wallet Address" : "EVM Wallet Address"}
+          </label>
+          {circleWalletAddress && selectedChain?.type === "evm" && (
             <button
               type="button"
-              onClick={() => setValue("walletAddress", circleWalletAddress, { shouldValidate: true })}
+              onClick={() => setValue("walletAddress", circleWalletAddress, { shouldValidate: false })}
               className="text-xs font-semibold text-violet-600 hover:text-violet-700 flex items-center gap-1 transition-colors"
             >
               <ShieldCheck className="w-3 h-3" />
@@ -1207,8 +1410,8 @@ function CryptoWithdrawalForm({ mutation, maxAmount, circleWalletAddress, hasTra
           )}
         </div>
         <input
-          {...register("walletAddress")}
-          placeholder="0x…"
+          {...register("walletAddress", { required: "Wallet address is required" })}
+          placeholder={selectedChain?.type === "solana" ? "Solana address (base58)…" : "0x…"}
           className={cn(
             "w-full px-4 py-3 rounded-xl bg-white border-2 border-border focus:ring-4 outline-none transition-all font-mono text-sm",
             errors.walletAddress
@@ -1227,16 +1430,17 @@ function CryptoWithdrawalForm({ mutation, maxAmount, circleWalletAddress, hasTra
             </motion.p>
           ) : addrDirty && addrValid ? (
             <motion.p key="ok" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-green-600 text-sm mt-1.5 flex items-center gap-1.5">
-              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Valid EVM address
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Valid {selectedChain?.type === "solana" ? "Solana" : "EVM"} address
             </motion.p>
           ) : addrDirty ? (
             <motion.p key="bad" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-amber-600 text-sm mt-1.5 flex items-center gap-1.5">
-              <AlertCircle className="w-3.5 h-3.5 shrink-0" /> Not a valid EVM address — must start with 0x and be 42 characters total
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" /> Not a valid {selectedChain?.type === "solana" ? "Solana" : "EVM"} address
             </motion.p>
           ) : null}
         </AnimatePresence>
       </motion.div>
 
+      {/* Amount */}
       <motion.div variants={fadeUp}>
         <label className="block text-sm font-medium text-foreground mb-2">
           Amount <span className="text-muted-foreground font-normal">(max {formatCurrency(maxAmount)})</span>
@@ -1244,44 +1448,39 @@ function CryptoWithdrawalForm({ mutation, maxAmount, circleWalletAddress, hasTra
         <div className="relative">
           <span className="absolute left-4 inset-y-0 flex items-center text-muted-foreground">$</span>
           <input
-            {...register("amount")}
-            placeholder="10.00"
+            {...register("amount", { required: "Amount is required" })}
+            placeholder={`${selectedChain?.minWithdrawal ?? 1}.00`}
             type="number"
             step="0.01"
-            className="w-full pl-8 pr-16 py-3 rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all"
+            min={selectedChain?.minWithdrawal ?? 1}
+            className="w-full pl-8 pr-20 py-3 rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all"
           />
-          <span className="absolute right-4 inset-y-0 flex items-center text-muted-foreground text-sm">USD</span>
+          <span className="absolute right-4 inset-y-0 flex items-center text-muted-foreground text-sm">USDC</span>
         </div>
         {errors.amount && <p className="text-destructive text-sm mt-1">{errors.amount.message as string}</p>}
-      </motion.div>
-
-      {/* Network notice */}
-      <motion.div variants={fadeUp} className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 text-xs">
-        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-        <span>Withdrawals are sent on the <strong>ARC Testnet</strong> network only.</span>
       </motion.div>
 
       {/* Fee breakdown */}
       <motion.div variants={fadeUp} className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 space-y-1.5 text-sm">
         <div className="flex items-center justify-between text-muted-foreground">
-          <span>Amount to receive</span>
-          <span className="font-medium text-foreground">{parsedAmount > 0 ? `$${parsedAmount.toFixed(2)}` : "—"} USDC</span>
+          <span>Platform fee{selectedChain ? ` (${selectedChain.label})` : ""}</span>
+          <span className="font-medium text-amber-700">−${(selectedChain?.platformFee ?? 0).toFixed(2)} USDC</span>
         </div>
         <div className="flex items-center justify-between text-muted-foreground">
-          <span>Transaction fee</span>
-          <span className="font-medium text-amber-700">${WITHDRAWAL_FEE.toFixed(2)} USDC</span>
+          <span>Deducted from balance</span>
+          <span className="font-medium text-foreground">{parsedAmount > 0 ? `$${parsedAmount.toFixed(2)}` : "—"} USDC</span>
         </div>
-        <div className="border-t border-amber-200 pt-1.5 flex items-center justify-between font-semibold text-foreground">
-          <span>Total deducted</span>
-          <span>{totalAmount > 0 ? `$${totalAmount.toFixed(2)}` : "—"} USDC</span>
+        <div className="border-t border-amber-200 pt-1.5 flex items-center justify-between font-bold text-base">
+          <span className="text-foreground">You receive</span>
+          <span className={netAmount > 0 ? "text-green-700" : "text-muted-foreground"}>
+            {netAmount > 0 ? `$${netAmount.toFixed(2)}` : "—"} USDC
+          </span>
         </div>
       </motion.div>
 
       {hasTransactionPassword && (
         <motion.div variants={fadeUp}>
-          <label className="block text-sm font-medium text-foreground mb-2">
-            Transaction Password
-          </label>
+          <label className="block text-sm font-medium text-foreground mb-2">Transaction Password</label>
           <input
             type="password"
             value={txnPwd}
@@ -1301,7 +1500,9 @@ function CryptoWithdrawalForm({ mutation, maxAmount, circleWalletAddress, hasTra
           whileTap={!mutation.isPending ? { scale: 0.98 } : {}}
           className="w-full bg-primary text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-primary/25 transition-shadow disabled:opacity-70 disabled:cursor-not-allowed"
         >
-          {mutation.isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : "Withdraw to Wallet"}
+          {mutation.isPending
+            ? <Loader2 className="w-5 h-5 animate-spin" />
+            : selectedChain ? `Withdraw to ${selectedChain.label}` : "Select a network"}
         </motion.button>
       </motion.div>
     </motion.form>
@@ -2874,19 +3075,71 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
 
 // ─── Chain metadata for deposit UI ───────────────────────────────────────────
 
-const CHAIN_META: Record<string, { label: string; color: string; badge: string }> = {
-  "BASE-SEPOLIA":  { label: "Base Sepolia",      color: "blue",   badge: "bg-blue-100 text-blue-700 border-blue-200" },
-  "ETH-SEPOLIA":   { label: "Ethereum Sepolia",  color: "indigo", badge: "bg-indigo-100 text-indigo-700 border-indigo-200" },
-  "MATIC-AMOY":    { label: "Polygon Amoy",      color: "violet", badge: "bg-violet-100 text-violet-700 border-violet-200" },
-  "ARB-SEPOLIA":   { label: "Arbitrum Sepolia",  color: "sky",    badge: "bg-sky-100 text-sky-700 border-sky-200" },
-  "AVAX-FUJI":     { label: "Avalanche Fuji",    color: "red",    badge: "bg-red-100 text-red-700 border-red-200" },
+const CHAIN_META: Record<string, { label: string; badge: string; isSolana?: boolean }> = {
+  "BASE-SEPOLIA":  { label: "Base Sepolia",     badge: "bg-blue-100 text-blue-700 border-blue-200" },
+  "ARC-TESTNET":   { label: "Arc Testnet",      badge: "bg-orange-100 text-orange-700 border-orange-200" },
+  "ARB-SEPOLIA":   { label: "Arbitrum Sepolia", badge: "bg-sky-100 text-sky-700 border-sky-200" },
+  "OP-SEPOLIA":    { label: "Optimism Sepolia", badge: "bg-red-100 text-red-700 border-red-200" },
+  "MATIC-AMOY":   { label: "Polygon Amoy",     badge: "bg-violet-100 text-violet-700 border-violet-200" },
+  "AVAX-FUJI":    { label: "Avalanche Fuji",   badge: "bg-orange-100 text-orange-700 border-orange-200" },
+  "SOL-DEVNET":    { label: "Solana",           badge: "bg-green-100 text-green-700 border-green-200", isSolana: true },
 };
 
+// All deposit-enabled networks in display order.
+const DEPOSIT_NETWORKS = [
+  "Arbitrum Sepolia", "Optimism Sepolia", "Polygon Amoy",
+  "Avalanche Fuji", "Solana (Devnet)",
+];
+
+interface AddressGroup {
+  id:       string;
+  address:  string;
+  chains:   string[];   // chain keys in this group
+  label:    string;     // tab label
+  badge:    string;     // tab badge class
+  isSolana: boolean;
+}
+
+function buildAddressGroups(addresses: Record<string, string>): AddressGroup[] {
+  // Group chains by their on-chain address
+  const addrToChains = new Map<string, string[]>();
+  const CHAIN_ORDER = [
+    "BASE-SEPOLIA", "ARC-TESTNET", "ARB-SEPOLIA", "OP-SEPOLIA",
+    "MATIC-AMOY", "AVAX-FUJI", "SOL-DEVNET",
+  ];
+  for (const chain of CHAIN_ORDER) {
+    if (!addresses[chain]) continue;
+    const addr = addresses[chain];
+    const existing = addrToChains.get(addr) ?? [];
+    existing.push(chain);
+    addrToChains.set(addr, existing);
+  }
+
+  const groups: AddressGroup[] = [];
+  for (const [address, chains] of addrToChains) {
+    const isSolana = chains.every((c) => CHAIN_META[c]?.isSolana);
+    let label: string;
+    let badge: string;
+    if (chains.length === 1) {
+      label = CHAIN_META[chains[0]]?.label ?? chains[0];
+      badge = CHAIN_META[chains[0]]?.badge ?? "bg-gray-100 text-gray-700 border-gray-200";
+    } else if (isSolana) {
+      label = "Solana";
+      badge = "bg-green-100 text-green-700 border-green-200";
+    } else {
+      label = "EVM Networks";
+      badge = "bg-blue-100 text-blue-700 border-blue-200";
+    }
+    groups.push({ id: address, address, chains, label, badge, isSolana });
+  }
+  return groups;
+}
+
 function CryptoDepositPanel() {
-  const [addresses, setAddresses] = useState<Record<string, string>>({});
-  const [loading,   setLoading]   = useState(true);
-  const [error,     setError]     = useState<string | null>(null);
-  const [activeChain, setActiveChain] = useState<string>("BASE-SEPOLIA");
+  const [addresses,    setAddresses]    = useState<Record<string, string>>({});
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState<string | null>(null);
+  const [activeGroup,  setActiveGroup]  = useState<string>("");
 
   useEffect(() => {
     const jwt = localStorage.getItem("token");
@@ -2897,15 +3150,17 @@ function CryptoDepositPanel() {
       .then((data) => {
         if (data.addresses && Object.keys(data.addresses).length > 0) {
           setAddresses(data.addresses);
-          setActiveChain(Object.keys(data.addresses)[0]);
         }
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
 
-  const chains = Object.keys(addresses);
-  const activeAddress = addresses[activeChain] ?? "";
+  const groups = buildAddressGroups(addresses);
+
+  // Default to first group once loaded
+  const activeId    = activeGroup || groups[0]?.id || "";
+  const activeGrp   = groups.find((g) => g.id === activeId) ?? groups[0];
 
   return (
     <motion.div
@@ -2918,8 +3173,7 @@ function CryptoDepositPanel() {
       <motion.div variants={fadeUp} className="flex items-start gap-3 px-4 py-3 rounded-xl bg-violet-50 border border-violet-200 text-violet-700 text-sm">
         <QrCode className="w-4 h-4 shrink-0 mt-0.5" />
         <span>
-          Send <strong>USDC</strong> on any supported network below. Your balance is
-          credited automatically.
+          Send <strong>USDC</strong> on any supported network below. Your balance is credited automatically.
         </span>
       </motion.div>
 
@@ -2937,59 +3191,64 @@ function CryptoDepositPanel() {
         </motion.div>
       )}
 
-      {!loading && !error && chains.length > 0 && (
+      {!loading && !error && groups.length > 0 && (
         <>
-          {/* Chain selector tabs */}
+          {/* Group selector tabs */}
           <motion.div variants={fadeUp} className="flex flex-wrap gap-2">
-            {chains.map((chain) => {
-              const meta = CHAIN_META[chain];
-              const isActive = chain === activeChain;
-              return (
-                <button
-                  key={chain}
-                  onClick={() => setActiveChain(chain)}
-                  className={cn(
-                    "px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all",
-                    isActive
-                      ? meta?.badge ?? "bg-gray-100 text-gray-700 border-gray-200"
-                      : "bg-white text-muted-foreground border-border hover:border-foreground/30",
-                  )}
-                >
-                  {meta?.label ?? chain}
-                </button>
-              );
-            })}
+            {groups.map((grp) => (
+              <button
+                key={grp.id}
+                onClick={() => setActiveGroup(grp.id)}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all",
+                  grp.id === activeId
+                    ? grp.badge
+                    : "bg-white text-muted-foreground border-border hover:border-foreground/30",
+                )}
+              >
+                {grp.label}
+              </button>
+            ))}
           </motion.div>
 
-          {/* Selected chain address */}
-          <motion.div variants={fadeUp} className="p-5 rounded-2xl bg-white border-2 border-border space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-medium text-muted-foreground">
-                Your USDC deposit address
-              </p>
-              <span className={cn(
-                "px-2 py-0.5 rounded-md text-xs font-semibold border",
-                CHAIN_META[activeChain]?.badge ?? "bg-gray-100 text-gray-700 border-gray-200",
-              )}>
-                {CHAIN_META[activeChain]?.label ?? activeChain}
-              </span>
-            </div>
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary">
-              <code className="flex-1 text-xs font-mono break-all text-foreground">{activeAddress}</code>
-              <CopyButton text={activeAddress} />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Only send <strong>USDC</strong> on <strong>Base Sepolia</strong> and <strong>Arc Testnet</strong>.
-              Sending other tokens or the wrong network may cause permanent loss of funds.
-            </p>
-            <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-violet-50 border border-violet-200">
-              <span className="text-violet-500 text-xs mt-0.5">ℹ</span>
-              <p className="text-xs text-violet-700">
-                <strong>Same address, all networks.</strong> Your deposit address is identical across Base Sepolia and Arc Testnet — you do not need a different address per chain.
-              </p>
-            </div>
-          </motion.div>
+          {activeGrp && (
+            <motion.div variants={fadeUp} className="p-5 rounded-2xl bg-white border-2 border-border space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-muted-foreground">Your USDC deposit address</p>
+                <span className={cn("px-2 py-0.5 rounded-md text-xs font-semibold border", activeGrp.badge)}>
+                  {activeGrp.label}
+                </span>
+              </div>
 
+              <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary">
+                <code className="flex-1 text-xs font-mono break-all text-foreground">{activeGrp.address}</code>
+                <CopyButton text={activeGrp.address} />
+              </div>
+
+              {/* Which networks this address covers */}
+              <div className="flex flex-wrap gap-1.5">
+                {activeGrp.chains.map((c) => (
+                  <span key={c} className={cn("px-2 py-0.5 text-[10px] font-semibold rounded-full border", CHAIN_META[c]?.badge ?? "bg-gray-100 text-gray-700 border-gray-200")}>
+                    {CHAIN_META[c]?.label ?? c}
+                  </span>
+                ))}
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Only send <strong>USDC</strong> to this address.
+                Sending other tokens or using an unsupported network may result in permanent loss of funds.
+              </p>
+
+              {/* Supported networks callout */}
+              <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-violet-50 border border-violet-200">
+                <span className="text-violet-500 text-xs mt-0.5">ℹ</span>
+                <div className="text-xs text-violet-700 space-y-1">
+                  <p className="font-semibold">Supported deposit networks</p>
+                  <p className="text-violet-600">{DEPOSIT_NETWORKS.join(" · ")}</p>
+                </div>
+              </div>
+            </motion.div>
+          )}
         </>
       )}
     </motion.div>

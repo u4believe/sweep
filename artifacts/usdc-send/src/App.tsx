@@ -11,9 +11,6 @@ import Login from "./pages/login";
 import Register from "./pages/register";
 import Dashboard from "./pages/dashboard";
 import Subscribe from "./pages/subscribe";
-import DeveloperPortal from "./pages/developer-portal";
-import DeveloperAuth from "./pages/developer-auth";
-import DeveloperDashboard from "./pages/developer-dashboard";
 import Pay from "./pages/pay";
 import Docs from "./pages/docs";
 import ForgotPassword from "./pages/forgot-password";
@@ -50,12 +47,8 @@ function Router() {
       <Route path="/register" component={Register} />
       <Route path="/subscribe/:merchantId" component={Subscribe} />
       <Route path="/pay/:merchantId" component={Pay} />
-      <Route path="/developer" component={DeveloperPortal} />
       <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/reset-password" component={ResetPassword} />
-      <Route path="/developer/login" component={DeveloperAuth} />
-      <Route path="/developer/reset-password" component={DeveloperAuth} />
-      <Route path="/developer/dashboard" component={DeveloperDashboard} />
       <Route path="/docs" component={Docs} />
       <Route component={NotFound} />
     </Switch>

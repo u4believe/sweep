@@ -21,34 +21,33 @@ router.get("/history", requireAuth, async (req, res) => {
     const user = (req as any).user;
     const emailHash = hashEmail(user.email);
 
+    const PAGE_SIZE = 10;
+    const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+
     const [deposits, withdrawals, sentEscrows, receivedEscrows] = await Promise.all([
       db
         .select()
         .from(depositsTable)
         .where(eq(depositsTable.userId, user.userId))
-        .orderBy(desc(depositsTable.createdAt))
-        .limit(100),
+        .orderBy(desc(depositsTable.createdAt)),
 
       db
         .select()
         .from(withdrawalsTable)
         .where(eq(withdrawalsTable.userId, user.userId))
-        .orderBy(desc(withdrawalsTable.createdAt))
-        .limit(100),
+        .orderBy(desc(withdrawalsTable.createdAt)),
 
       db
         .select()
         .from(escrowsTable)
         .where(eq(escrowsTable.senderAddress, user.email.toLowerCase()))
-        .orderBy(desc(escrowsTable.createdAt))
-        .limit(100),
+        .orderBy(desc(escrowsTable.createdAt)),
 
       db
         .select()
         .from(escrowsTable)
         .where(eq(escrowsTable.emailHash, emailHash))
-        .orderBy(desc(escrowsTable.createdAt))
-        .limit(100),
+        .orderBy(desc(escrowsTable.createdAt)),
     ]);
 
     // ── Resolve on-chain hashes for crypto deposits (fire-and-forget) ───────────
@@ -122,7 +121,9 @@ router.get("/history", requireAuth, async (req, res) => {
       direction:   "out" as const,
       amount:      w.amount,
       status:      w.status,
-      network:     w.type === "crypto" ? "Arc Testnet" : "Bank transfer",
+      network:     w.type === "crypto"
+                     ? (/\(([^)]+)\)$/.exec(w.destination ?? "")?.[1] ?? "Crypto")
+                     : "Bank transfer",
       txHash:      w.txHash ?? null,
       fromAddress: null,
       toAddress:   w.destination,
@@ -174,7 +175,13 @@ router.get("/history", requireAuth, async (req, res) => {
       ...receivedEntries,
     ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-    res.json({ transactions: all, total: all.length });
+    const total      = all.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const safePage   = Math.min(page, totalPages);
+    const start      = (safePage - 1) * PAGE_SIZE;
+    const paginated  = all.slice(start, start + PAGE_SIZE);
+
+    res.json({ transactions: paginated, total, page: safePage, totalPages });
   } catch (error: any) {
     req.log.error({ err: error }, "[user/history] Error");
     res.status(500).json({ error: "Internal server error", message: error.message });

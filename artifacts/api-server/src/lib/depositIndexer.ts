@@ -1,366 +1,306 @@
 /**
- * Multi-chain USDC deposit indexer.
+ * Universal USDC deposit indexer — Circle API poll.
  *
- * Polls ERC-20 Transfer events on BASE-SEPOLIA and ARC-TESTNET where `to`
- * matches a known user wallet address. On detection:
- *   1. Credits user's claimedBalance (idempotent via txHash).
- *   2. Enqueues a bridge_job so the USDC is automatically swept to the
- *      BASE-SEPOLIA platform treasury.
+ * Polls Circle's transaction API for all INBOUND COMPLETE transactions across
+ * all supported chains. On detection:
+ *   1. Credits user's claimedBalance (idempotent via depositReference).
+ *   2. Fires the agreed sweep flow: user wallet → platform treasury (transfer),
+ *      then treasury → Gateway Vault (depositFor).
  *
- * Circle webhook (deposit.ts) is the primary notification path. This indexer
+ * Circle webhook (deposit.ts) is the primary notification path. This poller
  * acts as a reliable fallback for any events the webhook misses.
+ *
+ * All chains are covered via a single poll — no chain-specific getLogs needed.
+ * Arc Testnet and Base Sepolia both require this API-poll approach because:
+ *   - Arc USDC precompile does not emit ERC-20 Transfer events.
+ *   - Base Sepolia public RPC returns -32602 on any getLogs call against USDC.
+ * Other chains (ARB, OP, MATIC, AVAX, SOL) are also detected here,
+ * providing a unified fallback for all deposit-enabled chains.
  */
 
-import { ethers }  from "ethers";
 import {
-  db, usersTable, depositsTable, indexerStateTable, bridgeJobsTable,
+  db, usersTable, depositsTable,
 } from "@workspace/db";
-import { eq, sql, isNull } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { logger } from "./logger.js";
-import {
-  SUPPORTED_SOURCE_CHAINS,
-  CHAIN_RPC_URLS,
-  CHAIN_USDC_ADDRESSES,
-  getDcwClient,
-  type SourceChain,
-} from "./circle.js";
-import { triggerBridgeWorker } from "./bridgeWorker.js";
-
-// Human-readable network labels for deposit records (used in history display + explorer URL matching).
-const CHAIN_LABELS: Record<string, string> = {
-  "BASE-SEPOLIA": "Base Sepolia USDC",
-  "ARC-TESTNET":  "Arc Testnet USDC",
-};
-
-// ─── Network configuration ────────────────────────────────────────────────────
-
-interface NetworkConfig {
-  chain:          SourceChain;
-  rpcUrl:         string;
-  usdcAddress:    string;
-  indexerStateId: number;  // unique row ID in indexer_state; must be ≥ 3
-}
-
-// indexerStateId 1 and 2 are reserved; chain IDs start at 3.
-const CHAIN_INDEXER_IDS: Record<SourceChain, number> = {
-  "BASE-SEPOLIA": 3,
-  "ARC-TESTNET":  4,
-};
-
-const NETWORKS: NetworkConfig[] = SUPPORTED_SOURCE_CHAINS.map((chain) => ({
-  chain,
-  rpcUrl:         CHAIN_RPC_URLS[chain],
-  usdcAddress:    CHAIN_USDC_ADDRESSES[chain],
-  indexerStateId: CHAIN_INDEXER_IDS[chain],
-}));
+import { getDcwClient } from "./circle.js";
+import { arcTestnetSweep, evmGatewaySweep, solanaSweep } from "./gatewaySweep.js";
+import { isDepositChain, getChain, type ChainKey } from "./gatewayConfig.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const POLL_INTERVAL_MS          = 3_000;   // 3s per chain
-const BLOCKS_PER_CHUNK          = 200;     // unfiltered getLogs can be large; keep chunks small
-const CATCHUP_BLOCKS_PER_CHUNK  = 500;     // reduced to keep per-chunk memory manageable
-const CHUNK_DELAY_MS            = 100;     // GC breathing room between chunks
-const CATCHUP_CHUNK_DELAY_MS    = 200;     // longer delay during catch-up to avoid OOM
-const CATCHUP_THRESHOLD         = 50_000;  // blocks behind before entering fast catch-up mode
-const LOOKBACK_BLOCKS           = 200_000; // ~4.6 days lookback on first run / after long downtime
-const ADDRESS_REFRESH_INTERVAL  = 1;       // refresh address map every poll ≈ 3 s
+const POLL_INTERVAL_MS = 3_000;  // 3 s between polls
+const PAGE_SIZE        = 50;
+const MAX_PAGES        = 20;     // guard against runaway pagination
 
-const ERC20_ABI = [
-  "event Transfer(address indexed from, address indexed to, uint256 value)",
-  "function decimals() view returns (uint8)",
-  "function balanceOf(address) view returns (uint256)",
-];
+// Human-readable labels for deposit records and UI display.
+const CHAIN_LABELS: Record<string, string> = {
+  "BASE-SEPOLIA":      "Base Sepolia USDC",
+  "ARC-TESTNET":       "Arc Testnet USDC",
+  "ARB-SEPOLIA":       "Arbitrum Sepolia USDC",
+  "OP-SEPOLIA":        "Optimism Sepolia USDC",
+  "MATIC-AMOY":        "Polygon Amoy USDC",
+  "AVAX-FUJI":         "Avalanche Fuji USDC",
+  "UNICHAIN-SEPOLIA":  "Unichain Sepolia USDC",
+  "HYPEREVM-TESTNET":  "HyperEVM Testnet USDC",
+  "SOL-DEVNET":        "Solana Devnet USDC",
+};
 
-// ─── Per-chain indexer ────────────────────────────────────────────────────────
+// ─── State ────────────────────────────────────────────────────────────────────
 
-class ChainIndexer {
-  private running  = false;
-  private timer: ReturnType<typeof setTimeout> | null = null;
+// Time cursor: initialise 24 h back so the first poll catches any deposits made
+// while the server was offline. Advanced to (now − 30 min) after each poll to
+// give slow-confirming chains (e.g. Base Sepolia, 5–15 min) a safety buffer.
+let _lastPollTime: string = new Date(Date.now() - 24 * 3_600_000).toISOString();
+let _running = false;
+let _timer:   ReturnType<typeof setTimeout> | null = null;
+let _busy     = false;
 
-  private provider: ethers.JsonRpcProvider | null = null;
-  private contract: ethers.Contract | null = null;
-  private decimals: number | null = null;
+// ─── Public API ───────────────────────────────────────────────────────────────
 
-  private addressMap: Map<string, number> = new Map(); // address (lower) → userId
-  private pollCount = 0;
+export function startDepositIndexer() {
+  if (_running) return;
+  _running = true;
+  logger.info("[usdc-indexer] Starting (Circle API poll — all chains)");
+  void _poll();
+}
 
-  // Circle API poll cursor for ARC-TESTNET.
-  // Initialised to 24 h ago so the first poll catches any deposits made while
-  // the server was offline.  Advanced by 2-minute-buffered slices on each poll.
-  private lastCirclePollTime: string = new Date(Date.now() - 24 * 3_600_000).toISOString();
+export function stopDepositIndexer() {
+  _running = false;
+  if (_timer) { clearTimeout(_timer); _timer = null; }
+  logger.info("[usdc-indexer] Stopped");
+}
 
-  constructor(private readonly cfg: NetworkConfig) {}
+// ─── Poll loop ────────────────────────────────────────────────────────────────
 
-  start() {
-    if (this.running) return;
-    this.running = true;
-    logger.info(`[usdc-indexer:${this.cfg.chain}] Starting`);
-    this.initProvider();
-    void this.poll();
+async function _poll() {
+  if (!_running || _busy) return;
+  _busy = true;
+  try {
+    await _runCircleTransactionPoll();
+  } catch (err: any) {
+    logger.error({ err: err?.message }, "[usdc-indexer] Poll error");
+  } finally {
+    _busy = false;
+  }
+  if (_running) {
+    _timer = setTimeout(() => void _poll(), POLL_INTERVAL_MS);
+  }
+}
+
+// ─── Circle API poll ──────────────────────────────────────────────────────────
+// Fetches all INBOUND COMPLETE transactions within the rolling time window.
+// Idempotency key: "circle-{circleId}" — matches the webhook path, preventing
+// double-credits when both fire for the same transaction.
+
+async function _runCircleTransactionPoll() {
+  const client = getDcwClient();
+  if (!client) {
+    logger.warn("[usdc-indexer] Circle DCW client unavailable — skipping poll");
+    return;
   }
 
-  stop() {
-    this.running = false;
-    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
-    this.provider = null;
-    this.contract = null;
-    logger.info(`[usdc-indexer:${this.cfg.chain}] Stopped`);
-  }
+  const from = _lastPollTime;
+  // 30-minute safety buffer: don't advance the cursor past (now − 30 min).
+  const next = new Date(Date.now() - 1_800_000).toISOString();
 
-  private initProvider() {
-    this.provider = new ethers.JsonRpcProvider(this.cfg.rpcUrl);
-    this.contract = new ethers.Contract(this.cfg.usdcAddress, ERC20_ABI, this.provider);
-  }
+  // Pass 1: CONFIRMED — insert pending records immediately for fast UI feedback.
+  // No balance credit; just lets the user see the deposit in history straight away.
+  await _fetchAndProcess(client, from, "CONFIRMED" as any, true);
 
-  private async getDecimals(): Promise<number> {
-    if (this.decimals !== null) return this.decimals;
-    this.decimals = Number(await this.contract!.decimals());
-    return this.decimals;
-  }
+  // Pass 2: COMPLETE — credit balance and mark as completed. Idempotent with Pass 1.
+  await _fetchAndProcess(client, from, "COMPLETE" as any, false);
 
-  private async getOrInitLastBlock(currentBlock: number): Promise<number> {
-    const [state] = await db
-      .select()
-      .from(indexerStateTable)
-      .where(eq(indexerStateTable.id, this.cfg.indexerStateId))
-      .limit(1);
+  // Arc-specific passes: global listTransactions may not reliably return Arc
+  // testnet transactions. Query again with blockchain=ARC-TESTNET to catch any
+  // that the global query missed. Processing is idempotent — duplicates are no-ops.
+  await _fetchAndProcess(client, from, "CONFIRMED" as any, true,  "ARC-TESTNET");
+  await _fetchAndProcess(client, from, "COMPLETE"  as any, false, "ARC-TESTNET");
 
-    if (state) {
-      const saved = Number(state.lastProcessedBlock);
-      const gap   = currentBlock - saved;
-      // Gap > CATCHUP_THRESHOLD means the server was offline for a long time.
-      // Crawling through tens of thousands of empty blocks exhausts heap.
-      // Fast-forward to recent history — Circle webhooks + balance sync cover
-      // any deposits made during the downtime.
-      if (gap > CATCHUP_THRESHOLD) {
-        const fastForwardTo = Math.max(0, currentBlock - LOOKBACK_BLOCKS);
-        // Only fast-forward if the candidate is ahead of where we already are.
-        // If saved > fastForwardTo (downtime < LOOKBACK_BLOCKS), continue from
-        // saved — no blocks skipped, no gap in coverage.
-        if (fastForwardTo > saved) {
-          logger.info(
-            { chain: this.cfg.chain, gap, saved, fastForwardTo },
-            `[usdc-indexer:${this.cfg.chain}] Gap too large — fast-forwarding lastBlock to avoid memory-intensive catch-up`,
-          );
-          await this.saveLastBlock(fastForwardTo);
-          return fastForwardTo;
-        }
-        logger.info(
-          { chain: this.cfg.chain, gap, saved },
-          `[usdc-indexer:${this.cfg.chain}] Gap large but within LOOKBACK window — continuing from saved block`,
-        );
-      }
-      return saved;
-    }
+  _lastPollTime = next;
+}
 
-    const startBlock = Math.max(0, currentBlock - LOOKBACK_BLOCKS);
-    await db.insert(indexerStateTable).values({
-      id:                 this.cfg.indexerStateId,
-      lastProcessedBlock: BigInt(startBlock),
-    });
-    logger.info(
-      { startBlock, chain: this.cfg.chain },
-      `[usdc-indexer:${this.cfg.chain}] First run — bootstrapping`,
-    );
-    return startBlock;
-  }
-
-  private async saveLastBlock(block: number) {
-    await db
-      .update(indexerStateTable)
-      .set({ lastProcessedBlock: BigInt(block), updatedAt: new Date() })
-      .where(eq(indexerStateTable.id, this.cfg.indexerStateId));
-  }
-
-  // Rebuild address → userId map from DB.
-  // Reads both circleWalletAddress (primary) and circleWalletAddressesJson (all chains).
-  // NEVER watches the platform treasury address — incoming transfers there are sweeps/mints,
-  // not user deposits. Watching it causes a feedback loop where every sweep is re-credited.
-  private async refreshAddressMap() {
-    const platformAddr = (process.env.CIRCLE_PLATFORM_WALLET_ADDRESS ?? "").toLowerCase();
-
-    const rows = await db
-      .select({
-        id:                  usersTable.id,
-        primaryAddr:         usersTable.circleWalletAddress,
-        walletAddressesJson: (usersTable as any).circleWalletAddressesJson,
-      })
-      .from(usersTable)
-      .where(sql`${usersTable.circleWalletAddress} is not null`);
-
-    this.addressMap = new Map();
-    for (const { id, primaryAddr, walletAddressesJson } of rows) {
-      let chainAddr: string | null = null;
-
-      if (walletAddressesJson) {
-        try {
-          const addrMap = JSON.parse(walletAddressesJson) as Record<string, string>;
-          chainAddr = addrMap[this.cfg.chain]?.toLowerCase() ?? null;
-        } catch { /* fall through */ }
-      }
-      if (!chainAddr && primaryAddr) chainAddr = primaryAddr.toLowerCase();
-      if (!chainAddr) continue;
-
-      // Skip platform treasury — deposits here are sweep results, not user deposits
-      if (platformAddr && chainAddr === platformAddr) continue;
-
-      this.addressMap.set(chainAddr, id);
-    }
-    logger.debug(
-      { chain: this.cfg.chain, watchedAddresses: this.addressMap.size },
-      `[usdc-indexer:${this.cfg.chain}] Address map refreshed`,
-    );
-  }
-
-  // Circle API transaction poll — runs ONLY from the BASE-SEPOLIA indexer instance.
-  //
-  // A single poll (no blockchain filter) fetches all INBOUND COMPLETE transactions
-  // across all chains. Running it once avoids races where two indexers see the same
-  // transaction and one credits it with the wrong source label.
-  //
-  // Arc Testnet: Arc USDC (0x3600 precompile) does NOT emit ERC-20 Transfer events,
-  //   so getLogs() returns nothing. This poll is the ONLY detection path for Arc.
-  //
-  // Base Sepolia: The public Base Sepolia RPC returns -32602 on ANY getLogs call.
-  //   This poll is the ONLY reliable path here too.
-  //
-  // Idempotency key: "circle-{circleId}" — matches the webhook, preventing
-  // double-credits when the webhook fires before the poll processes the same tx.
-  private async runCircleTransactionPoll() {
-    // Delegate entirely to the BASE-SEPOLIA instance so there is exactly one
-    // poll cursor and no risk of two indexers racing to credit the same deposit.
-    if (this.cfg.chain !== "BASE-SEPOLIA") return;
-
-    const client = getDcwClient();
-    if (!client) {
-      logger.warn(`[usdc-indexer:circle-poll] Circle DCW client unavailable — skipping`);
-      return;
-    }
-
-    // 30-minute safety buffer: advance the cursor to (now − 30 min) so that
-    // Base Sepolia deposits (which can take 5–15 min to confirm on-chain) are
-    // not missed. Circle's `from` filter is on createDate, so a deposit created
-    // at T but confirmed at T+10min would be skipped if the cursor has already
-    // moved past T. The extra lookback is cheap — idempotency checks prevent
-    // double-credits for already-processed deposits.
-    const from = this.lastCirclePollTime;
-    const next = new Date(Date.now() - 1_800_000).toISOString();
-
-    try {
-      // No blockchain filter — Circle's listTransactions does not reliably accept
-      // a blockchain enum for all chains. The userId lookup (walletId / address)
-      // acts as the chain-specific filter. tx.blockchain drives the source label.
-      //
-      // Paginate via pageAfter (Circle cursor-based pagination) so deposits are
-      // never missed when the 30-minute window contains more than 50 transactions.
-      const PAGE_SIZE = 50;
-      const MAX_PAGES = 20; // guard against runaway loops
-      let pageAfter: string | undefined = undefined;
-
-      for (let page = 0; page < MAX_PAGES; page++) {
-        const res = await client.listTransactions({
-          txType:   "INBOUND"  as any,
-          state:    "COMPLETE" as any,
+async function _fetchAndProcess(
+  client:     any,
+  from:       string,
+  state:      any,
+  pendingOnly: boolean,
+  blockchain?: string,
+) {
+  let pageAfter: string | undefined;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    let res: any;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        res = await client.listTransactions({
+          txType: "INBOUND" as any,
+          state,
           from,
           pageSize: PAGE_SIZE,
+          ...(blockchain ? { blockchain: blockchain as any } : {}),
           ...(pageAfter ? { pageAfter } : {}),
         } as any);
-
-        const txns: any[] = (res.data as any)?.data?.transactions
-                          ?? (res.data as any)?.transactions
-                          ?? [];
-
-        for (const tx of txns) {
-          const circleId:    string        = tx.id;
-          const txHash:      string | null = tx.txHash ?? null;
-          const walletId:    string | null = tx.walletId ?? null;
-          const destAddress: string        = (tx.destinationAddress ?? "").toLowerCase();
-          const amount:      string        = tx.amounts?.[0] ?? "0";
-          const txChain:     string | null = tx.blockchain ?? null;
-
-          if (!circleId || parseFloat(amount) <= 0) continue;
-
-          // Resolve the user from walletId (primary → JSON map) then address fallback.
-          let userId: number | undefined;
-
-          if (walletId) {
-            const [p] = await db.select({ id: usersTable.id }).from(usersTable)
-              .where(eq(usersTable.circleWalletId, walletId)).limit(1);
-            userId = p?.id;
-
-            if (!userId) {
-              const [j] = await db.select({ id: usersTable.id }).from(usersTable)
-                .where(sql`${(usersTable as any).circleWalletIdsJson} LIKE ${"%" + walletId + "%"}`).limit(1);
-              userId = j?.id;
-            }
-          }
-
-          if (!userId && destAddress) {
-            const [a] = await db.select({ id: usersTable.id }).from(usersTable)
-              .where(sql`lower(${usersTable.circleWalletAddress}) = ${destAddress}`).limit(1);
-            userId = a?.id;
-          }
-
-          if (!userId) {
-            logger.debug(
-              { circleId, walletId, destAddress, txChain },
-              `[usdc-indexer:circle-poll] No user for tx — skipping`,
-            );
-            continue;
-          }
-
-          logger.info(
-            { userId, amount, circleId, txHash, txChain },
-            `[usdc-indexer:circle-poll] Crediting ${parseFloat(amount).toFixed(6)} USDC (chain=${txChain})`,
-          );
-
-          await this.handleDeposit(
-            userId,
-            parseFloat(amount).toFixed(6),
-            txHash,
-            destAddress || walletId || "",
-            circleId,
-            txChain ?? undefined,
-          );
+        break;
+      } catch (e: any) {
+        const msg: string = e?.message ?? "";
+        const transient = msg.includes("bad record mac") || msg.includes("SSL") ||
+                          msg.includes("ssl") || e?.code === "ECONNRESET" || e?.code === "ETIMEDOUT";
+        if (transient && attempt < 2) {
+          await new Promise(r => setTimeout(r, 1_000 * (attempt + 1)));
+          continue;
         }
-
-        // Fewer results than a full page means this is the last page.
-        if (txns.length < PAGE_SIZE) break;
-        // Advance the cursor to the last transaction ID for the next page.
-        pageAfter = txns[txns.length - 1]?.id;
-        if (!pageAfter) break;
+        throw e;
       }
+    }
 
-      this.lastCirclePollTime = next;
-    } catch (e: any) {
-      logger.error(
-        { err: e?.message },
-        `[usdc-indexer:circle-poll] Circle API poll failed — check API key and connectivity`,
-      );
+    const txns: any[] = (res?.data as any)?.data?.transactions
+                      ?? (res?.data as any)?.transactions
+                      ?? [];
+
+    for (const tx of txns) {
+      await _processTx(tx, pendingOnly).catch((err: any) => {
+        logger.error(
+          { err: err?.message, txId: tx?.id },
+          "[usdc-indexer] Failed to process transaction — continuing",
+        );
+      });
+    }
+
+    if (txns.length < PAGE_SIZE) break;
+    pageAfter = txns[txns.length - 1]?.id;
+    if (!pageAfter) break;
+  }
+}
+
+// ─── Per-transaction processing ───────────────────────────────────────────────
+
+// Platform treasury addresses — transactions destined here are sweeps, not user deposits.
+const _TREASURY_ADDRESSES = new Set(
+  [
+    process.env.CIRCLE_PLATFORM_WALLET_ADDRESS,
+    process.env.CIRCLE_PLATFORM_WALLET_ADDRESS_ARC_TESTNET,
+    process.env.CIRCLE_PLATFORM_WALLET_ADDRESS_SOL,
+  ].filter(Boolean).map(a => a!.toLowerCase()),
+);
+
+async function _processTx(tx: any, pendingOnly = false) {
+  const circleId:    string        = tx.id;
+  const txHash:      string | null = tx.txHash ?? null;
+  const walletId:    string | null = tx.walletId ?? null;
+  const destAddress: string        = (tx.destinationAddress ?? "").toLowerCase();
+  const amount:      string        = tx.amounts?.[0] ?? "0";
+  const txChain:     string | null = tx.blockchain ?? null;
+
+  if (!circleId || parseFloat(amount) <= 0) return;
+
+  // Only include on-chain confirmed deposits (must have an actual tx hash).
+  if (!txHash) {
+    logger.debug({ circleId, txChain }, "[usdc-indexer] No txHash — skipping Circle-internal tx");
+    return;
+  }
+
+  // Skip sweep confirmations — USDC arriving at the treasury is not a user deposit.
+  if (destAddress && _TREASURY_ADDRESSES.has(destAddress)) {
+    logger.debug({ circleId, destAddress }, "[usdc-indexer] Destination is treasury — skipping sweep");
+    return;
+  }
+
+  // Resolve user by walletId (primary column, then JSON map) then address.
+  let userId: number | undefined;
+
+  if (walletId) {
+    const [byPrimary] = await db.select({ id: usersTable.id }).from(usersTable)
+      .where(eq(usersTable.circleWalletId, walletId)).limit(1);
+    userId = byPrimary?.id;
+
+    if (!userId) {
+      const [byJson] = await db.select({ id: usersTable.id }).from(usersTable)
+        .where(sql`${(usersTable as any).circleWalletIdsJson} LIKE ${"%" + walletId + "%"}`).limit(1);
+      userId = byJson?.id;
     }
   }
 
-  // circleId present for Circle-poll deposits; absent for getLogs Transfer-event deposits.
-  // txBlockchain is the chain reported by Circle (e.g. "BASE-SEPOLIA", "ARC-TESTNET").
-  // When provided it drives the source label; falls back to this.cfg.chain otherwise.
-  private async handleDeposit(userId: number, amount: string, txHash: string | null, toAddress: string, circleId?: string, txBlockchain?: string) {
-    const depositRef = circleId ? `circle-${circleId}` : (txHash ?? "");
+  if (!userId && destAddress) {
+    const [byAddr] = await db.select({ id: usersTable.id }).from(usersTable)
+      .where(sql`lower(${usersTable.circleWalletAddress}) = ${destAddress}`).limit(1);
+    userId = byAddr?.id;
+  }
 
-    // 1. Already credited by txHash — fast exit.
-    if (txHash) {
-      const [existingByHash] = await db
-        .select({ id: depositsTable.id })
-        .from(depositsTable)
-        .where(eq(depositsTable.txHash, txHash))
-        .limit(1);
-      if (existingByHash) {
-        logger.debug({ txHash, userId }, `[usdc-indexer:${this.cfg.chain}] Already credited by txHash — skipping`);
+  if (!userId) {
+    logger.debug(
+      { circleId, walletId, destAddress, txChain },
+      "[usdc-indexer] No user for tx — skipping",
+    );
+    return;
+  }
+
+  logger.debug(
+    { userId, circleId, txChain },
+    `[usdc-indexer] Processing inbound tx (chain=${txChain})`,
+  );
+
+  await _handleDeposit(
+    userId,
+    parseFloat(amount).toFixed(6),
+    txHash,
+    destAddress || walletId || "",
+    circleId,
+    txChain ?? undefined,
+    pendingOnly,
+  );
+}
+
+// ─── Deposit crediting + sweep trigger ────────────────────────────────────────
+// circleId is always present for Circle-poll deposits; txBlockchain is the chain
+// label reported by Circle (e.g. "BASE-SEPOLIA", "ARC-TESTNET").
+
+async function _handleDeposit(
+  userId:        number,
+  amount:        string,
+  txHash:        string | null,
+  _toAddress:    string,
+  circleId?:     string,
+  txBlockchain?: string,
+  pendingOnly:   boolean = false,
+) {
+  const depositRef = circleId ? `circle-${circleId}` : (txHash ?? "");
+
+  // 1. Check by txHash.
+  // promotedViaHash: true means we credited the balance here and must still
+  // reach step 4 to trigger the sweep — do NOT return early.
+  let promotedViaHash = false;
+  if (txHash) {
+    const [existingByHash] = await db
+      .select({ id: depositsTable.id, status: depositsTable.status })
+      .from(depositsTable)
+      .where(eq(depositsTable.txHash, txHash))
+      .limit(1);
+    if (existingByHash) {
+      if (existingByHash.status === "completed") {
+        logger.debug({ txHash, userId }, "[usdc-indexer] Already credited by txHash — skipping");
         return;
       }
+      if (pendingOnly) {
+        logger.debug({ txHash, userId }, "[usdc-indexer] Pending record exists (CONFIRMED pass) — skipping");
+        return;
+      }
+      // COMPLETE pass: promote the pending record directly by txHash.
+      await db.transaction(async (tx: any) => {
+        await tx.update(depositsTable)
+          .set({ status: "completed", txHash, creditedAt: new Date() })
+          .where(eq(depositsTable.id, existingByHash.id));
+        await tx.update(usersTable)
+          .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })
+          .where(eq(usersTable.id, userId));
+      });
+      logger.info({ txHash, userId, amount }, "[usdc-indexer] Promoted pending→completed directly by txHash");
+      promotedViaHash = true; // fall through to step 4 to trigger sweep
     }
+  }
 
-    // 2. Check by depositReference. The webhook may have already inserted a "pending"
-    //    record (before on-chain confirmation). Promote it to "completed" here.
+  // Steps 2 & 3 are skipped when step 1 already promoted the record.
+  if (!promotedViaHash) {
+    // 2. Check by depositReference.
     let skipInsert = false;
     if (depositRef) {
       const [existingByRef] = await db
@@ -370,9 +310,9 @@ class ChainIndexer {
         .limit(1);
 
       if (existingByRef) {
-        if (existingByRef.status === "pending") {
-          // Promote pending → completed and credit balance atomically.
-          await db.transaction(async (tx: typeof db) => {
+        if (!pendingOnly && existingByRef.status === "pending") {
+          // COMPLETE pass: promote pending → completed and credit balance.
+          await db.transaction(async (tx: any) => {
             await tx.update(depositsTable)
               .set({
                 status:     "completed",
@@ -386,30 +326,45 @@ class ChainIndexer {
           });
           logger.info(
             { txHash, depositRef, userId, amount },
-            `[usdc-indexer:${this.cfg.chain}] Promoted pending→completed, credited balance`,
+            "[usdc-indexer] Promoted pending→completed, credited balance",
           );
-          skipInsert = true; // skip new insert below, go straight to bridge job
+          skipInsert = true;
         } else {
-          // Already completed — patch txHash if missing.
+          // Already completed, or pending pass seeing an existing record — patch txHash if missing.
           if (!existingByRef.currentTxHash && txHash) {
             await db.update(depositsTable)
               .set({ txHash })
               .where(eq(depositsTable.id, existingByRef.id));
-            logger.info({ txHash, depositRef, userId }, `[usdc-indexer:${this.cfg.chain}] Patched missing txHash on existing deposit`);
+            logger.info({ txHash, depositRef, userId }, "[usdc-indexer] Patched missing txHash");
           }
           return;
         }
       }
     }
 
-    // 3. Not credited yet — insert and credit atomically (skipped after pending promotion).
+    // 3. New record.
     if (!skipInsert) {
-      const credited = await db.transaction(async (tx: typeof db) => {
+      if (pendingOnly) {
+        // CONFIRMED pass: insert pending record for fast UI display — no balance credit yet.
+        await db.insert(depositsTable).values({
+          userId,
+          amount,
+          type:             "crypto",
+          source:           CHAIN_LABELS[txBlockchain ?? ""] ?? `${txBlockchain ?? "Unknown"} USDC`,
+          status:           "pending",
+          depositReference: depositRef || null,
+          txHash:           txHash ?? null,
+        }).onConflictDoNothing();
+        logger.info({ userId, amount, chain: txBlockchain }, "[usdc-indexer] Pending deposit recorded");
+        return;
+      }
+
+      const credited = await db.transaction(async (tx: any) => {
         const [inserted] = await tx.insert(depositsTable).values({
           userId,
           amount,
           type:             "crypto",
-          source:           CHAIN_LABELS[txBlockchain ?? this.cfg.chain] ?? `${txBlockchain ?? this.cfg.chain} USDC`,
+          source:           CHAIN_LABELS[txBlockchain ?? ""] ?? `${txBlockchain ?? "Unknown"} USDC`,
           status:           "completed",
           depositReference: depositRef || null,
           txHash:           txHash ?? null,
@@ -428,169 +383,64 @@ class ChainIndexer {
       if (!credited) return;
 
       logger.info(
-        { txHash, userId, amount, chain: this.cfg.chain },
-        `[usdc-indexer:${this.cfg.chain}] Credited deposit`,
+        { userId, amount, chain: txBlockchain },
+        "[usdc-indexer] Credited deposit",
       );
     }
+  } // end !promotedViaHash
 
-    // 4. Enqueue bridge job — reached by both new inserts and pending promotions.
-    // ARC-TESTNET:  Same-chain Circle DCW sweep (sweepUsdcToPlatformWallet).
-    // BASE-SEPOLIA: CCTP V2 depositForBurn → Arc treasury (cctpDepositForBurnFromBase).
-    try {
-      const [existingJob] = await db
-        .select({ id: bridgeJobsTable.id })
-        .from(bridgeJobsTable)
-        .where(txHash ? eq(bridgeJobsTable.txHash, txHash) : isNull(bridgeJobsTable.txHash))
-        .limit(1);
+  // 4. Trigger agreed sweep: user wallet → treasury → Gateway Vault.
+  const sweepChain = txBlockchain as string | undefined;
+  if (!sweepChain || !isDepositChain(sweepChain)) return;
 
-      if (!existingJob) {
-        await db.insert(bridgeJobsTable).values({
-          userId,
-          sourceChain:       (txBlockchain ?? this.cfg.chain) as SourceChain,
-          userWalletAddress: toAddress,
-          amount,
-          txHash,
-          status:            "pending",
-        });
-        logger.info(
-          { txHash, userId, amount, chain: this.cfg.chain },
-          `[usdc-indexer:${this.cfg.chain}] Bridge job enqueued`,
-        );
-        triggerBridgeWorker();
-      }
-    } catch (e: any) {
-      logger.warn({ err: e?.message, txHash }, "[usdc-indexer] Bridge job insert failed");
+  try {
+    const [userWallet] = await db
+      .select({
+        circleWalletId: usersTable.circleWalletId,
+        walletIdsJson:  (usersTable as any).circleWalletIdsJson,
+      })
+      .from(usersTable)
+      .where(eq(usersTable.id, userId))
+      .limit(1);
+
+    let walletId: string | undefined;
+    if (userWallet?.walletIdsJson) {
+      const map = JSON.parse(userWallet.walletIdsJson) as Record<string, string>;
+      walletId = map[sweepChain];
     }
+    if (!walletId && sweepChain === "BASE-SEPOLIA" && userWallet?.circleWalletId) {
+      walletId = userWallet.circleWalletId;
+    }
+
+    if (!walletId) {
+      logger.warn({ userId, chain: sweepChain }, "[usdc-indexer] No wallet ID for sweep — skipped");
+      return;
+    }
+
+    const chain = getChain(sweepChain);
+    if (sweepChain === "ARC-TESTNET") {
+      arcTestnetSweep({ userWalletId: walletId, amount })
+        .then(txId => logger.info({ userId, txId }, "[usdc-indexer] Arc sweep completed"))
+        .catch((err: any) => logger.error(
+          { err: err?.message, userId },
+          "[usdc-indexer] Arc sweep failed",
+        ));
+    } else if (chain.type === "evm") {
+      evmGatewaySweep({ userWalletId: walletId, chainKey: sweepChain as ChainKey, amount })
+        .then(() => logger.info({ userId, chain: sweepChain }, "[usdc-indexer] EVM sweep completed"))
+        .catch((err: any) => logger.error(
+          { err: err?.message, userId, chain: sweepChain },
+          "[usdc-indexer] EVM sweep failed",
+        ));
+    } else if (sweepChain === "SOL-DEVNET") {
+      solanaSweep({ userSolanaWalletId: walletId, amount })
+        .then(() => logger.info({ userId }, "[usdc-indexer] Solana sweep completed"))
+        .catch((err: any) => logger.error(
+          { err: err?.message, userId },
+          "[usdc-indexer] Solana sweep failed",
+        ));
+    }
+  } catch (e: any) {
+    logger.warn({ err: e?.message, userId, chain: sweepChain }, "[usdc-indexer] Sweep trigger error");
   }
-
-  // Fetches Transfer events for the block range and filters recipient addresses in JS.
-  // Arc RPC does NOT support topic[2] address filters — providing a toTopics array
-  // silently returns 0 events on Arc. We omit topic[2] and filter after the fact.
-  // On Base the topic filter still works fine, but using the same code path is
-  // harmless: Base has far fewer blocks to catch up on so the extra logs are cheap.
-  private async processChunk(fromBlock: number, toBlock: number) {
-    if (this.addressMap.size === 0) return;
-
-    const decimals     = await this.getDecimals();
-    const TRANSFER_SIG = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-
-    const rawLogs = await this.provider!.getLogs({
-      address:   this.cfg.usdcAddress,
-      topics:    [TRANSFER_SIG],  // no topic[2] filter — Arc RPC breaks with it
-      fromBlock,
-      toBlock,
-    });
-
-    const relevantLogs = rawLogs.filter((raw) => {
-      const parsed = this.contract!.interface.parseLog(raw);
-      if (!parsed) return false;
-      const to = (parsed.args[1] as string).toLowerCase();
-      return this.addressMap.has(to);
-    });
-
-    logger.info(
-      { chain: this.cfg.chain, fromBlock, toBlock, totalLogs: rawLogs.length, relevantLogs: relevantLogs.length },
-      `[usdc-indexer:${this.cfg.chain}] processChunk scanned ${toBlock - fromBlock + 1} blocks — ${rawLogs.length} Transfer events, ${relevantLogs.length} to watched addresses`,
-    );
-
-    for (const raw of rawLogs) {
-      const iface  = this.contract!.interface;
-      const parsed = iface.parseLog(raw);
-      if (!parsed) continue;
-      const to     = (parsed.args[1] as string).toLowerCase();
-      const userId = this.addressMap.get(to);
-      if (!userId) continue;  // JS-side recipient filter
-      const amount = parseFloat(ethers.formatUnits(parsed.args[2] as bigint, decimals)).toFixed(6);
-      logger.info(
-        { chain: this.cfg.chain, txHash: raw.transactionHash, amount, to, userId },
-        `[usdc-indexer:${this.cfg.chain}] Transfer event found — crediting ${amount} USDC to user ${userId}`,
-      );
-      await this.handleDeposit(userId, amount, raw.transactionHash, to);
-    }
-  }
-
-  private async poll() {
-    if (!this.running) return;
-
-    try {
-      if (!this.provider || !this.contract) this.initProvider();
-
-      const doRefresh = this.pollCount % ADDRESS_REFRESH_INTERVAL === 0;
-      if (doRefresh) await this.refreshAddressMap();
-      this.pollCount++;
-
-      if (this.addressMap.size > 0) {
-        // ── Block pointer housekeeping (getLogs disabled for all current chains) ───
-        // Arc Testnet: USDC precompile does not emit Transfer events → getLogs useless.
-        // Base Sepolia: public RPC returns -32602 "query exceeds max results 20000"
-        //   on EVERY getLogs call against the USDC contract (too many faucet transfers
-        //   per block). Reducing chunk size doesn't help — even 5-block ranges overflow.
-        // Both chains rely solely on the Circle API poll (below) for deposit detection.
-        // We still advance lastBlock so the pointer doesn't drift and cause false catch-up.
-        try {
-          const currentBlock = await this.provider!.getBlockNumber();
-          const lastBlock    = await this.getOrInitLastBlock(currentBlock);
-          if (currentBlock > lastBlock) {
-            await this.saveLastBlock(currentBlock);
-          }
-        } catch { /* non-fatal */ }
-
-        if (false) {
-          // getLogs path — preserved for future chain support if needed
-          // (currently unreachable: all configured chains use Circle API poll)
-          try {
-            const currentBlock = await this.provider!.getBlockNumber();
-            const lastBlock    = await this.getOrInitLastBlock(currentBlock);
-            const gap          = currentBlock - lastBlock;
-            const catchingUp   = gap > CATCHUP_THRESHOLD;
-            const chunkSize    = catchingUp ? CATCHUP_BLOCKS_PER_CHUNK : BLOCKS_PER_CHUNK;
-
-            let from = lastBlock + 1;
-            while (from <= currentBlock) {
-              const to = Math.min(from + chunkSize - 1, currentBlock);
-              await this.processChunk(from, to);
-              await this.saveLastBlock(to);
-              from = to + 1;
-              if (from <= currentBlock) {
-                await new Promise((r) => setTimeout(r, catchingUp ? CATCHUP_CHUNK_DELAY_MS : CHUNK_DELAY_MS));
-              }
-            }
-          } catch (chunkErr: any) {
-            logger.warn(
-              { err: chunkErr.message, chain: this.cfg.chain },
-              `[usdc-indexer:${this.cfg.chain}] Transfer-event indexing error (non-fatal)`,
-            );
-          }
-        }
-      }
-
-      // Circle API transaction poll — PRIMARY detection path for ALL chains.
-      // Arc:  USDC precompile doesn't emit Transfer events, only API poll works.
-      // Base: Public RPC getLogs is rate-limited and unusable; API poll works.
-      if (doRefresh) await this.runCircleTransactionPoll();
-    } catch (err: any) {
-      logger.error(
-        { err: err.message, chain: this.cfg.chain, rpcUrl: this.cfg.rpcUrl },
-        `[usdc-indexer:${this.cfg.chain}] Poll error — check RPC connectivity`,
-      );
-      this.provider = null;
-      this.contract = null;
-    }
-
-    if (this.running) {
-      this.timer = setTimeout(() => void this.poll(), POLL_INTERVAL_MS);
-    }
-  }
-}
-
-// ─── Module-level instances ───────────────────────────────────────────────────
-
-const indexers = NETWORKS.map((cfg) => new ChainIndexer(cfg));
-
-export function startDepositIndexer() {
-  indexers.forEach((idx) => idx.start());
-}
-
-export function stopDepositIndexer() {
-  indexers.forEach((idx) => idx.stop());
 }

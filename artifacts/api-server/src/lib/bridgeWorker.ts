@@ -193,7 +193,7 @@ async function processNextJob() {
         );
       }
 
-      txId = await sweepUsdcToPlatformWallet(arcWalletId, String(job.amount));
+      txId = await sweepUsdcToPlatformWallet(arcWalletId, String(job.amount), "ARC-TESTNET");
       bridgeResultJson = JSON.stringify({ txId, chain });
     }
 

@@ -5,13 +5,13 @@ import escrowRouter from "./escrow.js";
 import withdrawRouter from "./withdraw.js";
 import depositRouter from "./deposit.js";
 import indexerRouter from "./indexer.js";
+import gatewayRouter from "./gateway.js";
 
 import recurringRouter from "./recurring.js";
 import subscriptionsRouter from "./subscriptions.js";
 import securityRouter from "./security.js";
 import adminRouter from "./admin.js";
 import userRouter from "./user.js";
-import developerRouter from "./developer.js";
 import payRouter from "./pay.js";
 import v1Router from "./v1/index.js";
 
@@ -22,13 +22,13 @@ router.use("/auth", authRouter);
 router.use("/escrow", escrowRouter);
 router.use("/withdraw", withdrawRouter);
 router.use("/deposit", depositRouter);
+router.use("/gateway", gatewayRouter);
 router.use("/indexer", indexerRouter);
 router.use("/recurring", recurringRouter);
 router.use("/subscriptions", subscriptionsRouter);
 router.use("/security", securityRouter);
 router.use("/admin", adminRouter);
 router.use("/user", userRouter);
-router.use("/developer", developerRouter);
 router.use("/pay", payRouter);
 
 export { v1Router };

@@ -17,13 +17,19 @@ import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-
 // ─── Environment ──────────────────────────────────────────────────────────────
 
 const CIRCLE_API_KEY       = process.env.CIRCLE_API_KEY!;
-const CIRCLE_API_BASE_URL  = process.env.CIRCLE_API_BASE_URL || "https://api-sandbox.circle.com";
+const CIRCLE_API_BASE_URL  = (process.env.CIRCLE_API_BASE_URL || "https://api-sandbox.circle.com")
+  .replace(/\/v1\/w3s\/?$/, "")
+  .replace(/\/$/, "");
 const CIRCLE_ENTITY_SECRET = process.env.CIRCLE_ENTITY_SECRET;
 let   CIRCLE_WALLET_SET_ID = process.env.CIRCLE_WALLET_SET_ID;
 
 // ─── Supported chains ─────────────────────────────────────────────────────────
 
-export const SUPPORTED_SOURCE_CHAINS = ["BASE-SEPOLIA", "ARC-TESTNET"] as const;
+// All deposit-enabled chains. ETH-SEPOLIA, UNICHAIN-SEPOLIA, HYPEREVM-TESTNET are withdrawals-only.
+export const SUPPORTED_SOURCE_CHAINS = [
+  "BASE-SEPOLIA", "ARC-TESTNET", "ARB-SEPOLIA", "OP-SEPOLIA",
+  "MATIC-AMOY", "AVAX-FUJI", "SOL-DEVNET",
+] as const;
 export type  SourceChain = (typeof SUPPORTED_SOURCE_CHAINS)[number];
 
 // Aliases kept for route/worker compatibility
@@ -34,28 +40,30 @@ export const PRIMARY_BLOCKCHAIN = "ARC-TESTNET" as SourceChain;
 
 // ─── App Kit chain identifiers ────────────────────────────────────────────────
 
-export const APP_KIT_CHAIN_IDS: Record<SourceChain, string> = {
+// App Kit chain IDs — only chains with Circle wallet connection support.
+export const APP_KIT_CHAIN_IDS: Partial<Record<SourceChain, string>> = {
   "BASE-SEPOLIA": "Base_Sepolia",
   "ARC-TESTNET":  "Arc_Testnet",
 };
 
 // ─── USDC contract addresses ──────────────────────────────────────────────────
+// Only chains directly monitored by the deposit indexer via RPC.
 
-export const CHAIN_USDC_ADDRESSES: Record<SourceChain, string> = {
+export const CHAIN_USDC_ADDRESSES: Partial<Record<SourceChain, string>> = {
   "BASE-SEPOLIA": (process.env.BASE_USDC_ADDRESS ?? "0x036CbD53842c5426634e7929541eC2318f3dCF7e").toLowerCase(),
-  // Arc testnet USDC is a standard ERC-20 precompile (6 decimals)
   "ARC-TESTNET":  (process.env.ARC_USDC_ADDRESS ?? process.env.USDC_ADDRESS ?? "0x3600000000000000000000000000000000000000").toLowerCase(),
 };
 
-// USDC decimals differ between chains
-export const CHAIN_USDC_DECIMALS: Record<SourceChain, number> = {
+// USDC decimals — only for RPC-monitored chains.
+export const CHAIN_USDC_DECIMALS: Partial<Record<SourceChain, number>> = {
   "BASE-SEPOLIA": 6,
-  "ARC-TESTNET":  6,  // Arc USDC at 0x3600... is standard ERC-20 with 6 decimals
+  "ARC-TESTNET":  6,
 };
 
 // ─── RPC URLs ─────────────────────────────────────────────────────────────────
+// Only chains with direct RPC access for the deposit indexer.
 
-export const CHAIN_RPC_URLS: Record<SourceChain, string> = {
+export const CHAIN_RPC_URLS: Partial<Record<SourceChain, string>> = {
   "BASE-SEPOLIA": process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org",
   "ARC-TESTNET":  process.env.ARC_RPC_URL ?? process.env.RPC_URL ?? "https://rpc.testnet.arc.network",
 };
@@ -70,6 +78,10 @@ const BASE_SEPOLIA_USDC_TOKEN_ID  = process.env.CIRCLE_BASE_SEPOLIA_USDC_TOKEN_I
 const ARC_TESTNET_USDC_TOKEN_ID   = process.env.CIRCLE_ARC_TESTNET_USDC_TOKEN_ID   ?? null;
 
 const _tokenIdCache = new Map<string, string>(); // walletId → USDC token ID
+
+export function clearTokenIdCache(walletId: string): void {
+  _tokenIdCache.delete(walletId);
+}
 
 // ─── HTTP client ──────────────────────────────────────────────────────────────
 
@@ -111,11 +123,17 @@ async function ensureWalletSet(): Promise<string | null> {
 }
 
 // ─── User wallet provisioning ─────────────────────────────────────────────────
-// Creates SCA wallets on BASE-SEPOLIA and ARC-TESTNET in a single Circle DCW
-// call. Circle EIP-4337 SCA wallets derive the same address on all EVM chains
-// from the same factory + salt, so both wallets share one on-chain address.
-// The Arc Testnet wallet ID is required for the Circle Wallets adapter to sign
-// CCTP depositForBurn transactions on Arc (bridge → BASE-SEPOLIA treasury).
+// Creates SCA wallets on all supported EVM chains in a single Circle DCW call.
+// EIP-4337 SCA wallets derive the same address on all EVM chains from the same
+// factory + salt, so all EVM wallets share one on-chain address.
+// UNICHAIN-SEPOLIA is excluded — not supported by Circle DCW wallet creation.
+// SOL-DEVNET is created separately as an EOA (different account type).
+
+// ETH-SEPOLIA, UNICHAIN-SEPOLIA, HYPEREVM-TESTNET are withdrawals-only — no user deposit wallets.
+const EVM_CHAINS_FOR_WALLET = [
+  "BASE-SEPOLIA", "ARC-TESTNET", "ARB-SEPOLIA", "OP-SEPOLIA",
+  "MATIC-AMOY", "AVAX-FUJI",
+] as const;
 
 export async function createUserCircleWallet(_userId: number): Promise<{
   walletId: string;
@@ -132,42 +150,67 @@ export async function createUserCircleWallet(_userId: number): Promise<{
     );
   }
 
-  const res = await client.createWallets({
-    blockchains:    ["BASE-SEPOLIA", "ARC-TESTNET"] as any[],
+  // Step 1: EVM SCA wallets — all chains share one on-chain address.
+  const evmRes = await client.createWallets({
+    blockchains:    EVM_CHAINS_FOR_WALLET as unknown as any[],
     count:          1,
     walletSetId,
     accountType:    "SCA" as any,
     idempotencyKey: randomUUID(),
   });
 
-  const wallets: any[] = (res.data as any)?.wallets ?? (res as any)?.wallets ?? [];
+  const wallets: any[] = (evmRes.data as any)?.wallets ?? (evmRes as any)?.wallets ?? [];
   if (wallets.length === 0) {
     throw new Error("Circle DCW createWallets returned no wallets — check API credentials and wallet set.");
   }
 
-  // Index returned wallets by their blockchain field
-  const byChain: Record<string, { id: string; address: string }> = {};
+  const idsMap:  Record<string, string> = {};
+  const addrMap: Record<string, string> = {};
+
   for (const w of wallets) {
     const chain = (w.blockchain ?? w.chain) as string | undefined;
-    if (chain) byChain[chain] = { id: w.id as string, address: w.address as string };
+    if (chain) {
+      idsMap[chain]  = w.id as string;
+      addrMap[chain] = w.address as string;
+    }
   }
 
-  const baseSepolia = byChain["BASE-SEPOLIA"];
+  const baseSepolia = wallets.find((w: any) => (w.blockchain ?? w.chain) === "BASE-SEPOLIA");
   if (!baseSepolia) {
     throw new Error("Circle DCW did not return a BASE-SEPOLIA wallet — check API credentials and wallet set.");
   }
-  const arcTestnet = byChain["ARC-TESTNET"];
 
-  const idsMap: Record<string, string>  = { "BASE-SEPOLIA": baseSepolia.id };
-  const addrMap: Record<string, string> = { "BASE-SEPOLIA": baseSepolia.address };
+  // Step 2: SOL-DEVNET EOA wallet (separate call — different account type).
+  try {
+    const solRes = await client.createWallets({
+      blockchains:    ["SOL-DEVNET"] as any[],
+      count:          1,
+      walletSetId,
+      accountType:    "EOA" as any,
+      idempotencyKey: randomUUID(),
+    });
+    const solWallets: any[] = (solRes.data as any)?.wallets ?? (solRes as any)?.wallets ?? [];
+    const sol = solWallets[0];
+    if (sol?.id) {
+      idsMap["SOL-DEVNET"]  = sol.id as string;
+      addrMap["SOL-DEVNET"] = sol.address as string;
+      console.info(`[Circle DCW] Created SOL-DEVNET wallet ${sol.id} @ ${sol.address}`);
 
-  if (arcTestnet) {
-    idsMap["ARC-TESTNET"]  = arcTestnet.id;
-    addrMap["ARC-TESTNET"] = arcTestnet.address;
-  } else {
-    // ARC-TESTNET wallet not returned — reuse BASE-SEPOLIA address as fallback
-    console.warn("[Circle DCW] ARC-TESTNET wallet not created — CCTP bridging from Arc will be unavailable");
-    addrMap["ARC-TESTNET"] = baseSepolia.address;
+      // Provision native SOL so the wallet can pay Solana tx fees and ATA creation rent.
+      // Without SOL, Circle DCW createTransaction for SPL transfers fails silently.
+      try {
+        await client.requestTestnetTokens({
+          address:    sol.address as string,
+          blockchain: "SOL-DEVNET" as any,
+          native:     true,
+        });
+        console.info(`[Circle DCW] Requested devnet SOL for ${sol.address}`);
+      } catch (faucetErr: any) {
+        console.warn(`[Circle DCW] SOL faucet request failed (non-fatal): ${faucetErr?.message}`);
+      }
+    }
+  } catch (e: any) {
+    console.warn("[Circle DCW] SOL-DEVNET wallet creation failed — Solana deposits unavailable:", e?.message);
   }
 
   return {
@@ -178,70 +221,144 @@ export async function createUserCircleWallet(_userId: number): Promise<{
   };
 }
 
-// ─── Backfill Arc Testnet wallet for existing users ───────────────────────────
-// Called on login when a user already has a BASE-SEPOLIA wallet but has no
-// ARC-TESTNET entry in circleWalletIdsJson. Creates the Arc wallet in the same
-// wallet set so the Circle Wallets adapter can sign Arc CCTP transactions.
+// ─── Backfill missing chain wallets for existing users ────────────────────────
+// Called at login. Provisions any chains absent from circleWalletIdsJson.
+// Missing EVM chains are created in one batch (same SCA slot = new shared address,
+// different from the user's original BASE-SEPOLIA address but stored per-chain in
+// circleWalletAddressesJson so the deposit indexer can find them).
 
-export async function ensureArcTestnetWallet(
-  existingIdsJson:  string | null,
+export async function ensureAllChainWallets(
+  existingIdsJson:   string | null,
   existingAddrsJson: string | null,
 ): Promise<{ idsJson: string; addrsJson: string } | null> {
   const idsMap   = existingIdsJson   ? (JSON.parse(existingIdsJson)   as Record<string, string>) : {};
   const addrsMap = existingAddrsJson ? (JSON.parse(existingAddrsJson) as Record<string, string>) : {};
 
-  if (idsMap["ARC-TESTNET"]) return null; // already provisioned
+  const missingEvm = (EVM_CHAINS_FOR_WALLET as readonly string[]).filter((c) => !idsMap[c]);
+  const missingSol = !idsMap["SOL-DEVNET"];
+
+  if (missingEvm.length === 0 && !missingSol) return null;
 
   const client      = getDcwClient();
   const walletSetId = await ensureWalletSet();
   if (!client || !walletSetId) return null;
 
-  try {
-    const res = await client.createWallets({
-      blockchains:    ["ARC-TESTNET"] as any[],
-      count:          1,
-      walletSetId,
-      accountType:    "SCA" as any,
-      idempotencyKey: randomUUID(),
-    });
+  let changed = false;
 
-    const wallets: any[] = (res.data as any)?.wallets ?? (res as any)?.wallets ?? [];
-    const arcWallet = wallets[0];
-    if (!arcWallet?.id) return null;
-
-    idsMap["ARC-TESTNET"]   = arcWallet.id as string;
-    addrsMap["ARC-TESTNET"] = arcWallet.address as string;
-
-    console.info(`[Circle DCW] Backfilled ARC-TESTNET wallet ${arcWallet.id} @ ${arcWallet.address}`);
-    return { idsJson: JSON.stringify(idsMap), addrsJson: JSON.stringify(addrsMap) };
-  } catch (e: any) {
-    console.warn("[Circle DCW] ensureArcTestnetWallet failed:", e?.message);
-    return null;
+  if (missingEvm.length > 0) {
+    try {
+      const res = await client.createWallets({
+        blockchains:    missingEvm as any[],
+        count:          1,
+        walletSetId,
+        accountType:    "SCA" as any,
+        idempotencyKey: randomUUID(),
+      });
+      const evmWallets: any[] = (res.data as any)?.wallets ?? (res as any)?.wallets ?? [];
+      for (const w of evmWallets) {
+        const chain = (w.blockchain ?? w.chain) as string | undefined;
+        if (chain && w.id) {
+          idsMap[chain]   = w.id as string;
+          addrsMap[chain] = w.address as string;
+          changed = true;
+        }
+      }
+      console.info(
+        `[Circle DCW] Backfilled ${evmWallets.length} EVM chain(s): ${evmWallets.map((w: any) => w.blockchain ?? w.chain).join(", ")}`,
+      );
+    } catch (e: any) {
+      console.warn("[Circle DCW] ensureAllChainWallets EVM backfill failed:", e?.message);
+    }
   }
+
+  if (missingSol) {
+    try {
+      const res = await client.createWallets({
+        blockchains:    ["SOL-DEVNET"] as any[],
+        count:          1,
+        walletSetId,
+        accountType:    "EOA" as any,
+        idempotencyKey: randomUUID(),
+      });
+      const solWallets: any[] = (res.data as any)?.wallets ?? (res as any)?.wallets ?? [];
+      const sol = solWallets[0];
+      if (sol?.id) {
+        idsMap["SOL-DEVNET"]   = sol.id as string;
+        addrsMap["SOL-DEVNET"] = sol.address as string;
+        changed = true;
+        console.info(`[Circle DCW] Backfilled SOL-DEVNET wallet ${sol.id} @ ${sol.address}`);
+      }
+    } catch (e: any) {
+      console.warn("[Circle DCW] ensureAllChainWallets SOL backfill failed:", e?.message);
+    }
+  }
+
+  if (!changed) return null;
+  return { idsJson: JSON.stringify(idsMap), addrsJson: JSON.stringify(addrsMap) };
 }
+
+// Keep old name as an alias so any remaining import sites don't break.
+export const ensureArcTestnetWallet = ensureAllChainWallets;
 
 // ─── USDC balance helpers ─────────────────────────────────────────────────────
 
 function isUsdcToken(b: any): boolean {
   return (
     b.token?.symbol?.toUpperCase() === "USDC" ||
-    (b.token?.name ?? "").toLowerCase().includes("usd coin")
+    (b.token?.name ?? "").toLowerCase().includes("usd coin") ||
+    // Arc USDC is a native precompile whose name/symbol in Circle's API differs
+    // from standard USDC. Match by the known token ID from env as a fallback.
+    (ARC_TESTNET_USDC_TOKEN_ID !== null && b.token?.id === ARC_TESTNET_USDC_TOKEN_ID)
+  );
+}
+
+// Returns true for transient SSL/network errors that are safe to retry.
+// WSL2 produces "ssl/tls alert bad record mac" (TCP checksum offloading bug).
+function isTransientError(e: any): boolean {
+  const msg: string = e?.message ?? "";
+  return (
+    msg.includes("bad record mac") ||
+    msg.includes("SSL") ||
+    msg.includes("ssl") ||
+    e?.code === "ECONNRESET" ||
+    e?.code === "ETIMEDOUT" ||
+    e?.code === "ECONNREFUSED"
   );
 }
 
 export async function getWalletUsdcBalance(walletId: string): Promise<string> {
   const client = getDcwClient();
   if (!client) return "0";
-  try {
-    const res = await client.getWalletTokenBalance({ id: walletId });
-    const tokenBalances: any[] = (res.data as any)?.tokenBalances ?? [];
-    const usdcEntry = tokenBalances.find(isUsdcToken);
-    if (usdcEntry?.token?.id) _tokenIdCache.set(walletId, usdcEntry.token.id);
-    return usdcEntry?.amount ?? "0";
-  } catch (e: any) {
-    console.warn("[Circle DCW] getWalletUsdcBalance error:", e?.message);
-    return "0";
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await client.getWalletTokenBalance({ id: walletId });
+      const tokenBalances: any[] = (res.data as any)?.tokenBalances ?? [];
+      const usdcEntry = tokenBalances.find(isUsdcToken);
+      if (usdcEntry?.token?.id) _tokenIdCache.set(walletId, usdcEntry.token.id);
+
+      // If no USDC found but the wallet has tokens, log them so we can see what
+      // name/symbol Circle uses for Arc USDC (which may not match isUsdcToken).
+      if (!usdcEntry && tokenBalances.length > 0) {
+        console.warn(
+          `[Circle] getWalletUsdcBalance: no USDC match in wallet ${walletId}. ` +
+          `Tokens: ` + tokenBalances.map((b: any) =>
+            `${b.token?.symbol}/${b.token?.name}/${b.token?.id}=${b.amount}`
+          ).join(", "),
+        );
+      }
+
+      return usdcEntry?.amount ?? "0";
+    } catch (e: any) {
+      if (isTransientError(e) && attempt < 2) {
+        await new Promise(r => setTimeout(r, 1_000 * (attempt + 1)));
+        continue;
+      }
+      console.warn("[Circle DCW] getWalletUsdcBalance error:", e?.message);
+      return "0";
+    }
   }
+  return "0";
 }
 
 // Resolves the Circle USDC token ID for a wallet by inspecting its live balance.
@@ -267,7 +384,12 @@ async function resolveUsdcTokenId(walletId: string): Promise<string> {
     console.warn(`[Circle] No tokens found in wallet ${walletId} — deposit may not have been indexed yet`);
   }
 
-  const usdcEntry = tokenBalances.find(isUsdcToken);
+  // Pick the USDC token with the highest balance. When a wallet holds multiple
+  // USDC token IDs (e.g. Arc native + Circle internal, or after a partial sweep
+  // leaves one token at 0), always prefer the one that actually has funds.
+  const usdcEntry = tokenBalances
+    .filter(isUsdcToken)
+    .sort((a: any, b: any) => parseFloat(b.amount ?? "0") - parseFloat(a.amount ?? "0"))[0];
 
   if (!usdcEntry?.token?.id) {
     // Chain-specific env var overrides — set CIRCLE_ARC_TESTNET_USDC_TOKEN_ID
@@ -296,23 +418,34 @@ async function resolveUsdcTokenId(walletId: string): Promise<string> {
   return usdcEntry.token.id;
 }
 
-// ─── Sweep: user BASE-SEPOLIA wallet → platform treasury ─────────────────────
+// ─── Sweep: user wallet → per-chain platform treasury ────────────────────────
 // Transfers USDC from a user's Circle SCA wallet to the platform treasury.
 // Gas-free via EIP-4337 + Circle Gas Station.
+//
+// The destination address is resolved per-chain because Arc Testnet's SCA
+// factory may produce a different address than the other EVM chains.
+// Set CIRCLE_PLATFORM_WALLET_ADDRESS_ARC_TESTNET in .env if it differs from
+// CIRCLE_PLATFORM_WALLET_ADDRESS.
 
 export async function sweepUsdcToPlatformWallet(
   userWalletId: string,
   amount: string,
+  chainKey?: string,
 ): Promise<string> {
   const client = getDcwClient();
   if (!client) throw new Error("Circle DCW client not available — CIRCLE_ENTITY_SECRET not set");
 
-  const destAddress = getPlatformWalletAddress();
+  // Use a chain-specific treasury address if configured (Arc Testnet may deploy
+  // its SCA at a different address than the other EVM chains).
+  const isArc = chainKey === "ARC-TESTNET";
+  const destAddress = (isArc && process.env.CIRCLE_PLATFORM_WALLET_ADDRESS_ARC_TESTNET)
+    ? process.env.CIRCLE_PLATFORM_WALLET_ADDRESS_ARC_TESTNET
+    : (process.env.CIRCLE_PLATFORM_WALLET_ADDRESS ?? "");
   if (!destAddress) throw new Error("CIRCLE_PLATFORM_WALLET_ADDRESS not configured");
 
   const tokenId = await resolveUsdcTokenId(userWalletId);
 
-  console.info(`[Circle] sweep: walletId=${userWalletId} → treasury=${destAddress} amount=${amount}`);
+  console.info(`[Circle] sweep: walletId=${userWalletId} chain=${chainKey ?? "?"} → treasury=${destAddress} amount=${amount}`);
 
   const input: any = {
     walletId:           userWalletId,
@@ -333,6 +466,48 @@ export async function sweepUsdcToPlatformWallet(
   } catch (e: any) {
     const msg = e?.response?.data?.message ?? e?.errors?.[0]?.message ?? e?.message ?? "Sweep failed";
     throw new Error(`Circle sweep error: ${msg}`);
+  }
+}
+
+// ─── Direct wallet transfer (treasury → user withdrawal) ─────────────────────
+// Sends USDC from any Circle DCW wallet to an external address via the SDK.
+// Uses SDK (not raw fetch) so entity secret ciphertext is handled automatically.
+// Works for SCA wallets on any EVM chain where the wallet holds USDC directly.
+
+export async function directWalletTransfer(
+  fromWalletId:       string,
+  destinationAddress: string,
+  amount:             string,
+  idempotencyKey:     string = randomUUID(),
+): Promise<string> {
+  const client = getDcwClient();
+  if (!client) throw new Error("Circle DCW client not available — CIRCLE_ENTITY_SECRET not set");
+
+  const tokenId = await resolveUsdcTokenId(fromWalletId);
+
+  console.info(
+    `[Circle] directWalletTransfer: walletId=${fromWalletId} → ${destinationAddress} amount=${amount}`,
+  );
+
+  const input: any = {
+    walletId:           fromWalletId,
+    tokenId,
+    destinationAddress,
+    amount:             [amount],
+    fee:                { config: { feeLevel: "MEDIUM" } },
+    idempotencyKey,
+  };
+
+  try {
+    const res  = await client.createTransaction(input);
+    const body = res.data as any;
+    const txId: string | undefined =
+      body?.data?.id ?? body?.transaction?.id ?? body?.id ?? (res as any)?.transaction?.id;
+    if (!txId) throw new Error("Circle createTransaction returned no transaction ID");
+    return txId;
+  } catch (e: any) {
+    const msg = e?.response?.data?.message ?? e?.errors?.[0]?.message ?? e?.message ?? "Transfer failed";
+    throw new Error(`Circle directWalletTransfer error: ${msg}`);
   }
 }
 
@@ -484,6 +659,42 @@ export function getPlatformWalletIdForChain(_blockchain: string): string | null 
   return getPlatformWalletId();
 }
 
+// ─── Treasury Solana ATA seeding ──────────────────────────────────────────────
+// The first SPL transfer to the treasury address requires the treasury's USDC
+// Associated Token Account (ATA) to exist. ATA creation costs ~0.002 SOL rent
+// which Circle Gas Station does NOT cover. Seeding the treasury's ATA once at
+// startup (by requesting devnet USDC via Circle's faucet) ensures every future
+// user sweep only needs a transaction fee — which Gas Station DOES sponsor.
+
+export async function ensureTreasurySolanaAtaSeeded(): Promise<void> {
+  const treasuryAddress = process.env.CIRCLE_PLATFORM_WALLET_ADDRESS_SOL;
+  if (!treasuryAddress) return;
+
+  const client = getDcwClient();
+  if (!client) return;
+
+  try {
+    const walletId = process.env.CIRCLE_PLATFORM_WALLET_ID_SOL;
+    if (!walletId) return;
+
+    const balance = await getWalletUsdcBalance(walletId);
+    if (parseFloat(balance) > 0) {
+      console.info(`[Circle] Treasury Solana ATA already seeded (balance: ${balance} USDC)`);
+      return;
+    }
+
+    // Request devnet USDC — this creates the ATA and gives the treasury a small balance.
+    await client.requestTestnetTokens({
+      address:    treasuryAddress,
+      blockchain: "SOL-DEVNET" as any,
+      usdc:       true,
+    });
+    console.info(`[Circle] Requested devnet USDC to seed treasury Solana ATA @ ${treasuryAddress}`);
+  } catch (err: any) {
+    console.warn(`[Circle] Treasury Solana ATA seed failed (non-fatal): ${err?.message}`);
+  }
+}
+
 // ─── Gas Station ──────────────────────────────────────────────────────────────
 // On testnet, Circle auto-provisions a default Gas Station policy at signup.
 // Set CIRCLE_GAS_STATION_ENABLED=true to skip the probe (recommended for testnet).
@@ -631,4 +842,50 @@ export async function resolveCircleOnChainTxHash(circleId: string): Promise<stri
   } catch {
     return null;
   }
+}
+
+// ─── Transaction confirmation poller ─────────────────────────────────────────
+// Polls until a Circle DCW transaction reaches COMPLETE or FAILED.
+// Used before calling depositFor so the treasury actually has the USDC.
+// Returns true if COMPLETE, false if FAILED or timed out.
+
+// Circle DCW terminal states that mean "the funds have landed":
+//   COMPLETE    — fully finalised on-chain
+//   CONFIRMED   — included in a block (used for internal DCW transfers and many
+//                 testnet chains that never emit a separate COMPLETE event)
+//   TRANSFERRED — Circle off-chain internal transfer between DCW wallets
+// Waiting only for COMPLETE caused 5-minute timeouts when Circle returned
+// CONFIRMED/TRANSFERRED as the terminal state, causing depositFor to be skipped.
+const CIRCLE_TX_SUCCESS_STATES = new Set(["COMPLETE", "CONFIRMED", "TRANSFERRED"]);
+const CIRCLE_TX_FAILURE_STATES = new Set(["FAILED", "CANCELLED", "DENIED"]);
+
+export async function waitForTransactionComplete(
+  txId:       string,
+  timeoutMs:  number = 10 * 60_000, // 10 min — extended for slower testnets
+  intervalMs: number = 5_000,
+): Promise<boolean> {
+  const client = getDcwClient();
+  if (!client) return false;
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, intervalMs));
+    try {
+      const res  = await client.getTransaction({ id: txId });
+      const body = res.data as any;
+      const tx   = body?.data ?? body?.transaction ?? body;
+      const state: string = (tx?.state ?? tx?.status ?? "").toUpperCase();
+      if (CIRCLE_TX_SUCCESS_STATES.has(state)) {
+        console.info(`[Circle] Transaction ${txId} reached success state: ${state}`);
+        return true;
+      }
+      if (CIRCLE_TX_FAILURE_STATES.has(state)) {
+        console.warn(`[Circle] Transaction ${txId} reached failure state: ${state}`);
+        return false;
+      }
+    } catch { /* transient error — keep polling */ }
+  }
+
+  console.warn(`[Circle] waitForTransactionComplete: timed out after ${timeoutMs / 1000}s for tx ${txId}`);
+  return false;
 }

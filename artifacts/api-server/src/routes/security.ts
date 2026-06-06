@@ -142,33 +142,36 @@ router.post("/txn-password/request-otp", requireAuth, async (req, res) => {
 
 // ── POST /api/security/txn-password/set ──────────────────────────────────────
 
+// First-time transaction password setup — no OTP required.
+// PAK must exist first (users set PAK before transaction password during onboarding).
+// To CHANGE an existing transaction password, use /change-txn-password which requires OTP.
 router.post("/txn-password/set", requireAuth, requireEmailVerified, async (req, res) => {
   try {
     const { userId } = (req as any).user;
-    const { otp, password } = req.body as { otp?: unknown; password?: unknown };
+    const { password } = req.body as { password?: unknown };
 
-    if (typeof otp !== "string" || typeof password !== "string") {
-      res.status(400).json({ error: "Validation error", message: "otp and password are required" });
-      return;
-    }
-    if (password.length < 6) {
-      res.status(400).json({ error: "Validation error", message: "Transaction password must be at least 6 characters" });
+    if (typeof password !== "string" || password.length < 6) {
+      res.status(400).json({ error: "Validation error", message: "password must be at least 6 characters" });
       return;
     }
 
-    const valid = await verifyOtp(userId, otp, "txn-pwd");
-    if (!valid) {
-      res.status(401).json({ error: "Invalid code", message: "OTP is invalid or has expired" });
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (!user) { res.status(404).json({ error: "Not found", message: "User not found" }); return; }
+
+    // Enforce that PAK is generated before transaction password
+    if (!user.pakHash) {
+      res.status(409).json({ error: "PAK required", message: "Generate your PAK before setting a transaction password." });
+      return;
+    }
+
+    // Only allowed when no transaction password exists — use /change-txn-password to update
+    if (user.transactionPasswordHash) {
+      res.status(409).json({ error: "Conflict", message: "Transaction password already set. Use change-txn-password to update it." });
       return;
     }
 
     const transactionPasswordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     await db.update(usersTable).set({ transactionPasswordHash }).where(eq(usersTable.id, userId));
-
-    // Suspend any active passport — security profile changed, re-verify before next use
-    await db.update(subscriptionPassportsTable)
-      .set({ status: "suspended" })
-      .where(and(eq(subscriptionPassportsTable.userId, userId), ne(subscriptionPassportsTable.status, "revoked")));
 
     res.json({ success: true, message: "Transaction password set successfully." });
   } catch (err: any) {

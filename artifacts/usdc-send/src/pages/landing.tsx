@@ -242,17 +242,6 @@ function LandingNav() {
             >
               Documentation
             </Link>
-            <Link
-              href={`${BASE}/developer`}
-              className={cn(
-                "flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors",
-                scrolled
-                  ? "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
-                  : "text-white/80 hover:text-white hover:bg-white/15",
-              )}
-            >
-              Developer Portal
-            </Link>
           </div>
 
           {/* Desktop CTA */}
@@ -354,17 +343,6 @@ function LandingNav() {
                   )}
                 >
                   Documentation
-                </Link>
-                <Link
-                  href={`${BASE}/developer`}
-                  className={cn(
-                    "block px-4 py-2.5 rounded-xl text-sm font-medium transition-colors",
-                    scrolled
-                      ? "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
-                      : "text-white/80 hover:text-white hover:bg-white/15",
-                  )}
-                >
-                  Developer Portal
                 </Link>
                 <div className="pt-2 flex flex-col gap-2 px-1">
                   {isLoggedIn ? (
