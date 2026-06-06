@@ -1,8 +1,8 @@
 // ─── Email transport ──────────────────────────────────────────────────────────
 // Provider priority with automatic fallback:
-//   1. Brevo API  — BREVO_API_KEY set
-//   2. SMTP       — SMTP_HOST + SMTP_USER + SMTP_PASS set
-//   3. Resend API — RESEND_API_KEY set
+//   1. Resend API — RESEND_API_KEY set
+//   2. Brevo API  — BREVO_API_KEY set
+//   3. SMTP       — SMTP_HOST + SMTP_USER + SMTP_PASS set
 //   4. Console    — none set → emails printed to stdout (dev/CI only)
 //
 // All configured providers are tried in order. If one fails (e.g. daily limit
@@ -88,6 +88,10 @@ function getTransporter() {
   type Provider = { name: string; send: (opts: MailOpts) => Promise<void> };
   const providers: Provider[] = [];
 
+  if (resendKey) {
+    providers.push({ name: "Resend", send: (opts) => _sendViaResend(opts, resendKey) });
+  }
+
   if (brevoKey) {
     providers.push({ name: "Brevo", send: (opts) => _sendViaBrevo(opts, brevoKey) });
   }
@@ -103,10 +107,6 @@ function getTransporter() {
       name: "SMTP",
       send: (opts) => nm.sendMail({ from: opts.from ?? FROM, to: opts.to, subject: opts.subject, html: opts.html }) as any,
     });
-  }
-
-  if (resendKey) {
-    providers.push({ name: "Resend", send: (opts) => _sendViaResend(opts, resendKey) });
   }
 
   if (providers.length === 0) return null;
@@ -141,7 +141,9 @@ function getTransporter() {
 export async function verifySmtp(): Promise<void> {
   const active: string[] = [];
 
-  if (process.env.BREVO_API_KEY)  active.push("Brevo");
+  if (process.env.RESEND_API_KEY) active.push("Resend");
+
+  if (process.env.BREVO_API_KEY) active.push("Brevo");
 
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     const port = parseInt(process.env.SMTP_PORT ?? "587", 10);
@@ -158,8 +160,6 @@ export async function verifySmtp(): Promise<void> {
       .then(() => console.info(`✅  SMTP connection verified — ${process.env.SMTP_USER}`))
       .catch((err: any) => console.error(`❌  SMTP connection failed: ${err.message}`));
   }
-
-  if (process.env.RESEND_API_KEY) active.push("Resend");
 
   if (active.length === 0) {
     console.warn("\n⚠️  No email transport configured — emails will NOT be delivered.");
