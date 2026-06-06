@@ -1253,7 +1253,7 @@ function LandingFooter() {
   return (
     <footer className="bg-slate-900 border-t border-white/10" role="contentinfo">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 lg:py-16">
-        <div className="grid grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr] gap-8 lg:gap-12">
+        <div className="grid grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-8 lg:gap-12">
 
           {/* Brand */}
           <div className="col-span-2 lg:col-span-1">
@@ -1303,6 +1303,26 @@ function LandingFooter() {
                   </Link>
                 </li>
               ))}
+            </ul>
+          </nav>
+
+          {/* Support */}
+          <nav aria-label="Support links">
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-4">Support</p>
+            <ul className="space-y-2.5" role="list">
+              <li role="listitem">
+                <a
+                  href="mailto:sweepusdc@gmail.com"
+                  className="text-sm text-slate-400 hover:text-white transition-colors focus-visible:outline-none focus-visible:underline"
+                >
+                  sweepusdc@gmail.com
+                </a>
+              </li>
+              <li role="listitem">
+                <Link href={`${BASE}/docs`} className="text-sm text-slate-400 hover:text-white transition-colors focus-visible:outline-none focus-visible:underline">
+                  Documentation
+                </Link>
+              </li>
             </ul>
           </nav>
 

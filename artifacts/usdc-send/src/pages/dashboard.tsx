@@ -54,6 +54,7 @@ import {
   Tag,
   List,
   Layers,
+  LifeBuoy,
 } from "lucide-react";
 import {
   useGetCurrentUser,
@@ -189,7 +190,7 @@ function InlineError({ message }: { message: string }) {
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
-type ActivePage = "dashboard" | "send-usd" | "send-usdc" | "fund" | "recurring" | "subscription-create" | "subscription-pay" | "subscription-my" | "security";
+type ActivePage = "dashboard" | "send-usd" | "send-usdc" | "fund" | "recurring" | "subscription-create" | "subscription-pay" | "subscription-my" | "security" | "support";
 
 interface SidebarItemProps {
   icon: React.ReactNode;
@@ -445,6 +446,14 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
           label="Security"
           active={activePage === "security"}
           onClick={() => onNavigate("security")}
+          collapsed={collapsed}
+        />
+
+        <SidebarItem
+          icon={<LifeBuoy className="w-4 h-4" />}
+          label="Support"
+          active={activePage === "support"}
+          onClick={() => onNavigate("support")}
           collapsed={collapsed}
         />
       </nav>
@@ -763,7 +772,8 @@ export default function Dashboard() {
                activePage === "recurring"          ? "Recurring"           :
                activePage === "subscription-create" ? "Create Subscription" :
                activePage === "subscription-pay"   ? "Pay Subscription"    :
-               activePage === "subscription-my"    ? "My Subscriptions"    : "Security"}
+               activePage === "subscription-my"    ? "My Subscriptions"    :
+               activePage === "support"            ? "Support"             : "Security"}
             </span>
           </div>
 
@@ -1060,7 +1070,8 @@ export default function Dashboard() {
                          activePage === "recurring"           ? "Recurring"             :
                          activePage === "subscription-create" ? "Create Subscription"   :
                          activePage === "subscription-pay"   ? "Pay Subscription"      :
-                         activePage === "subscription-my"    ? "Subscription Dashboard" : "Security"}
+                         activePage === "subscription-my"    ? "Subscription Dashboard" :
+                         activePage === "support"            ? "Support"                : "Security"}
                       </h1>
                       <p className="text-xs text-muted-foreground mt-0.5 truncate">
                         {activePage === "send-usd"            ? "Transfer USD to any email address"          :
@@ -1070,6 +1081,7 @@ export default function Dashboard() {
                          activePage === "subscription-create" ? "Set up a new subscription plan"             :
                          activePage === "subscription-pay"   ? "Pay an existing subscription"               :
                          activePage === "subscription-my"    ? "Manage your subscriptions and passport"      :
+                         activePage === "support"            ? "Get help from our team"                      :
                                                                "Transaction password & authorization key"}
                       </p>
                     </div>
@@ -1179,6 +1191,68 @@ export default function Dashboard() {
                       {activePage === "security" && (
                         <motion.div key="security" variants={fadeIn} initial="hidden" animate="show" exit="hidden">
                           <SecurityTab user={user as any} onSecurityUpdated={() => queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] })} />
+                        </motion.div>
+                      )}
+
+                      {activePage === "support" && (
+                        <motion.div key="support" variants={fadeIn} initial="hidden" animate="show" exit="hidden" className="space-y-6">
+
+                          {/* Header card */}
+                          <div className="bg-gradient-to-br from-primary/10 to-violet-500/10 rounded-3xl p-8 text-center border border-primary/20">
+                            <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
+                              <LifeBuoy className="w-7 h-7 text-primary" />
+                            </div>
+                            <h2 className="text-xl font-bold text-foreground mb-2">Customer Support</h2>
+                            <p className="text-sm text-muted-foreground max-w-sm mx-auto leading-relaxed">
+                              Have a question or issue? Our support team is here to help. Reach out and we'll get back to you as soon as possible.
+                            </p>
+                          </div>
+
+                          {/* Contact card */}
+                          <div className="bg-white/80 backdrop-blur rounded-3xl border border-border p-6 space-y-5">
+                            <h3 className="font-semibold text-foreground text-sm">Contact Us</h3>
+
+                            <div className="flex items-start gap-4 p-4 rounded-2xl bg-secondary/30 border border-border/60">
+                              <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+                                <Mail className="w-4 h-4 text-primary" />
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold text-foreground mb-0.5">Email Support</p>
+                                <a
+                                  href="mailto:sweepusdc@gmail.com"
+                                  className="text-sm text-primary hover:underline break-all"
+                                >
+                                  sweepusdc@gmail.com
+                                </a>
+                                <p className="text-xs text-muted-foreground mt-1">We typically respond within 24 hours on business days.</p>
+                              </div>
+                            </div>
+
+                            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200">
+                              <p className="text-xs text-amber-800 leading-relaxed">
+                                <strong>Before reaching out</strong>, please include your registered email address and a clear description of the issue. For transaction-related queries, include the transaction ID if available.
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* FAQ card */}
+                          <div className="bg-white/80 backdrop-blur rounded-3xl border border-border p-6 space-y-4">
+                            <h3 className="font-semibold text-foreground text-sm">Common Questions</h3>
+                            <div className="space-y-3">
+                              {[
+                                { q: "My transaction is pending for a long time", a: "On-chain transactions can take a few minutes to confirm depending on network congestion. If it's been over 30 minutes, contact support with your transaction ID." },
+                                { q: "I didn't receive my verification email", a: "Check your spam or junk folder first. You can also request a new verification email from the login page." },
+                                { q: "I forgot my transaction password", a: "You can reset your transaction password from the Security page using your Personal Authorization Key (PAK)." },
+                                { q: "My withdrawal was rejected", a: "Ensure your wallet address is correct and on a supported network. Minimum withdrawal amounts apply per chain." },
+                              ].map(({ q, a }) => (
+                                <div key={q} className="border-b border-border/50 last:border-0 pb-3 last:pb-0">
+                                  <p className="text-sm font-medium text-foreground mb-1">{q}</p>
+                                  <p className="text-xs text-muted-foreground leading-relaxed">{a}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
                         </motion.div>
                       )}
 
