@@ -5,8 +5,6 @@ import bcrypt from "bcrypt";
 import { requireAuth, requireEmailVerified } from "../lib/auth.js";
 import { hashEmail, parseUsdcAmount } from "../lib/escrow.js";
 import {
-  sendTransferSentEmail,
-  sendTransferReceivedEmail,
   sendEscrowClaimedEmail,
 } from "../lib/email.js";
 
@@ -279,12 +277,6 @@ router.post("/send/platform", requireAuth, requireEmailVerified, async (req, res
       claimedAt: escrowStatus === "claimed" ? new Date() : null,
       txHash: null,
     }).returning();
-
-    sendTransferSentEmail(user.email, recipientEmail, amountStr, newBalance).catch(() => {});
-    if (recipient) {
-      const recipientNewBalance = (parseFloat(recipient.claimedBalance ?? "0") + numAmount).toFixed(6);
-      sendTransferReceivedEmail(recipientEmail, user.email, amountStr, recipientNewBalance).catch(() => {});
-    }
 
     res.json({
       success: true,
