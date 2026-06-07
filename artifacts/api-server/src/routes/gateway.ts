@@ -11,7 +11,6 @@ import { Router, type IRouter } from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { db, usersTable, depositsTable, withdrawalsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
-import { sendDepositConfirmedEmail } from "../lib/email.js";
 
 const router: IRouter = Router();
 
@@ -201,12 +200,6 @@ async function handleDepositFinalized(n: any): Promise<void> {
     console.info(
       `[gateway/webhook] deposit.finalized: safety-net credited ${amountDecimal} USDC to user ${dbUser.id}`,
     );
-    sendDepositConfirmedEmail(
-      dbUser.email,
-      amountDecimal.toFixed(2),
-      "crypto",
-      `Gateway (${chain})`,
-    ).catch(() => {});
   } else {
     console.info(`[gateway/webhook] deposit.finalized: idempotency conflict on insert — skipping`);
   }

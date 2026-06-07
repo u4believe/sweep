@@ -13,7 +13,6 @@ import {
   type SourceChain,
 } from "../lib/circle.js";
 import { triggerBridgeWorker } from "../lib/bridgeWorker.js";
-import { sendDepositConfirmedEmail } from "../lib/email.js";
 import { evmGatewaySweep, solanaSweep, arcTestnetSweep } from "../lib/gatewaySweep.js";
 import { getChain, isDepositChain, type ChainKey } from "../lib/gatewayConfig.js";
 
@@ -317,14 +316,6 @@ router.post("/circle/webhook", async (req, res) => {
 
       console.info(`[circle/webhook] Credited $${amountUsd} wire to user ${wireAccount.userId}`);
 
-      const [wireUserEmail] = await db
-        .select({ email: usersTable.email })
-        .from(usersTable)
-        .where(eq(usersTable.id, wireAccount.userId))
-        .limit(1);
-      if (wireUserEmail) {
-        sendDepositConfirmedEmail(wireUserEmail.email, amountUsd.toFixed(2), "bank", "Circle Wire Transfer").catch(() => {});
-      }
       return;
     }
 
@@ -428,9 +419,6 @@ router.post("/circle/webhook", async (req, res) => {
           if (!promoted) return;
           console.info(`[circle/webhook] Promoted pending→completed ${amount} USDC, user ${dbUser.id} from ${resolvedChain}`);
 
-          // Send confirmation email and enqueue bridge job (same as normal COMPLETE flow below).
-          const [eu] = await db.select({ email: usersTable.email }).from(usersTable).where(eq(usersTable.id, dbUser.id)).limit(1);
-          if (eu) sendDepositConfirmedEmail(eu.email, parseFloat(amount).toFixed(2), "crypto", sourceLabel).catch(() => {});
           void triggerGatewaySweep(dbUser.id, resolvedChain ?? "", amount);
           return;
         }
@@ -468,8 +456,6 @@ router.post("/circle/webhook", async (req, res) => {
           });
           if (promoted) {
             console.info(`[circle/webhook] Promoted pending→completed by txHash match, user ${dbUser.id} from ${resolvedChain}`);
-            const [eu] = await db.select({ email: usersTable.email }).from(usersTable).where(eq(usersTable.id, dbUser.id)).limit(1);
-            if (eu) sendDepositConfirmedEmail(eu.email, parseFloat(amount).toFixed(2), "crypto", sourceLabel).catch(() => {});
             void triggerGatewaySweep(dbUser.id, resolvedChain ?? "", amount);
           }
         }
@@ -522,15 +508,6 @@ router.post("/circle/webhook", async (req, res) => {
     }
 
     console.info(`[circle/webhook] Credited ${amount} USDC to user ${dbUser.id} from ${resolvedChain}`);
-
-    const [cryptoUserEmail] = await db
-      .select({ email: usersTable.email })
-      .from(usersTable)
-      .where(eq(usersTable.id, dbUser.id))
-      .limit(1);
-    if (cryptoUserEmail) {
-      sendDepositConfirmedEmail(cryptoUserEmail.email, parseFloat(amount).toFixed(2), "crypto", sourceLabel).catch(() => {});
-    }
 
     if (!resolvedChain) {
       console.warn(`[circle/webhook] Could not resolve chain for walletId=${walletId} — sweep skipped. Add blockchain field to webhook or ensure circleWalletIdsJson has the wallet ID.`);

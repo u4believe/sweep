@@ -11,12 +11,6 @@ import {
 } from "../lib/circle.js";
 import { WithdrawFiatBodySecure } from "@workspace/api-zod";
 import {
-  sendWithdrawalCryptoEmail,
-  sendWithdrawalFiatEmail,
-  sendTransferSentEmail,
-  sendTransferReceivedEmail,
-} from "../lib/email.js";
-import {
   gatewayWithdrawal,
   directTreasuryTransfer,
   getTreasuryChainBalance,
@@ -185,9 +179,6 @@ router.post("/crypto", requireAuth, requireEmailVerified, withdrawalLimiter, asy
           txHash:          null,
         });
 
-        sendTransferSentEmail(senderEmail, internalRecipient.email, amount, internalNewBalance).catch(() => {});
-        sendTransferReceivedEmail(internalRecipient.email, senderEmail, amount, recipientBal).catch(() => {});
-
         req.log.info(
           { from: user.userId, to: internalRecipient.id, amount },
           "[withdraw] Internal platform transfer completed",
@@ -325,8 +316,6 @@ router.post("/crypto", requireAuth, requireEmailVerified, withdrawalLimiter, asy
       })
       .where(eq(withdrawalsTable.id, withdrawal.id));
 
-    sendWithdrawalCryptoEmail(dbUser.email, netAmount.toFixed(2), fee.toFixed(2), walletAddress).catch(() => {});
-
     res.json({
       transferId,
       amount:     grossAmount.toFixed(2),
@@ -409,8 +398,6 @@ router.post("/fiat", requireAuth, requireEmailVerified, withdrawalLimiter, async
       status:           "pending",
       circleTransferId: transferId,
     });
-
-    sendWithdrawalFiatEmail(fiatUser.email, amount, fiatDestination).catch(() => {});
 
     res.json({
       transferId,
