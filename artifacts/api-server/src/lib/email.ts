@@ -61,6 +61,8 @@ async function _sendViaBrevo(opts: MailOpts, apiKey: string): Promise<void> {
     const body = await res.text().catch(() => "");
     throw new Error(`Brevo ${res.status}: ${body}`);
   }
+  const json = await res.json().catch(() => ({})) as Record<string, unknown>;
+  if (json.messageId) console.info(`[email] Brevo messageId: ${json.messageId}`);
 }
 
 async function _sendViaResend(opts: MailOpts, apiKey: string): Promise<void> {
