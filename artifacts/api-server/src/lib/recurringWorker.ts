@@ -2,7 +2,6 @@ import { db, recurringTransfersTable, escrowsTable, usersTable } from "@workspac
 import { eq, and, lte } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { hashEmail, parseUsdcAmount } from "./escrow.js";
-import { sendRecurringSuccessEmail, sendRecurringFailureEmail } from "./email.js";
 
 export async function processRecurringTransfers() {
   try {
@@ -52,18 +51,6 @@ export async function processRecurringTransfers() {
           .set({ nextRunAt })
           .where(eq(recurringTransfersTable.id, recurring.id));
         
-        // Send failure email
-        try {
-          await sendRecurringFailureEmail(
-            recurring.senderEmail,
-            recurring.amount,
-            recurring.recipientEmail,
-            currentBalance.toFixed(6),
-            nextRunAt,
-          );
-        } catch (emailErr) {
-          logger.warn({ err: emailErr }, "Failed to send recurring failure email");
-        }
         logger.info({ senderEmail: recurring.senderEmail }, "Insufficient funds — recurring transfer skipped");
         continue;
       }
@@ -92,17 +79,6 @@ export async function processRecurringTransfers() {
             .where(eq(recurringTransfersTable.id, recurring.id));
         });
 
-        try {
-          await sendRecurringSuccessEmail(
-            recurring.senderEmail,
-            recurring.amount,
-            recurring.recipientEmail,
-            newBalance,
-            nextRunAt,
-          );
-        } catch (emailErr) {
-          logger.warn({ err: emailErr }, "Failed to send recurring success email");
-        }
         logger.info({ senderEmail: recurring.senderEmail }, "Recurring transfer executed successfully");
 
       } catch (txnError: any) {
