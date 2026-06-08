@@ -43,9 +43,36 @@ function _setCooldown(email: string): void {
 
 const FROM = process.env.BREVO_FROM ?? process.env.RESEND_FROM ?? process.env.SMTP_FROM ?? "SweepUSDC <no-reply@usdcsend.app>";
 
+// ─── Brevo daily quota cache ──────────────────────────────────────────────────
+// Brevo accepts emails (returns 200 + messageId) even when the daily limit is
+// exhausted, then silently drops them. We pre-check remaining credits and throw
+// before sending so the fallback chain (Resend → SMTP) can take over.
+let _brevoQuota: { remaining: number; at: number } | null = null;
+
+async function _getBrevoRemaining(apiKey: string): Promise<number> {
+  const now = Date.now();
+  if (_brevoQuota && now - _brevoQuota.at < 5 * 60 * 1000) return _brevoQuota.remaining;
+  try {
+    const r = await fetch("https://api.brevo.com/v3/account", {
+      headers: { "api-key": apiKey },
+    });
+    if (!r.ok) return Infinity;
+    const d = await r.json() as any;
+    const plan = (d.plan as any[] ?? []).find((p: any) => p.creditsType === "sendingLimit");
+    const remaining = plan?.remainingCredits ?? (plan ? (plan.credits ?? 0) - (plan.userCredits ?? 0) : Infinity);
+    _brevoQuota = { remaining, at: now };
+    return remaining;
+  } catch {
+    return Infinity;
+  }
+}
+
 // ─── Individual provider send functions ───────────────────────────────────────
 
 async function _sendViaBrevo(opts: MailOpts, apiKey: string): Promise<void> {
+  const remaining = await _getBrevoRemaining(apiKey);
+  if (remaining <= 0) throw new Error("Brevo daily sending limit exhausted");
+
   const sender = _parseSender(opts.from ?? FROM);
   const res = await fetch("https://api.brevo.com/v3/smtp/email", {
     method:  "POST",
@@ -63,6 +90,7 @@ async function _sendViaBrevo(opts: MailOpts, apiKey: string): Promise<void> {
   }
   const json = await res.json().catch(() => ({})) as Record<string, unknown>;
   if (json.messageId) console.info(`[email] Brevo messageId: ${json.messageId}`);
+  if (_brevoQuota) _brevoQuota.remaining = Math.max(0, _brevoQuota.remaining - 1);
 }
 
 async function _sendViaResend(opts: MailOpts, apiKey: string): Promise<void> {
