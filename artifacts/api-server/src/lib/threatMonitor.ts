@@ -30,9 +30,23 @@ import { logger } from "./logger.js";
 // ─── Configuration ────────────────────────────────────────────────────────────
 
 const VIOLATION_WINDOW_MS    = 10 * 60 * 1000;  // rolling window to count violations in
-const VIOLATIONS_TO_BLOCK    = 5;               // strikes in window before blocking
+const VIOLATIONS_TO_BLOCK    = 10;              // strikes in window before blocking
 const REQ_RATE_LIMIT         = 80;              // max API requests per minute before a strike
 const RECORD_TTL_MS          = 24 * 60 * 60 * 1000; // forget inactive IPs after 24 h
+
+// Auth/OTP paths — 401 and 403 responses here are expected user behaviour
+// (wrong OTP, wrong password) and must not be scored as suspicious activity.
+// 429 (rate-limit hit) still scores on these paths.
+const AUTH_PATHS = new Set([
+  "/api/auth/register",
+  "/api/auth/login",
+  "/api/auth/verify-otp",
+  "/api/auth/resend-otp",
+  "/api/auth/verify-email",
+  "/api/auth/resend-verification",
+  "/api/auth/forgot-password",
+  "/api/auth/reset-password",
+]);
 
 const BLOCK_DURATIONS_MS = [
   1  * 60 * 1000,   // 1st block: 1 minute
@@ -187,10 +201,14 @@ export function threatMiddleware(req: Request, res: Response, next: NextFunction
 
   // ── 3. Score the response after it's sent ───────────────────────────────────
   res.on("finish", () => {
-    const status = res.statusCode;
-    const score  = VIOLATION_SCORES[status];
+    const status     = res.statusCode;
+    const score      = VIOLATION_SCORES[status];
+    const isAuthPath = AUTH_PATHS.has(req.path);
 
     if (score !== undefined) {
+      // 401/403 on auth/OTP paths are normal user mistakes — don't penalise.
+      // 429 still scores everywhere (rate-limit abuse is always suspicious).
+      if (isAuthPath && (status === 401 || status === 403)) return;
       recordViolation(ip, score, `HTTP ${status} on ${req.method} ${req.path}`);
       return;
     }
