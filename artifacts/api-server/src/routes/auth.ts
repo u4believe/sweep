@@ -152,10 +152,11 @@ router.post("/register", async (req, res) => {
 // Clicked from the link in the verification email. Marks email as verified and
 // redirects the user to the login page with a ?verified=true flag.
 router.get("/verify-email", async (req, res) => {
-  const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
+  const token       = typeof req.query.token === "string" ? req.query.token.trim() : "";
+  const frontendUrl = (process.env.FRONTEND_URL ?? "").replace(/\/$/, "");
 
   if (!token) {
-    res.redirect("/login?error=missing-token");
+    res.redirect(`${frontendUrl}/login?error=missing-token`);
     return;
   }
 
@@ -167,19 +168,19 @@ router.get("/verify-email", async (req, res) => {
       .limit(1);
 
     if (!user) {
-      res.redirect("/login?error=invalid-token");
+      res.redirect(`${frontendUrl}/login?error=invalid-token`);
       return;
     }
 
     if ((user as any).emailVerified) {
-      res.redirect("/login?verified=already");
+      res.redirect(`${frontendUrl}/login?verified=already`);
       return;
     }
 
     // Check 72-hour expiry (if the column exists).
     const tokenExpiry: Date | null = (user as any).emailVerificationTokenExpiresAt ?? null;
     if (tokenExpiry && tokenExpiry < new Date()) {
-      res.redirect("/login?error=link-expired");
+      res.redirect(`${frontendUrl}/login?error=link-expired`);
       return;
     }
 
@@ -188,10 +189,10 @@ router.get("/verify-email", async (req, res) => {
       .where(eq(usersTable.id, user.id));
 
     req.log.info({ userId: user.id }, "[auth] Email verified");
-    res.redirect("/login?verified=true");
+    res.redirect(`${frontendUrl}/login?verified=true`);
   } catch (error: any) {
     req.log.error({ err: error }, "Email verification error");
-    res.redirect("/login?error=server-error");
+    res.redirect(`${frontendUrl}/login?error=server-error`);
   }
 });
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "wouter";
-import { Mail, Lock, User, ArrowRight, Loader2, CheckCircle2, RefreshCw } from "lucide-react";
+import { Mail, Lock, User, ArrowRight, Loader2, CheckCircle2, RefreshCw, Eye, EyeOff } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import { AppLayout } from "@/components/layout";
@@ -18,9 +18,10 @@ export default function Register() {
   const [resent, setResent]       = useState(false);
   const [cfToken, setCfToken]     = useState("");
 
-  const [name,     setName]     = useState("");
-  const [email,    setEmail]    = useState("");
-  const [password, setPassword] = useState("");
+  const [name,         setName]         = useState("");
+  const [email,        setEmail]        = useState("");
+  const [password,     setPassword]     = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleRegister = async (e: { preventDefault(): void }) => {
     e.preventDefault();
@@ -126,9 +127,13 @@ export default function Register() {
                       <label className="block text-sm font-medium text-foreground mb-2">Password</label>
                       <div className="relative">
                         <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-muted-foreground"><Lock className="w-5 h-5" /></div>
-                        <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-                          className="w-full pl-11 pr-4 py-3 rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all outline-none"
+                        <input type={showPassword ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)}
+                          className="w-full pl-11 pr-11 py-3 rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all outline-none"
                           placeholder="••••••••" autoComplete="new-password" required />
+                        <button type="button" onClick={() => setShowPassword(v => !v)}
+                          className="absolute inset-y-0 right-0 pr-4 flex items-center text-muted-foreground hover:text-foreground transition-colors">
+                          {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                        </button>
                       </div>
                     </div>
 
