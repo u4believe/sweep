@@ -846,6 +846,21 @@ export default function Dashboard() {
                   </motion.div>
                 </div>
 
+                {/* Payment ID — Sweep email address for receiving platform payments */}
+                <motion.div variants={fadeUp} className="rounded-2xl border border-border bg-white overflow-hidden shadow-sm">
+                  <div className="px-4 py-3 border-b border-border/60 bg-slate-50/80 flex items-center gap-2">
+                    <Tag className="w-3.5 h-3.5 text-muted-foreground" />
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Payment ID</p>
+                  </div>
+                  <div className="px-4 py-4 flex items-center gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] text-muted-foreground mb-1">Share this ID to receive USD payments on Sweep</p>
+                      <p className="text-sm font-semibold text-foreground truncate">{user.email}</p>
+                    </div>
+                    <CopyButton text={user.email} />
+                  </div>
+                </motion.div>
+
                 {/* Deposit address strip — EVM + Solana */}
                 {(evmAddress || solanaAddress) && (
                   <motion.div variants={fadeUp}
