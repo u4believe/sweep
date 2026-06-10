@@ -515,7 +515,7 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
           mobileOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="pt-14 sm:pt-20 flex flex-col flex-1 overflow-hidden">
+        <div className="pt-16 sm:pt-20 flex flex-col flex-1 overflow-hidden">
           {sidebarContent}
         </div>
       </aside>
@@ -726,7 +726,7 @@ export default function Dashboard() {
 
       <Navbar />
 
-      <div className="flex pt-14 sm:pt-20 lg:pt-28 min-h-screen">
+      <div className="flex pt-16 sm:pt-20 lg:pt-28 min-h-screen">
         {/* Mobile overlay */}
         <AnimatePresence>
           {mobileOpen && (
@@ -3507,11 +3507,11 @@ function MySubscriptionsTab({ user }: { user: { name: string; email: string; has
 
       {/* ── Passport card — standalone, credit-card size ── */}
       {isLoadingPassport ? (
-        <div className="w-[380px] rounded-2xl border border-border bg-white px-5 py-4 flex items-center gap-2 text-muted-foreground text-sm">
+        <div className="w-full max-w-[380px] rounded-2xl border border-border bg-white px-5 py-4 flex items-center gap-2 text-muted-foreground text-sm">
           <Loader2 className="w-4 h-4 animate-spin" /> Checking passport…
         </div>
       ) : !passport?.hasPassport ? (
-        <div className="w-[380px] rounded-2xl border border-dashed border-border bg-secondary/20 px-5 py-6 flex flex-col items-center text-center gap-3">
+        <div className="w-full max-w-[380px] rounded-2xl border border-dashed border-border bg-secondary/20 px-5 py-6 flex flex-col items-center text-center gap-3">
           <div className="w-10 h-10 rounded-full bg-white border border-border flex items-center justify-center">
             <ShieldOff className="w-4 h-4 text-muted-foreground" />
           </div>
@@ -3523,7 +3523,7 @@ function MySubscriptionsTab({ user }: { user: { name: string; email: string; has
       ) : (
         <div
           className={cn(
-            "relative rounded-2xl overflow-hidden w-[380px] shrink-0",
+            "relative rounded-2xl overflow-hidden w-full max-w-[380px] shrink-0",
             passport.status === "active"    ? "bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950" :
             passport.status === "suspended" ? "bg-gradient-to-br from-slate-900 via-slate-800 to-amber-950"   :
                                               "bg-gradient-to-br from-slate-800 to-slate-900",
@@ -3604,7 +3604,7 @@ function MySubscriptionsTab({ user }: { user: { name: string; email: string; has
       )}
 
       {/* ── Stats row — 6 equal cards ── */}
-      <div className="grid grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="rounded-xl border border-border bg-white px-4 py-3.5 space-y-1">
           <div className="flex items-center justify-between">
             <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Active</p>
@@ -3678,7 +3678,7 @@ function MySubscriptionsTab({ user }: { user: { name: string; email: string; has
                 placeholder="Search title or merchant ID..."
                 value={tableSearch}
                 onChange={(e) => setTableSearch(e.target.value)}
-                className="pl-8 pr-3 h-8 rounded-lg border border-border text-xs text-foreground bg-secondary/30 outline-none focus:ring-1 focus:ring-primary/30 w-52"
+                className="pl-8 pr-3 h-8 rounded-lg border border-border text-xs text-foreground bg-secondary/30 outline-none focus:ring-1 focus:ring-primary/30 w-full sm:w-52"
               />
             </div>
             {/* Filter tabs */}
@@ -3818,7 +3818,7 @@ function MySubscriptionsTab({ user }: { user: { name: string; email: string; has
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading plans…
               </div>
             ) : (
-              <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))" }}>
+              <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(340px, 100%), 1fr))" }}>
                 {plans.map((plan: any) => {
                   const planSubscribeUrl = plan.merchantId
                     ? `${window.location.origin}${BASE}/subscribe/${plan.merchantId}`
@@ -4184,7 +4184,7 @@ function CreateSubscriptionTab({ user: _user }: { user: any }) {
       <div className="bg-white rounded-2xl border border-border shadow-sm overflow-hidden">
 
         {/* Header */}
-        <div className="px-8 py-6 border-b border-border">
+        <div className="px-4 sm:px-8 py-6 border-b border-border">
           <h3 className="text-lg font-bold text-foreground">New Subscription Plan</h3>
           <p className="text-sm text-muted-foreground mt-1">
             Subscribers are billed automatically on the schedule you define.
@@ -4194,7 +4194,7 @@ function CreateSubscriptionTab({ user: _user }: { user: any }) {
         <form onSubmit={handleSubmit} className="divide-y divide-border">
 
           {/* §1 Plan Details */}
-          <div className="px-8 py-7 space-y-5">
+          <div className="px-4 sm:px-8 py-7 space-y-5">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Plan Details</p>
 
             <div className="space-y-1.5">
@@ -4223,7 +4223,7 @@ function CreateSubscriptionTab({ user: _user }: { user: any }) {
           </div>
 
           {/* §2 Plan Structure */}
-          <div className="px-8 py-7 space-y-6">
+          <div className="px-4 sm:px-8 py-7 space-y-6">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Plan Structure</p>
 
             {/* Mode toggle */}
@@ -4272,11 +4272,11 @@ function CreateSubscriptionTab({ user: _user }: { user: any }) {
                 </div>
                 <div className="space-y-2">
                   {intervals.map((iv, idx) => (
-                    <div key={idx} className="flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-50 border border-border">
+                    <div key={idx} className="flex flex-wrap items-center gap-2 px-3 py-3 rounded-xl bg-slate-50 border border-border">
                       <select
                         value={iv.interval} onChange={(e) => updateInterval(idx, "interval", e.target.value)}
                         aria-label={`Billing cadence for interval ${idx + 1}`}
-                        className="h-9 rounded-lg border border-border bg-white px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
+                        className="h-9 rounded-lg border border-border bg-white px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition shrink-0"
                       >
                         {["weekly", "monthly", "yearly"].map((opt) => (
                           <option key={opt} value={opt} disabled={intervals.some((x, i) => i !== idx && x.interval === opt)}>
@@ -4450,7 +4450,7 @@ function CreateSubscriptionTab({ user: _user }: { user: any }) {
                           </div>
                           <div className="space-y-2">
                             {tier.intervals.map((iv, ivIdx) => (
-                              <div key={ivIdx} className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-50 border border-border">
+                              <div key={ivIdx} className="flex flex-wrap items-center gap-2 p-2.5 rounded-lg bg-slate-50 border border-border">
                                 <select value={iv.interval}
                                   onChange={(e) => updateTierInterval(tier.id, ivIdx, "interval", e.target.value)}
                                   aria-label={`Billing cadence for tier ${tierIdx + 1} interval ${ivIdx + 1}`}
@@ -4501,7 +4501,7 @@ function CreateSubscriptionTab({ user: _user }: { user: any }) {
           </div>
 
           {/* §3 Settings */}
-          <div className="px-8 py-7 space-y-5">
+          <div className="px-4 sm:px-8 py-7 space-y-5">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Settings</p>
 
             {/* Free trial */}
@@ -4556,7 +4556,7 @@ function CreateSubscriptionTab({ user: _user }: { user: any }) {
           </div>
 
           {/* §4 Actions */}
-          <div className="px-8 py-6 space-y-4 bg-slate-50/60">
+          <div className="px-4 sm:px-8 py-6 space-y-4 bg-slate-50/60">
             {error && <InlineError message={error} />}
 
             {result && (() => {

@@ -208,7 +208,7 @@ function LandingNav() {
               src="/Sweep_logo_exact.svg"
               alt="Sweep"
               className={cn(
-                "h-9 sm:h-10 lg:h-16 w-auto object-contain transition-all duration-300",
+                "h-11 sm:h-12 lg:h-16 w-auto object-contain transition-all duration-300",
                 scrolled ? "" : "brightness-0 invert",
               )}
             />
