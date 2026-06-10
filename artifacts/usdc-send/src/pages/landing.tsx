@@ -201,14 +201,14 @@ function LandingNav() {
       </a>
 
       <nav aria-label="Main navigation" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-20 lg:h-24">
+        <div className="flex items-center justify-between h-14 sm:h-16 lg:h-20">
 
           <Link href={`${BASE}/landing`} className="flex items-center shrink-0" aria-label="Sweep home">
             <img
               src="/Sweep_logo_exact.svg"
               alt="Sweep"
               className={cn(
-                "h-20 lg:h-28 w-auto object-contain transition-all duration-300",
+                "h-9 sm:h-10 lg:h-16 w-auto object-contain transition-all duration-300",
                 scrolled ? "" : "brightness-0 invert",
               )}
             />
@@ -401,12 +401,12 @@ function HeroSection({
   return (
     <section
       aria-label="Hero"
-      className="relative overflow-hidden min-h-[calc(100vh-4rem)] lg:min-h-screen flex items-center pt-16 lg:pt-20"
+      className="relative overflow-hidden min-h-[calc(100vh-3.5rem)] sm:min-h-[calc(100vh-4rem)] lg:min-h-screen flex items-center pt-14 sm:pt-16 lg:pt-20"
     >
       <WorldMapBackground />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24 w-full">
-        <div className="grid lg:grid-cols-2 gap-14 lg:gap-20 items-center">
+        <div className="grid lg:grid-cols-2 gap-8 lg:gap-20 items-center">
 
           {/* Left — copy */}
           <motion.div variants={staggerContainer(0.12, 0.1)} initial="hidden" animate="show">
@@ -427,7 +427,7 @@ function HeroSection({
             </motion.div>
 
             <motion.div variants={fadeUp}>
-              <h1 className="text-5xl lg:text-6xl xl:text-7xl font-bold text-foreground leading-[1.06] mb-6 text-balance">
+              <h1 className="text-3xl sm:text-4xl lg:text-6xl xl:text-7xl font-bold text-foreground leading-[1.06] mb-6 text-balance">
                 Send USD/USDC{" "}
                 <span className="block">
                   <span className="text-gradient-animated">Globally in Seconds</span>
@@ -820,7 +820,7 @@ function StatsSection() {
               transition={{ delay: i * 0.1, duration: 0.5 }}
               className="text-center lg:px-8 py-2"
             >
-              <p className="text-3xl lg:text-4xl font-bold text-foreground font-display mb-1">
+              <p className="text-2xl sm:text-3xl lg:text-4xl font-bold text-foreground font-display mb-1">
                 {isInView && <AnimatedCounter target={stat.target} prefix={stat.prefix} suffix={stat.suffix} decimals={stat.decimals} />}
               </p>
               <p className="text-sm text-muted-foreground font-medium">{stat.label}</p>

@@ -515,7 +515,7 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
           mobileOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="pt-28 flex flex-col flex-1 overflow-hidden">
+        <div className="pt-14 sm:pt-20 flex flex-col flex-1 overflow-hidden">
           {sidebarContent}
         </div>
       </aside>
@@ -726,7 +726,7 @@ export default function Dashboard() {
 
       <Navbar />
 
-      <div className="flex pt-28 min-h-screen">
+      <div className="flex pt-14 sm:pt-20 lg:pt-28 min-h-screen">
         {/* Mobile overlay */}
         <AnimatePresence>
           {mobileOpen && (
