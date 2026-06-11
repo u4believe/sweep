@@ -928,8 +928,8 @@ export default function Dashboard() {
                         <p className="text-xs mt-1 opacity-60">Your activity will appear here</p>
                       </motion.div>
                     ) : (
-                      <motion.div variants={staggerContainer(0.06)} initial="hidden" animate="show" className="space-y-2">
-                        {txHistory.transactions.map((tx) => {
+                      <div className="space-y-2">
+                        {txHistory.transactions.map((tx, index) => {
 
                           const isIn = tx.direction === "in";
                           const isCrypto = tx.currency === "USDC";
@@ -948,7 +948,9 @@ export default function Dashboard() {
                           return (
                             <motion.div
                               key={tx.id}
-                              variants={fadeUp}
+                              initial={{ opacity: 0, y: 12 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ delay: index * 0.04, duration: 0.3 }}
                               whileHover={{ x: 3, transition: { type: "spring", stiffness: 400, damping: 20 } }}
                               className="flex items-center justify-between p-4 rounded-2xl border border-border/50 hover:bg-secondary/20 transition-colors gap-4 cursor-pointer"
                               onClick={() => setSelectedTx(selectedTx?.id === tx.id ? null : tx)}
@@ -1025,7 +1027,7 @@ export default function Dashboard() {
                             </motion.div>
                           );
                         })}
-                      </motion.div>
+                      </div>
                     )}
                     {/* Pagination controls */}
                     {txHistory && txHistory.totalPages > 1 && (
@@ -2761,14 +2763,14 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
           {/* PAK card */}
           <motion.div variants={fadeUp} className="p-5 rounded-2xl border border-border bg-white space-y-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center",
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center shrink-0",
                   user.hasPak ? "bg-violet-100 text-violet-600" : "bg-secondary text-muted-foreground")}>
                   <KeyRound className="w-4 h-4" />
                 </div>
-                <div>
+                <div className="min-w-0 flex-1">
                   <p className="font-semibold text-foreground text-sm">Personal Authorization Key (PAK)</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
+                  <p className="text-xs text-muted-foreground mt-0.5 break-all">
                     {user.hasPak
                       ? user.pakPreview
                         ? <>Preview: <span className="font-mono">{user.pakPreview}</span></>
