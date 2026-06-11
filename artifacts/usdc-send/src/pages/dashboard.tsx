@@ -928,7 +928,7 @@ export default function Dashboard() {
                         <p className="text-xs mt-1 opacity-60">Your activity will appear here</p>
                       </motion.div>
                     ) : (
-                      <motion.div variants={staggerContainer(0.06)} className="space-y-2">
+                      <motion.div variants={staggerContainer(0.06)} initial="hidden" animate="show" className="space-y-2">
                         {txHistory.transactions.map((tx) => {
 
                           const isIn = tx.direction === "in";
