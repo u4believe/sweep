@@ -1,18 +1,15 @@
 import { Router, type IRouter } from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { db, usersTable, depositsTable, virtualAccountsTable, bridgeJobsTable } from "@workspace/db";
+import { db, usersTable, depositsTable, virtualAccountsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import {
   createCircleWireBankAccount,
   getCircleWireDepositInstructions,
   createMockWireDeposit,
-  getPlatformWalletAddress,
   SUPPORTED_SOURCE_CHAINS,
   ensureAllChainWallets,
-  type SourceChain,
 } from "../lib/circle.js";
-import { triggerBridgeWorker } from "../lib/bridgeWorker.js";
 import { evmGatewaySweep, solanaSweep, arcTestnetSweep } from "../lib/gatewaySweep.js";
 import { getChain, isDepositChain, type ChainKey } from "../lib/gatewayConfig.js";
 
@@ -382,7 +379,6 @@ router.post("/circle/webhook", async (req, res) => {
     // payload; fall back to looking up the chain from the walletId.
     const resolvedChain = blockchain ?? await resolveChainFromWallet(walletId, dbUser.id);
     const sourceLabel   = resolveChainLabel(resolvedChain);
-    const sourceChain   = (resolvedChain?.toUpperCase() as SourceChain | undefined);
 
     // "circle-{txId}" is the stable idempotency key — txId is always present,
     // unlike txHash which may be absent on PENDING notifications.
@@ -593,43 +589,6 @@ async function triggerGatewaySweep(
     console.error(
       `[deposit] triggerGatewaySweep failed: chain=${chainKey} user=${userId} err=${err?.message}`,
     );
-  }
-}
-
-// ─── Helper: enqueue bridge job (idempotent) ──────────────────────────────────
-async function enqueueBridgeJobIfNeeded(
-  userId:      number,
-  sourceChain: SourceChain | undefined,
-  destAddress: string | undefined,
-  amount:      string,
-  txHash:      string | null | undefined,
-): Promise<void> {
-  if (!sourceChain || !destAddress) return;
-  const platformAddress = getPlatformWalletAddress();
-  if (platformAddress && destAddress.toLowerCase() === platformAddress.toLowerCase()) return;
-
-  try {
-    if (txHash) {
-      const [found] = await db
-        .select({ id: bridgeJobsTable.id })
-        .from(bridgeJobsTable)
-        .where(eq(bridgeJobsTable.txHash, txHash))
-        .limit(1);
-      if (found) return;
-    }
-
-    await db.insert(bridgeJobsTable).values({
-      userId,
-      sourceChain,
-      userWalletAddress: destAddress,
-      amount:            parseFloat(amount).toFixed(6),
-      txHash:            txHash ?? null,
-      status:            "pending",
-    });
-    console.info(`[circle/webhook] Bridge job enqueued for ${amount} USDC on ${sourceChain}`);
-    triggerBridgeWorker();
-  } catch (e: any) {
-    console.warn(`[circle/webhook] Bridge job insert failed: ${e?.message}`);
   }
 }
 

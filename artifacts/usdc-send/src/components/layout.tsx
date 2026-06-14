@@ -24,9 +24,9 @@ export function Navbar() {
       className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-md border-b border-border/50 transition-all duration-300"
     >
       <div className="w-full px-4 sm:px-6">
-        <div className="flex justify-between items-center h-16 sm:h-20 lg:h-28">
+        <div className="flex justify-between items-center h-20 sm:h-24 lg:h-32">
           <Link href="/landing" className="flex items-center group">
-            <img src="/Sweep_logo_exact.svg" alt="Sweep" className="h-12 sm:h-16 lg:h-24 w-auto object-contain" />
+            <img src="/Sweep_logo_exact.svg" alt="Sweep" className="h-16 sm:h-20 lg:h-28 w-auto object-contain" />
           </Link>
 
           <div className="flex items-center gap-4">
@@ -78,7 +78,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen flex flex-col">
       <Navbar />
-      <main className="flex-1 pt-16 sm:pt-20 lg:pt-28">
+      <main className="flex-1 pt-20 sm:pt-24 lg:pt-32">
         {children}
       </main>
     </div>

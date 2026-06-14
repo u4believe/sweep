@@ -3176,8 +3176,8 @@ const CHAIN_META: Record<string, { label: string; badge: string; isSolana?: bool
 
 // All deposit-enabled networks in display order.
 const DEPOSIT_NETWORKS = [
-  "Arbitrum Sepolia", "Optimism Sepolia", "Polygon Amoy",
-  "Avalanche Fuji", "Solana (Devnet)",
+  "Base Sepolia", "Arc Testnet", "Arbitrum Sepolia", "Optimism Sepolia",
+  "Polygon Amoy", "Avalanche Fuji", "Solana (Devnet)",
 ];
 
 interface AddressGroup {

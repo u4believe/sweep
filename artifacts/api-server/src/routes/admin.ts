@@ -2,8 +2,6 @@
  * Admin routes — protected by ADMIN_SECRET header.
  *
  *   GET  /api/admin/treasury                  — Platform treasury balance (ARC-TESTNET)
- *   GET  /api/admin/bridge-jobs               — Bridge job ledger (paginated)
- *   POST /api/admin/bridge-jobs/:id/retry     — Manually requeue a failed job
  *   POST /api/admin/withdraw                  — Send USDC from treasury to any address
  *   POST /api/admin/setup-gateway-delegate    — One-time: create EOA signer + addDelegate on all chains
  *   GET  /api/admin/blocked-ips               — List currently blocked IPs
@@ -13,8 +11,8 @@
 
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { db, bridgeJobsTable, usersTable } from "@workspace/db";
-import { eq, desc, sql } from "drizzle-orm";
+import { db, usersTable } from "@workspace/db";
+import { eq, sql } from "drizzle-orm";
 import {
   circleTransferUsdc,
   getDcwClient,
@@ -158,58 +156,6 @@ router.get("/unified-balance", requireAdmin, async (req, res) => {
     });
   } catch (err: any) {
     req.log.error({ err }, "[admin] Unified balance error");
-    res.status(500).json({ error: "Internal server error", message: err.message });
-  }
-});
-
-// ─── GET /api/admin/bridge-jobs ───────────────────────────────────────────────
-router.get("/bridge-jobs", requireAdmin, async (req, res) => {
-  try {
-    const limit  = Math.min(parseInt(String(req.query.limit  ?? "50"), 10), 200);
-    const offset = parseInt(String(req.query.offset ?? "0"),  10);
-    const status = typeof req.query.status === "string" ? req.query.status : undefined;
-
-    const jobs = status
-      ? await db.select().from(bridgeJobsTable)
-          .where(eq(bridgeJobsTable.status, status))
-          .orderBy(desc(bridgeJobsTable.createdAt))
-          .limit(limit).offset(offset)
-      : await db.select().from(bridgeJobsTable)
-          .orderBy(desc(bridgeJobsTable.createdAt))
-          .limit(limit).offset(offset);
-
-    res.json({ jobs, limit, offset });
-  } catch (err: any) {
-    req.log.error({ err }, "[admin] Bridge jobs error");
-    res.status(500).json({ error: "Internal server error", message: err.message });
-  }
-});
-
-// ─── POST /api/admin/bridge-jobs/:id/retry ────────────────────────────────────
-router.post("/bridge-jobs/:id/retry", requireAdmin, async (req, res) => {
-  try {
-    const id = parseInt(String(req.params.id), 10);
-    if (isNaN(id)) {
-      res.status(400).json({ error: "Validation error", message: "Invalid job id" });
-      return;
-    }
-
-    const [job] = await db.select().from(bridgeJobsTable)
-      .where(eq(bridgeJobsTable.id, id)).limit(1);
-
-    if (!job) {
-      res.status(404).json({ error: "Not found", message: `Bridge job ${id} not found` });
-      return;
-    }
-
-    await db.update(bridgeJobsTable)
-      .set({ status: "pending", attempts: 0, lastError: null, updatedAt: new Date() })
-      .where(eq(bridgeJobsTable.id, id));
-
-    req.log.info({ jobId: id }, "[admin] Bridge job manually requeued");
-    res.json({ success: true, jobId: id, message: "Job requeued — bridge worker will pick it up shortly" });
-  } catch (err: any) {
-    req.log.error({ err }, "[admin] Retry bridge job error");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
 });

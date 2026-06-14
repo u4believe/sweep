@@ -350,10 +350,11 @@ export default function Docs() {
             <Section id="introduction" title="Introduction">
               <p className="text-muted-foreground leading-relaxed mb-4">
                 <strong className="text-foreground">Sweep</strong> is a full-stack USDC payment infrastructure platform
-                built for developers and end-users. It enables USD-denominated transfers on the{" "}
-                <strong className="text-foreground">Arc Testnet</strong> and{" "}
-                <strong className="text-foreground">Base Sepolia</strong> networks, with cross-chain bridging via
-                Circle's CCTP V2 protocol.
+                built for developers and end-users. It enables USD-denominated transfers across multiple testnet
+                networks — including <strong className="text-foreground">Arc Testnet</strong>,{" "}
+                <strong className="text-foreground">Base Sepolia</strong>, Arbitrum Sepolia, Optimism Sepolia,
+                Polygon Amoy, Avalanche Fuji, and Solana Devnet — with cross-chain settlement powered by
+                Circle's Gateway.
               </p>
               <div className="grid sm:grid-cols-2 gap-4 my-6">
                 {[
@@ -367,7 +368,8 @@ export default function Docs() {
                 ))}
               </div>
               <InfoBox title="Testnet notice" type="warning">
-                All transactions on Sweep currently run on testnet networks (Arc Testnet, Base Sepolia).
+                All transactions on Sweep currently run on testnet networks (Arc Testnet, Base Sepolia,
+                Arbitrum Sepolia, Optimism Sepolia, Polygon Amoy, Avalanche Fuji, and Solana Devnet).
                 USDC balances are not real funds. This is intended for development and demonstration purposes.
               </InfoBox>
             </Section>
@@ -384,7 +386,7 @@ export default function Docs() {
                 <ol className="list-decimal list-inside space-y-1.5 text-sm text-muted-foreground mb-4 ml-2">
                   <li>Hashes your password with <strong className="text-foreground">bcrypt</strong> (10 rounds)</li>
                   <li>Creates your user record in PostgreSQL</li>
-                  <li>Provisions a <strong className="text-foreground">Circle Developer Controlled Wallet</strong> on Arc Testnet and Base Sepolia</li>
+                  <li>Provisions <strong className="text-foreground">Circle Developer Controlled Wallets</strong> across the supported EVM networks and Solana</li>
                   <li>Sends an email verification link via <strong className="text-foreground">Resend</strong></li>
                 </ol>
                 <CodeBlock language="json">{`POST /api/auth/register
@@ -442,27 +444,32 @@ POST /api/auth/verify-otp
                 <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground mb-4 ml-2">
                   <li>Available USDC balance (pulled from the database)</li>
                   <li>Pending and completed transaction history</li>
-                  <li>Deposit addresses for Arc Testnet and Base Sepolia</li>
+                  <li>Deposit addresses for every supported network</li>
                   <li>Quick-access cards for every feature</li>
                 </ul>
               </SubSection>
 
               <SubSection id="fund-account" title="Fund Your Account">
                 <p className="text-muted-foreground text-sm leading-relaxed mb-3">
-                  Each user has two dedicated on-chain deposit addresses — one per chain — managed by
-                  Circle's Developer Controlled Wallets (DCW). Funds sent to these addresses are detected
-                  by background indexer workers and credited to your balance.
+                  Each user gets dedicated on-chain deposit addresses managed by Circle's Developer
+                  Controlled Wallets (DCW): a single EVM address shared across all supported EVM networks,
+                  plus a separate Solana address. Funds sent to these addresses are detected by background
+                  indexer workers and credited to your balance.
                 </p>
                 <div className="grid sm:grid-cols-2 gap-3 my-4 text-sm">
                   <div className="p-3 rounded-xl border border-border bg-secondary/30">
-                    <p className="font-semibold text-foreground mb-1">Arc Testnet</p>
-                    <p className="text-muted-foreground text-xs">Same-chain Circle DCW wallet. Deposits are indexed by the Arc USDC indexer and swept to the platform treasury.</p>
+                    <p className="font-semibold text-foreground mb-1">EVM networks</p>
+                    <p className="text-muted-foreground text-xs">Arc Testnet, Base Sepolia, Arbitrum Sepolia, Optimism Sepolia, Polygon Amoy, and Avalanche Fuji — all served by one shared EVM address. Deposits are indexed per chain and swept to the platform treasury.</p>
                   </div>
                   <div className="p-3 rounded-xl border border-border bg-secondary/30">
-                    <p className="font-semibold text-foreground mb-1">Base Sepolia</p>
-                    <p className="text-muted-foreground text-xs">Bridged via CCTP V2 <code>depositForBurn</code>. USDC is burned on Base and minted on Arc Testnet.</p>
+                    <p className="font-semibold text-foreground mb-1">Solana Devnet</p>
+                    <p className="text-muted-foreground text-xs">A dedicated Solana deposit address. SPL USDC deposits are indexed and swept to the platform treasury.</p>
                   </div>
                 </div>
+                <p className="text-muted-foreground text-xs leading-relaxed mb-3">
+                  Supported deposit networks: Arc Testnet, Base Sepolia, Arbitrum Sepolia, Optimism Sepolia,
+                  Polygon Amoy, Avalanche Fuji, and Solana Devnet.
+                </p>
                 <InfoBox type="info" title="Idempotency">
                   Deposits are deduplicated using the on-chain transaction hash. A unique constraint on
                   <code className="text-xs mx-1">deposits.tx_hash</code> combined with an{" "}
@@ -503,15 +510,24 @@ Authorization: Bearer <token>
               <SubSection id="withdraw" title="Withdraw">
                 <p className="text-muted-foreground text-sm leading-relaxed mb-3">
                   Withdrawal moves USDC from the platform treasury to an external wallet address on-chain.
-                  The user's balance is debited first, then the Circle DCW transfer is initiated.
-                  Withdrawals above a threshold require OTP confirmation for security.
+                  The user's balance is debited first, then the transfer is settled. If the treasury already
+                  holds enough USDC on the destination chain, a direct Circle DCW transfer is used; otherwise
+                  the <strong className="text-foreground">Circle Gateway</strong> Forwarding Service performs the
+                  cross-chain transfer to the destination network.
                 </p>
-                <CodeBlock language="json">{`POST /api/withdraw
+                <p className="text-muted-foreground text-sm leading-relaxed mb-3">
+                  If you've set a <strong className="text-foreground">transaction password</strong>, it is
+                  required to authorize each withdrawal. Supported withdrawal networks: Arc Testnet, Base Sepolia,
+                  Arbitrum Sepolia, Optimism Sepolia, Polygon Amoy, Avalanche Fuji, Unichain Sepolia, and
+                  Solana Devnet.
+                </p>
+                <CodeBlock language="json">{`POST /api/withdraw/crypto
 Authorization: Bearer <token>
 {
   "amount": "50.00",
   "walletAddress": "0xYourWallet...",
-  "network": "arc-testnet"
+  "chainKey": "ARC-TESTNET",
+  "transactionPassword": "your-txn-password"
 }`}</CodeBlock>
               </SubSection>
 
@@ -535,8 +551,8 @@ Authorization: Bearer <token>
                   <code className="bg-secondary px-1.5 py-0.5 rounded text-xs">GET /api/user/history</code> returns
                   a unified ledger of all deposits, escrow sends/receives, withdrawals, and recurring transfers.
                   The dashboard renders this with filterable tabs and links to block explorers for on-chain
-                  transactions (Ethereum Sepolia, Base Sepolia, Arc Testnet, Polygon Amoy, Arbitrum Sepolia,
-                  Avalanche Fuji).
+                  transactions (Arc Testnet, Base Sepolia, Arbitrum Sepolia, Optimism Sepolia, Polygon Amoy,
+                  Avalanche Fuji, Unichain Sepolia, and Solana Devnet).
                 </p>
               </SubSection>
             </Section>
@@ -643,7 +659,7 @@ Authorization: Bearer <passport_token>
 
               <SubSection id="chain-integrations" title="Chain Integrations">
                 <p className="text-muted-foreground text-sm leading-relaxed mb-3">
-                  Two indexer workers run continuously, one per chain, polling for new USDC transfers
+                  Indexer workers run continuously, polling each supported network for new USDC transfers
                   to user deposit addresses:
                 </p>
                 <CodeBlock language="typescript">{`// Simplified indexer loop
@@ -656,9 +672,12 @@ while (true) {
   await sleep(POLL_INTERVAL_MS);
 }`}</CodeBlock>
                 <p className="text-sm text-muted-foreground mt-3">
-                  Arc Testnet deposits are swept to the platform treasury via Circle DCW transfers.
-                  Base Sepolia deposits trigger CCTP V2 <code className="bg-secondary px-1.5 py-0.5 rounded text-xs">depositForBurn</code>,
-                  which burns USDC on Base and mints equivalent USDC on Arc Testnet.
+                  Deposits follow a three-step path on every supported network — no cross-chain bridging is
+                  involved. First the user's deposit is swept to the platform treasury wallet on that same chain.
+                  Then the treasury approves and calls{" "}
+                  <code className="bg-secondary px-1.5 py-0.5 rounded text-xs">depositFor()</code> on the Circle
+                  Gateway contract, moving the USDC into the chain-agnostic Gateway Unified Balance. Cross-chain
+                  withdrawals are later settled from that Unified Balance through the Gateway Forwarding Service.
                 </p>
               </SubSection>
 
@@ -667,10 +686,10 @@ while (true) {
                   Sweep uses Circle's <strong className="text-foreground">Developer Controlled Wallets (DCW)</strong> API to:
                 </p>
                 <ul className="list-disc list-inside space-y-1.5 text-sm text-muted-foreground mb-3 ml-2">
-                  <li>Provision a new wallet per user on account creation (Arc + Base Sepolia)</li>
+                  <li>Provision per-user deposit wallets on account creation across the supported EVM networks and Solana</li>
                   <li>Initiate USDC transfers from the platform treasury to external addresses</li>
                   <li>Query wallet balances and transaction history</li>
-                  <li>Execute CCTP V2 cross-chain burns</li>
+                  <li>Sweep deposits to the treasury, fund the Gateway Unified Balance via <code className="bg-secondary px-1.5 py-0.5 rounded text-xs">depositFor()</code>, and settle cross-chain withdrawals through the Gateway Forwarding Service</li>
                 </ul>
                 <InfoBox type="info">
                   Circle's Gas Station feature is enabled — users do not need to hold native gas tokens.
@@ -818,7 +837,8 @@ await resend.emails.send({
               </SubSection>
 
               <SubSection id="ref-withdraw" title="Withdraw">
-                <Endpoint method="POST" path="/api/withdraw"                description="Withdraw USDC to an external wallet" />
+                <Endpoint method="POST" path="/api/withdraw/crypto"          description="Withdraw USDC to an external wallet on a supported network" />
+                <Endpoint method="POST" path="/api/withdraw/fiat"            description="Withdraw to a bank account via Circle wire payout" />
               </SubSection>
 
               <SubSection id="ref-recurring" title="Recurring">
