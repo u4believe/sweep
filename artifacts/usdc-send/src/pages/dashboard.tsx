@@ -420,13 +420,26 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
     <div className="flex flex-col h-full">
       {/* Nav items */}
       <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
-        <SidebarItem
-          icon={<Home className="w-4 h-4" />}
-          label="Home"
-          active={false}
-          onClick={() => setLocation("/landing")}
-          collapsed={collapsed}
-        />
+        {/* Desktop: Home → landing page */}
+        <div className="hidden lg:block">
+          <SidebarItem
+            icon={<Home className="w-4 h-4" />}
+            label="Home"
+            active={false}
+            onClick={() => setLocation("/landing")}
+            collapsed={collapsed}
+          />
+        </div>
+        {/* Mobile: Dashboard → return to dashboard overview */}
+        <div className="lg:hidden">
+          <SidebarItem
+            icon={<Home className="w-4 h-4" />}
+            label="Dashboard"
+            active={activePage === "dashboard"}
+            onClick={() => onNavigate("dashboard")}
+            collapsed={collapsed}
+          />
+        </div>
         <SendSubMenu activePage={activePage} onNavigate={onNavigate} collapsed={collapsed} />
 
         <SidebarItem
@@ -486,7 +499,7 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
       {/* Desktop sidebar */}
       <aside
         className={cn(
-          "hidden lg:flex flex-col fixed left-0 top-28 h-[calc(100vh-7rem)] bg-white/95 backdrop-blur border-r border-border z-30 transition-all duration-300 w-60",
+          "hidden lg:flex flex-col fixed left-0 top-32 h-[calc(100vh-8rem)] bg-white/95 backdrop-blur border-r border-border z-30 transition-all duration-300 w-60",
           collapsed && "translate-x-[-100%]",
         )}
       >
@@ -497,7 +510,7 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
       <button
         onClick={onToggleCollapse}
         className={cn(
-          "hidden lg:flex fixed top-[calc(50%+3.5rem)] -translate-y-1/2 z-40 items-center justify-center bg-white border border-l-0 border-border rounded-r-xl w-6 h-12 shadow-md hover:bg-secondary transition-all duration-300",
+          "hidden lg:flex fixed top-[calc(50%+4rem)] -translate-y-1/2 z-40 items-center justify-center bg-white border border-l-0 border-border rounded-r-xl w-6 h-12 shadow-md hover:bg-secondary transition-all duration-300",
           collapsed ? "left-0" : "left-60",
         )}
         title={collapsed ? "Show sidebar" : "Hide sidebar"}
@@ -515,7 +528,7 @@ function DashSidebar({ activePage, onNavigate, collapsed, onToggleCollapse, mobi
           mobileOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="pt-16 sm:pt-20 flex flex-col flex-1 overflow-hidden">
+        <div className="pt-20 sm:pt-24 flex flex-col flex-1 overflow-hidden">
           {sidebarContent}
         </div>
       </aside>
@@ -694,7 +707,7 @@ export default function Dashboard() {
   if (isUserLoading || !user) {
     return (
       <AppLayout>
-        <div className="flex items-center justify-center h-[calc(100vh-7rem)]">
+        <div className="flex items-center justify-center h-[calc(100vh-8rem)]">
           <motion.div
             animate={{ rotate: 360 }}
             transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
@@ -726,7 +739,7 @@ export default function Dashboard() {
 
       <Navbar />
 
-      <div className="flex pt-16 sm:pt-20 lg:pt-28 min-h-screen">
+      <div className="flex pt-20 sm:pt-24 lg:pt-32 min-h-screen">
         {/* Mobile overlay */}
         <AnimatePresence>
           {mobileOpen && (
