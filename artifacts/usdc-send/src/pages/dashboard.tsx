@@ -4255,7 +4255,7 @@ function CreateSubscriptionTab({ user: _user }: { user: any }) {
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Plan Structure</p>
 
             {/* Mode toggle */}
-            <div role="group" aria-label="Plan structure type" className="flex gap-3">
+            <div role="group" aria-label="Plan structure type" className="flex flex-col sm:flex-row gap-3">
               {([
                 { mode: "flat",   Icon: List,   label: "Simple",  sub: "One price for all subscribers" },
                 { mode: "tiered", Icon: Layers, label: "Tiered",  sub: "Multiple tiers with different prices" },
