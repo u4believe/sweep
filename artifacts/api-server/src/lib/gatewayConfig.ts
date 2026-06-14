@@ -159,7 +159,7 @@ export const CHAINS: Record<ChainKey, ChainConfig> = {
     usdcAddress:       process.env.HYPEREVM_USDC_ADDRESS ?? "0x",
     explorerUrl:       "https://testnet.hyperliquid.xyz",
     depositsEnabled:   false,
-    withdrawalsEnabled: true,
+    withdrawalsEnabled: false, // disabled — withdrawals to HyperEVM were erroring
     minWithdrawal:     1,
     platformFee:       0.21,
     gasStationCovered: true,
@@ -170,8 +170,8 @@ export const CHAINS: Record<ChainKey, ChainConfig> = {
     type:              "evm",
     usdcAddress:       "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
     explorerUrl:       "https://sepolia.etherscan.io",
-    depositsEnabled:   false, // no deposits — withdrawals-only
-    withdrawalsEnabled: true,
+    depositsEnabled:   false,
+    withdrawalsEnabled: false, // disabled — withdrawals to Ethereum were erroring
     minWithdrawal:     20,
     platformFee:       2.75,
     gasStationCovered: true,

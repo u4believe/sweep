@@ -1296,8 +1296,6 @@ const WITHDRAWAL_CHAINS = [
   { key: "MATIC-AMOY",        label: "Polygon",   type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
   { key: "AVAX-FUJI",         label: "Avalanche", type: "evm",    minWithdrawal: 5,  platformFee: 0.35 },
   { key: "UNICHAIN-SEPOLIA",  label: "Unichain",  type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
-  { key: "HYPEREVM-TESTNET",  label: "HyperEVM",  type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
-  { key: "ETH-SEPOLIA",       label: "Ethereum",  type: "evm",    minWithdrawal: 20, platformFee: 2.75 },
   { key: "SOL-DEVNET",        label: "Solana",    type: "solana", minWithdrawal: 5,  platformFee: 0.40 },
 ] as const;
 
