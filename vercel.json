@@ -1,3 +1,9 @@
 {
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [
+    {
+      "source": "/stats/:path*",
+      "destination": "https://umami-production-311e.up.railway.app/:path*"
+    },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }
