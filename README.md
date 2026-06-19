@@ -1,7 +1,7 @@
 # Sweep — Web3‑Fiat Stablecoin Payments
 
 > Send USDC to anyone by **email address** — no wallet, no seed phrase, no gas for the sender.
-> Built on **Circle's Developer‑Controlled Wallets**, **Gateway**, **CCTP V2**, and **Gas Station**, with **Arc** as the settlement chain.
+> Built on **Circle's Developer‑Controlled Wallets**, **Gateway**, and **Gas Station**, with **Arc** as the settlement chain.
 
 This repository is a **pnpm monorepo** containing the full Sweep platform: an Express API server, a React single‑page app, and shared TypeScript libraries (database, validation, generated API client).
 
@@ -68,7 +68,7 @@ Web3-Fiat-Arc/
 | Frontend | **React 19**, **Vite 7**, Tailwind CSS 4, Radix UI, TanStack Query, Wouter, Framer Motion |
 | Database | **PostgreSQL** (Supabase) via **Drizzle ORM** (`node-postgres`) |
 | Auth & security | JWT, bcrypt, Helmet, express‑rate‑limit, custom threat monitor, email OTP 2FA |
-| Web3 / payments | **Circle DCW SDK**, **Circle App Kit**, **Gateway**, **CCTP V2**, **Gas Station**, viem, ethers, @solana/web3.js |
+| Web3 / payments | **Circle DCW SDK**, **Circle App Kit**, **Gateway**, **Gas Station**, viem, ethers, @solana/web3.js |
 | Email | Resend and/or SMTP (Brevo/Gmail) |
 | Hosting | Railway (API + static frontend), Vercel (frontend), Supabase (DB) |
 
@@ -221,7 +221,6 @@ Sweep uses Circle's stack so that **no private keys ever live on the server** �
 |---------|------------------|
 | **Developer‑Controlled Wallets (DCW)** | One SCA wallet per user (shared address across EVM chains) + a Solana wallet. Server signs via entity secret. |
 | **Gateway** | Unified USDC balance across chains; cross‑chain withdrawals via signed burn intents. |
-| **CCTP V2 (fast transfer)** | Bridges Base‑Sepolia deposits into the Arc treasury. |
 | **Gas Station** | Sponsors gas for sweep/withdrawal transactions so users (and senders) pay no gas. |
 | **Circle Wire / Mint** | Fiat on‑ramp: per‑user wire bank accounts and deposit instructions. |
 | **Webhooks** | Notify the server of deposits/transfers so balances are credited. |
@@ -261,7 +260,7 @@ This creates the EOA signer and submits `addDelegate` on all Gateway‑supported
 
 **User onboarding →** on registration the server calls `createUserCircleWallet()` → `client.createWallets({ accountType: "SCA", … })`. EVM chains share a single on‑chain address; a separate Solana wallet is provisioned. Wallet ids/addresses are stored on the `users` row. `ensureAllChainWallets()` backfills any missing chains.
 
-**Deposit (crypto) →** the user sends USDC to their wallet on any supported chain. The **deposit indexer** detects it, records a `deposits` row (with unique indexes preventing double‑credits), then **sweeps** it to the treasury with `sweepUsdcToPlatformWallet()`. Base‑Sepolia deposits are bridged to Arc via **CCTP V2**; the user's spendable balance consolidates on Arc.
+**Deposit (crypto) →** the user sends USDC to their wallet on any supported chain. The **deposit indexer** detects it, records a `deposits` row (with unique indexes preventing double‑credits), then **sweeps** it to the treasury with `sweepUsdcToPlatformWallet()`. Deposits consolidate into the Arc treasury, where the user's spendable balance lives.
 
 **Deposit (fiat / wire) →** `createCircleWireBankAccount()` + `getCircleWireDepositInstructions()` give the user bank details; Circle mints USDC on receipt and fires a webhook that credits the balance.
 

@@ -2,9 +2,8 @@
  * Circle integration — DCW client, wallet provisioning, USDC transfers.
  *
  * Supported networks:
- *   ARC-TESTNET  — Primary treasury chain. Arc deposits swept directly here;
- *                  Base Sepolia deposits bridged here via CCTP V2 fast transfer.
- *                  All withdrawals are sent from the Arc treasury wallet.
+ *   ARC-TESTNET  — Primary treasury chain. Deposits are swept here; all
+ *                  withdrawals are sent from the Arc treasury wallet.
  *   BASE-SEPOLIA — User deposit chain only. No direct withdrawals from here.
  *
  * No private keys on the server. All signing uses Circle DCW (entity secret).

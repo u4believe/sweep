@@ -301,7 +301,7 @@ const BURN_INTENT_TYPES = {
   ],
 };
 
-// Circle Gateway CCTP domain IDs — NOT EVM chain IDs.
+// Circle Gateway domain IDs — NOT EVM chain IDs.
 // These are Circle-issued identifiers used in the TransferSpec.
 const GATEWAY_DOMAIN_IDS: Partial<Record<ChainKey, number>> = {
   "ETH-SEPOLIA":       0,
