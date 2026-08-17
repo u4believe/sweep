@@ -1,7 +1,7 @@
 # Sweep — Web3‑Fiat Stablecoin Payments
 
-> Send USDC to anyone by **email address** — no wallet, no seed phrase, no gas for the sender.
-> Built on **Circle's Developer‑Controlled Wallets**, **Gateway**, and **Gas Station**, with **Arc** as the settlement chain.
+> Send USDC is a web3-fiat stablecoin payment that allows it's users to send USD to each other by a **email address** — no wallet, no seed phrase, no gas for the sender, backed by the stablecoin reserve in the Sweep treasury, while still allowing users to send USDC to other External Own Wallets.
+> Built on **Circle's Developer‑Controlled Wallets**, **Gateway**, and **Gas Station**.
 
 This repository is a **pnpm monorepo** containing the full Sweep platform: an Express API server, a React single‑page app, and shared TypeScript libraries (database, validation, generated API client).
 
@@ -9,19 +9,33 @@ This repository is a **pnpm monorepo** containing the full Sweep platform: an Ex
 
 ## Table of contents
 
-1. [Architecture](#architecture)
-2. [Tech stack](#tech-stack)
-3. [Prerequisites](#prerequisites)
-4. [Quick start](#quick-start)
-5. [Environment variables](#environment-variables)
-6. [Database setup](#database-setup)
-7. [Running the app](#running-the-app)
-8. [Circle integration — detailed walkthrough](#circle-integration--detailed-walkthrough)
-9. [Background workers](#background-workers)
-10. [Supported chains](#supported-chains)
-11. [Deployment](#deployment)
-12. [Scripts reference](#scripts-reference)
-13. [Security notes](#security-notes)
+- [Sweep — Web3‑Fiat Stablecoin Payments](#sweep--web3fiat-stablecoin-payments)
+  - [Table of contents](#table-of-contents)
+  - [Architecture](#architecture)
+  - [Tech stack](#tech-stack)
+  - [Prerequisites](#prerequisites)
+  - [Quick start](#quick-start)
+  - [Environment variables](#environment-variables)
+    - [Required (server refuses to start without these)](#required-server-refuses-to-start-without-these)
+    - [Circle — wallets, gateway \& gas](#circle--wallets-gateway--gas)
+    - [Chains \& contracts](#chains--contracts)
+    - [Auth, email \& app](#auth-email--app)
+  - [Database setup](#database-setup)
+  - [Running the app](#running-the-app)
+    - [Development](#development)
+    - [Production‑style (single container)](#productionstyle-single-container)
+  - [Circle integration — detailed walkthrough](#circle-integration--detailed-walkthrough)
+    - [Circle products used](#circle-products-used)
+    - [One‑time setup](#onetime-setup)
+    - [How the money flows](#how-the-money-flows)
+  - [Background workers](#background-workers)
+  - [Supported chains](#supported-chains)
+  - [Deployment](#deployment)
+    - [API server + frontend — Railway (Docker)](#api-server--frontend--railway-docker)
+    - [Frontend — Vercel (optional split)](#frontend--vercel-optional-split)
+    - [Database — Supabase](#database--supabase)
+  - [Scripts reference](#scripts-reference)
+  - [Security notes](#security-notes)
 
 ---
 

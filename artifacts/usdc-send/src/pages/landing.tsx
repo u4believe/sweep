@@ -436,14 +436,13 @@ function HeroSection({
             </motion.div>
 
             <motion.p variants={fadeUp} className="text-lg lg:text-xl text-muted-foreground mb-8 leading-relaxed max-w-lg text-balance">
-              No wallet required. Send stablecoins by email — funds are locked in a smart
-              contract until the recipient signs up and claims them.
+              No wallet required. Send USD by email — funds are backed by the stablecoin reserve in the Sweep treasury.
             </motion.p>
 
             {/* Trust badges */}
             <motion.div variants={staggerContainer(0.08)} className="flex flex-wrap gap-3 mb-10">
               {[
-                { icon: <ShieldCheck className="w-4 h-4" aria-hidden />, label: "Smart Contract Secured" },
+                { icon: <ShieldCheck className="w-4 h-4" aria-hidden />, label: "Secured Database" },
                 { icon: <BadgeCheck className="w-4 h-4" aria-hidden />,   label: "Circle-Powered" },
                 { icon: <Globe className="w-4 h-4" aria-hidden />,        label: "Worldwide Transfers" },
               ].map((b) => (
@@ -463,8 +462,8 @@ function HeroSection({
               {[
                 {
                   icon: <ShieldCheck className="w-6 h-6 text-primary" />, bg: "bg-blue-100",
-                  title: "Secure Escrow",
-                  desc: "Smart contract locked with email hashes — only the verified recipient can claim.",
+                  title: "Stablecoin Backing",
+                  desc: "Funds are backed by Stablecoins in the platform Treasury.",
                 },
                 {
                   icon: <Mail className="w-6 h-6 text-teal-600" />, bg: "bg-teal-100",
