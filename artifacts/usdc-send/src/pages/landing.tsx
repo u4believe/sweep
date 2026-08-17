@@ -1261,8 +1261,8 @@ function LandingFooter() {
               <img src="/Sweep_logo_exact.svg" alt="Sweep" className="h-14 w-auto object-contain brightness-[4] saturate-0" />
             </Link>
             <p className="text-sm text-slate-400 leading-relaxed max-w-xs text-balance">
-              Send and receive USDC globally using just an email address. Powered by Circle's
-              developer-controlled wallet infrastructure.
+              Disclaimer: Sending and receiving USDC/USD on Sweep involve no real funds ── as all assets involved at this testing phase are Testnet funds. Sweep is built on Arc and Circle
+              stacks.
             </p>
           </div>
 
