@@ -798,8 +798,8 @@ function HeroSection({
 // ── Stats section ─────────────────────────────────────────────────────────────
 
 const STATS = [
-  { prefix: "$", target: 48.3, suffix: "K+", decimals: 1, label: "Total Sent"       },
-  { prefix: "",  target: 280,  suffix: "+",  decimals: 0, label: "Active Users"      },
+  { prefix: "$", target: 23.8, suffix: "K+", decimals: 1, label: "Volume in Transaction"       },
+  { prefix: "",  target: 150,  suffix: "+",  decimals: 0, label: "Signed up Users"      },
   { prefix: "",  target: 99.9, suffix: "%",  decimals: 1, label: "Uptime"            },
   { prefix: "<", target: 1,    suffix: "s",  decimals: 0, label: "Settlement Time"   },
 ];
@@ -863,7 +863,7 @@ const FEATURES = [
     icon: <Layers className="w-6 h-6" />,
     color: "text-primary bg-primary/5 border-primary/15",
     title: "Circle-Powered Infrastructure",
-    desc: "Built on Circle's enterprise-grade developer-controlled wallets — the same infrastructure trusted by Coinbase.",
+    desc: "Built on Circle's enterprise-grade developer-controlled wallets.",
   },
 ];
 
@@ -1108,7 +1108,7 @@ const TRUST_POINTS = [
   {
     icon: <Layers className="w-6 h-6" aria-hidden />,
     title: "Circle-Verified Infrastructure",
-    desc: "Wallets are powered by Circle's developer-controlled wallet API — the same stack used by Coinbase and Binance.US.",
+    desc: "Wallets are powered by Circle's developer-controlled wallet API.",
   },
   {
     icon: <ShieldCheck className="w-6 h-6" aria-hidden />,
@@ -1123,7 +1123,7 @@ const TRUST_POINTS = [
   {
     icon: <BadgeCheck className="w-6 h-6" aria-hidden />,
     title: "Non-Custodial by Default",
-    desc: "Your private keys are never held by us. Developer-controlled wallets mean you own your funds at all times.",
+    desc: "Your private keys are never held by us. Circle Developer-controlled wallets mean you don't need a private key while owning your funds at all times.",
   },
 ];
 
