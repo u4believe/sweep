@@ -1123,7 +1123,7 @@ const TRUST_POINTS = [
   {
     icon: <BadgeCheck className="w-6 h-6" aria-hidden />,
     title: "Non-Custodial by Default",
-    desc: "Your private keys are never held by us. Users wallets are managed by Circle Developer-controlled wallets which means. No private key. And you own your funds at all times.",
+    desc: "Your private keys are never held by us. Users wallets are managed by Circle Developer-controlled wallets which means. No private key needed. And you own your funds at all times.",
   },
 ];
 
