@@ -65,69 +65,20 @@ import { useQuery } from "@tanstack/react-query";
 import { cn, formatCurrency } from "@/lib/utils";
 import { API_BASE } from "@/lib/api";
 import { AppLayout, Navbar } from "@/components/layout";
+import { MobileDashboard } from "@/components/mobile/mobile-dashboard";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { fadeUp, scaleIn, staggerContainer, fadeIn } from "@/lib/motion";
+import {
+  getExplorerUrl,
+  isOnChainHash,
+  WITHDRAWAL_CHAINS,
+  EVM_ADDR_RE,
+  SOL_ADDR_RE,
+  type UnifiedTx,
+  type FullBalance,
+} from "@/lib/wallet";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
-// Block explorer TX-page prefixes, matched against the network/source field.
-// Ordered from most-specific to least-specific to avoid "arc" matching "arbitrum".
-const EXPLORER_BASE: Array<{ match: string; url: string; solana?: boolean }> = [
-  { match: "arb",              url: "https://sepolia.arbiscan.io/tx/" },
-  { match: "optimism",         url: "https://testnet-explorer.optimism.io/tx/" },
-  { match: "op-sepolia",       url: "https://testnet-explorer.optimism.io/tx/" },
-  { match: "polygon",          url: "https://amoy.polygonscan.com/tx/" },
-  { match: "matic",            url: "https://amoy.polygonscan.com/tx/" },
-  { match: "avalanche",        url: "https://testnet.avascan.info/blockchain/c/tx/" },
-  { match: "avax",             url: "https://testnet.avascan.info/blockchain/c/tx/" },
-  { match: "ethereum",         url: "https://sepolia.etherscan.io/tx/" },
-  { match: "eth-sepolia",      url: "https://sepolia.etherscan.io/tx/" },
-  { match: "unichain",         url: "https://unichain-sepolia.blockscout.com/tx/" },
-  { match: "hyperevm",         url: "https://testnet.hyperliquid.xyz/tx/" },
-  { match: "base",             url: "https://sepolia.basescan.org/tx/" },
-  { match: "arc",              url: "https://testnet.arcscan.app/tx/" },
-  { match: "solana",           url: "https://explorer.solana.com/tx/", solana: true },
-  { match: "sol-devnet",       url: "https://explorer.solana.com/tx/", solana: true },
-];
-
-// EVM: 0x + 64 hex chars.  Solana: base58, 87–88 chars (no 0x prefix).
-const isEvmHash    = (h: string) => /^0x[0-9a-fA-F]{64}$/.test(h);
-const isSolanaHash = (h: string) => /^[1-9A-HJ-NP-Za-km-z]{87,88}$/.test(h);
-const isOnChainHash = (h: string) => isEvmHash(h) || isSolanaHash(h);
-
-function getExplorerUrl(network: string, txHash: string): string | null {
-  if (!txHash || !isOnChainHash(txHash)) return null;
-  const lower = network.toLowerCase().replace(/[-_]/g, " ");
-  const entry  = EXPLORER_BASE.find((e) => lower.includes(e.match.replace(/-/g, " ")));
-  if (!entry) return null;
-  // Solana explorer needs ?cluster=devnet appended after the signature
-  return entry.solana
-    ? `${entry.url}${txHash}?cluster=devnet`
-    : `${entry.url}${txHash}`;
-}
-
-interface UnifiedTx {
-  id: string;
-  category: "deposit" | "withdrawal" | "escrow";
-  currency: "USDC" | "USD";
-  direction: "in" | "out";
-  amount: string;
-  status: string;
-  network: string;
-  txHash: string | null;
-  fromAddress: string | null;
-  toAddress: string | null;
-  description: string;
-  createdAt: string;
-  completedAt: string | null;
-}
-
-interface FullBalance {
-  onChainUsdcBalance: string;
-  onChainLastUpdated: string | null;
-  claimedBalance: string;
-  pendingBalance: string;
-  usdBalance: string;
-  usdEquivalent: string;
-}
 
 // ─── Animated counter ─────────────────────────────────────────────────────────
 
@@ -630,6 +581,8 @@ export default function Dashboard() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileOpen,       setMobileOpen]       = useState(false);
   const [fundMethod,       setFundMethod]       = useState<"crypto" | "bank">("crypto");
+  // Below lg the dashboard renders the mobile shell, which runs its own history query.
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
 
   const { data: user, isLoading: isUserLoading, isError: isUserError } =
     useGetCurrentUser({ query: { retry: false } as any });
@@ -641,7 +594,7 @@ export default function Dashboard() {
   const [txPage, setTxPage] = useState(1);
   const { data: txHistory, error: txHistoryError, isError: isTxHistoryError, isLoading: isTxHistoryLoading } = useQuery({
     queryKey: ["/api/user/history", txPage],
-    enabled: !!user,
+    enabled: !!user && isDesktop,
     staleTime: 0,
     refetchInterval: 5_000,
     refetchOnWindowFocus: true,
@@ -728,6 +681,32 @@ export default function Dashboard() {
   }
 
   const circleWallet = (user as any)?.circleWalletAddress as string | undefined;
+  const hasTxnPwd    = (user as any).hasTransactionPassword as boolean;
+
+  if (!isDesktop) {
+    return (
+      <MobileDashboard
+        user={{ name: user.name, email: user.email, hasTransactionPassword: hasTxnPwd, circleWalletAddress: circleWallet }}
+        balance={bal}
+        depositAddresses={depositAddresses}
+        withdraw={withdrawCryptoMutation}
+        onBalanceChanged={() => { refetchBalance(); invalidateHistory(); }}
+        onLogout={() => {
+          localStorage.removeItem("token");
+          queryClient.clear();
+          window.location.href = import.meta.env.BASE_URL || "/";
+        }}
+        slots={{
+          recurring:  <RecurringTransferTab userEmail={user.email} availableBalance={parseFloat(balance?.claimedBalance ?? "0")} hasTransactionPassword={hasTxnPwd} />,
+          subsMine:   <MySubscriptionsTab user={user as any} />,
+          subsCreate: <CreateSubscriptionTab user={user} />,
+          subsPay:    <PaySubscriptionTab user={user} />,
+          settings:   <SecurityTab user={user as any} onSecurityUpdated={() => queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] })} />,
+          support:    <SupportContent />,
+        }}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -1225,64 +1204,8 @@ export default function Dashboard() {
                       )}
 
                       {activePage === "support" && (
-                        <motion.div key="support" variants={fadeIn} initial="hidden" animate="show" exit="hidden" className="space-y-6">
-
-                          {/* Header card */}
-                          <div className="bg-gradient-to-br from-primary/10 to-violet-500/10 rounded-3xl p-8 text-center border border-primary/20">
-                            <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
-                              <LifeBuoy className="w-7 h-7 text-primary" />
-                            </div>
-                            <h2 className="text-xl font-bold text-foreground mb-2">Customer Support</h2>
-                            <p className="text-sm text-muted-foreground max-w-sm mx-auto leading-relaxed">
-                              Have a question or issue? Our support team is here to help. Reach out and we'll get back to you as soon as possible.
-                            </p>
-                          </div>
-
-                          {/* Contact card */}
-                          <div className="bg-white/80 backdrop-blur rounded-3xl border border-border p-6 space-y-5">
-                            <h3 className="font-semibold text-foreground text-sm">Contact Us</h3>
-
-                            <div className="flex items-start gap-4 p-4 rounded-2xl bg-secondary/30 border border-border/60">
-                              <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-                                <Mail className="w-4 h-4 text-primary" />
-                              </div>
-                              <div className="min-w-0">
-                                <p className="text-sm font-semibold text-foreground mb-0.5">Email Support</p>
-                                <a
-                                  href="mailto:sweepusdc@gmail.com"
-                                  className="text-sm text-primary hover:underline break-all"
-                                >
-                                  sweepusdc@gmail.com
-                                </a>
-                                <p className="text-xs text-muted-foreground mt-1">We typically respond within 24 hours on business days.</p>
-                              </div>
-                            </div>
-
-                            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200">
-                              <p className="text-xs text-amber-800 leading-relaxed">
-                                <strong>Before reaching out</strong>, please include your registered email address and a clear description of the issue. For transaction-related queries, include the transaction ID if available.
-                              </p>
-                            </div>
-                          </div>
-
-                          {/* FAQ card */}
-                          <div className="bg-white/80 backdrop-blur rounded-3xl border border-border p-6 space-y-4">
-                            <h3 className="font-semibold text-foreground text-sm">Common Questions</h3>
-                            <div className="space-y-3">
-                              {[
-                                { q: "My transaction is pending for a long time", a: "On-chain transactions can take a few minutes to confirm depending on network congestion. If it's been over 30 minutes, contact support with your transaction ID." },
-                                { q: "I didn't receive my verification email", a: "Check your spam or junk folder first. You can also request a new verification email from the login page." },
-                                { q: "I forgot my transaction password", a: "You can reset your transaction password from the Security page using your Personal Authorization Key (PAK)." },
-                                { q: "My withdrawal was rejected", a: "Ensure your wallet address is correct and on a supported network. Minimum withdrawal amounts apply per chain." },
-                              ].map(({ q, a }) => (
-                                <div key={q} className="border-b border-border/50 last:border-0 pb-3 last:pb-0">
-                                  <p className="text-sm font-medium text-foreground mb-1">{q}</p>
-                                  <p className="text-xs text-muted-foreground leading-relaxed">{a}</p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
+                        <motion.div key="support" variants={fadeIn} initial="hidden" animate="show" exit="hidden">
+                          <SupportContent />
                         </motion.div>
                       )}
 
@@ -1299,21 +1222,71 @@ export default function Dashboard() {
   );
 }
 
+// ─── Support ──────────────────────────────────────────────────────────────────
+
+function SupportContent() {
+  return (
+    <div className="space-y-6">
+      {/* Header card */}
+      <div className="bg-gradient-to-br from-primary/10 to-violet-500/10 rounded-3xl p-8 text-center border border-primary/20">
+        <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
+          <LifeBuoy className="w-7 h-7 text-primary" />
+        </div>
+        <h2 className="text-xl font-bold text-foreground mb-2">Customer Support</h2>
+        <p className="text-sm text-muted-foreground max-w-sm mx-auto leading-relaxed">
+          Have a question or issue? Our support team is here to help. Reach out and we'll get back to you as soon as possible.
+        </p>
+      </div>
+
+      {/* Contact card */}
+      <div className="bg-white/80 backdrop-blur rounded-3xl border border-border p-6 space-y-5">
+        <h3 className="font-semibold text-foreground text-sm">Contact Us</h3>
+
+        <div className="flex items-start gap-4 p-4 rounded-2xl bg-secondary/30 border border-border/60">
+          <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+            <Mail className="w-4 h-4 text-primary" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-foreground mb-0.5">Email Support</p>
+            <a
+              href="mailto:sweepusdc@gmail.com"
+              className="text-sm text-primary hover:underline break-all"
+            >
+              sweepusdc@gmail.com
+            </a>
+            <p className="text-xs text-muted-foreground mt-1">We typically respond within 24 hours on business days.</p>
+          </div>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200">
+          <p className="text-xs text-amber-800 leading-relaxed">
+            <strong>Before reaching out</strong>, please include your registered email address and a clear description of the issue. For transaction-related queries, include the transaction ID if available.
+          </p>
+        </div>
+      </div>
+
+      {/* FAQ card */}
+      <div className="bg-white/80 backdrop-blur rounded-3xl border border-border p-6 space-y-4">
+        <h3 className="font-semibold text-foreground text-sm">Common Questions</h3>
+        <div className="space-y-3">
+          {[
+            { q: "My transaction is pending for a long time", a: "On-chain transactions can take a few minutes to confirm depending on network congestion. If it's been over 30 minutes, contact support with your transaction ID." },
+            { q: "I didn't receive my verification email", a: "Check your spam or junk folder first. You can also request a new verification email from the login page." },
+            { q: "I forgot my transaction password", a: "You can reset your transaction password from the Security page using your Personal Authorization Key (PAK)." },
+            { q: "My withdrawal was rejected", a: "Ensure your wallet address is correct and on a supported network. Minimum withdrawal amounts apply per chain." },
+          ].map(({ q, a }) => (
+            <div key={q} className="border-b border-border/50 last:border-0 pb-3 last:pb-0">
+              <p className="text-sm font-medium text-foreground mb-1">{q}</p>
+              <p className="text-xs text-muted-foreground leading-relaxed">{a}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Withdrawal sub-forms ─────────────────────────────────────────────────────
-
-const WITHDRAWAL_CHAINS = [
-  { key: "ARC-TESTNET",       label: "Arc",       type: "evm",    minWithdrawal: 1,  platformFee: 0.10 },
-  { key: "BASE-SEPOLIA",      label: "Base",      type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
-  { key: "ARB-SEPOLIA",       label: "Arbitrum",  type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
-  { key: "OP-SEPOLIA",        label: "Optimism",  type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
-  { key: "MATIC-AMOY",        label: "Polygon",   type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
-  { key: "AVAX-FUJI",         label: "Avalanche", type: "evm",    minWithdrawal: 5,  platformFee: 0.35 },
-  { key: "UNICHAIN-SEPOLIA",  label: "Unichain",  type: "evm",    minWithdrawal: 1,  platformFee: 0.21 },
-  { key: "SOL-DEVNET",        label: "Solana",    type: "solana", minWithdrawal: 5,  platformFee: 0.40 },
-] as const;
-
-const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
-const SOL_ADDR_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 function CryptoWithdrawalForm({
   mutation,

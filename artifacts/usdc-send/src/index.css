@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 @import "tailwindcss";
 
 @theme inline {
@@ -59,6 +59,30 @@
     @apply font-bold tracking-tight;
   }
 }
+
+/* ── Mobile shell (v4) ─────────────────────────────────────────────────────────
+   Scoped to the < lg dashboard. Re-points --primary at the brand blue so the
+   desktop tabs reused inside the shell pick it up too. */
+.sweep-m {
+  --m-blue: #1128f5;
+  --m-blue-hover: #0d20c9;
+  --m-tint: #eef1ff;
+  --m-tint-line: #d6dbfd;
+  --m-ink: #0b1220;
+  --m-muted: #667085;
+  --m-label: #344054;
+  --m-faint: #98a2b3;
+  --m-line: #eceff4;
+  --m-field-line: #e3e7ee;
+  --m-bg: #f6f7fa;
+  --primary: 234 92% 51%;
+  --ring: 234 92% 51%;
+  font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+  color: var(--m-ink);
+  background: var(--m-bg);
+}
+.sweep-m :is(h1, h2, h3, h4, h5, h6) { font-family: inherit; }
+.sweep-m ::selection { background: rgb(17 40 245 / 0.18); color: inherit; }
 
 /* ── Keyframes ──────────────────────────────────────────────────────────────── */
 
