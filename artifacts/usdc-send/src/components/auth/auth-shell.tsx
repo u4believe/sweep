@@ -28,7 +28,7 @@ export function AuthShell({
   sub?: string;
 }) {
   return (
-    <div className="sweep-ui min-h-[100dvh] flex flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(480px,560px)]">
+    <div className="sweep-ui min-h-[100dvh] flex flex-col lg:grid lg:grid-cols-2">
       <section aria-label="Sweep" className="relative flex-1 lg:flex-none bg-(--sw-blue) text-white px-6 sm:px-10 lg:px-14 pt-10 pb-12 lg:py-12 flex flex-col justify-between gap-12 overflow-hidden min-h-[300px]">
         <img src="/sweep-mark-white.svg" alt="" aria-hidden className="absolute -right-16 -bottom-24 w-[420px] opacity-[.07] pointer-events-none hidden lg:block" />
         <Link href="/landing" className="relative flex items-center gap-2.5 self-start" aria-label="Sweep home">
@@ -43,7 +43,7 @@ export function AuthShell({
       </section>
 
       <main className="relative -mt-5 lg:mt-0 bg-white rounded-t-3xl lg:rounded-none px-5 sm:px-10 pt-6 pb-8 lg:px-14 lg:py-12 flex flex-col lg:justify-center">
-        <div className="w-full max-w-[420px] mx-auto flex flex-col gap-3">{children}</div>
+        <div className="w-full max-w-[460px] mx-auto flex flex-col gap-3">{children}</div>
       </main>
     </div>
   );
