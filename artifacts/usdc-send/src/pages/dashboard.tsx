@@ -34,6 +34,7 @@ import {
   Users,
   XCircle,
   ShieldOff,
+  Smartphone,
   Search,
   Zap,
   Star,
@@ -56,6 +57,9 @@ import { MobileDashboard } from "@/components/mobile/mobile-dashboard";
 import { WebDashboard } from "@/components/desktop/web-dashboard";
 import type { DashboardShellProps } from "@/components/sweep/types";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import QRCode from "qrcode";
+import { TotpInput } from "@/components/auth/totp-input";
+import { useAuthConfig } from "@/components/auth/google-sign-in";
 import { fadeUp, scaleIn, staggerContainer } from "@/lib/motion";
 import type { FullBalance } from "@/lib/wallet";
 
@@ -795,6 +799,7 @@ interface SecurityUser {
   pakCreatedAt?: string | null;
   pakCanRegenerate?: boolean;
   nextPakAllowedAt?: string | null;
+  twoFactorEnabled?: boolean;
 }
 
 type SecurityView =
@@ -803,7 +808,9 @@ type SecurityView =
   | "gen-pak-otp"   | "gen-pak-reveal"
   | "chg-login-pak" | "chg-login-otp"
   | "chg-txn-pak"   | "chg-txn-otp"
-  | "del-acct-pak"  | "del-acct-otp";
+  | "del-acct-pak"  | "del-acct-otp"
+  | "tfa-setup"     | "tfa-disable"
+  | "chg-txn-2fa";
 
 function PasswordInput({ label, placeholder, value, onChange, disabled }: {
   label: string; placeholder?: string; value: string;
@@ -884,8 +891,17 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
   const [isLoading, setIsLoading]   = useState(false);
   const [error, setError]           = useState<string | null>(null);
   const [success, setSuccess]       = useState<string | null>(null);
+  // Authenticator-app 2FA
+  const [totp, setTotp]             = useState("");
+  const [tfaSetup, setTfaSetup]     = useState<{ secret: string; qr: string } | null>(null);
+  const [usePakInstead, setUsePakInstead] = useState(false);
+  const [codeSent, setCodeSent]     = useState(false);
+  const { data: authConfig } = useAuthConfig();
 
-  const reset = () => { setOtp(""); setPak(""); setPwd(""); setPwd2(""); setError(null); };
+  const reset = () => {
+    setOtp(""); setPak(""); setPwd(""); setPwd2(""); setError(null);
+    setTotp(""); setTfaSetup(null); setUsePakInstead(false); setCodeSent(false);
+  };
 
   const authHeaders = () => {
     const jwt = localStorage.getItem("token");
@@ -936,6 +952,8 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
       "chg-login-otp": "/change-login-password/request-otp",
       "chg-txn-otp":  "/change-txn-password/request-otp",
       "del-acct-otp": "/delete-account/request-otp",
+      "chg-txn-2fa":  "/change-txn-password/request-otp",
+      "tfa-disable":  "/2fa/disable/request-otp",
     };
     const path = pathMap[view];
     if (!path) return;
@@ -1025,6 +1043,65 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
     reset(); setView("overview");
   });
 
+  // With 2FA on: email code + authenticator code (no PAK)
+  const requestChangeTxn2fa = () => run(async () => {
+    if (pwd.length < 6) { setError("Transaction password must be at least 6 characters"); return; }
+    if (pwd !== pwd2)   { setError("Passwords do not match — please re-enter both fields"); return; }
+    await api("/change-txn-password/request-otp");
+    setCodeSent(true);
+  });
+
+  const confirmChangeTxn2fa = () => run(async () => {
+    if (otp.length < 6)  { setError("Enter the 6-digit code from your email"); return; }
+    if (totp.length < 6) { setError("Enter the 6-digit code from your authenticator app"); return; }
+    try {
+      await api("/change-txn-password/confirm", { newPassword: pwd, otp, totp });
+    } catch (e) { setTotp(""); throw e; }
+    setSuccess("Transaction password changed successfully.");
+    onSecurityUpdated();
+    reset(); setView("overview");
+  });
+
+  // ── Two-factor authentication ────────────────────────────────────────────
+
+  const startTfaSetup = () => run(async () => {
+    const data = await api("/2fa/setup");
+    const qr = await QRCode.toDataURL(data.otpauthUrl, { margin: 1, width: 240, errorCorrectionLevel: "M" });
+    reset();
+    setTfaSetup({ secret: data.secret, qr });
+    setView("tfa-setup");
+  });
+
+  const enableTfa = () => run(async () => {
+    if (totp.length < 6) { setError("Enter the 6-digit code shown in your authenticator app"); return; }
+    try {
+      await api("/2fa/enable", { code: totp });
+    } catch (e) { setTotp(""); throw e; }
+    setSuccess("Two-factor authentication is on. You'll need your authenticator app to sign in and to change your transaction password.");
+    onSecurityUpdated();
+    reset(); setView("overview");
+  });
+
+  const startTfaDisable = () => run(async () => {
+    await api("/2fa/disable/request-otp");
+    reset();
+    setView("tfa-disable");
+  });
+
+  const confirmTfaDisable = () => run(async () => {
+    if (otp.length < 6) { setError("Enter the 6-digit code from your email"); return; }
+    if (usePakInstead ? !pak.trim() : totp.length < 6) {
+      setError(usePakInstead ? "Enter your PAK" : "Enter the 6-digit code from your authenticator app");
+      return;
+    }
+    try {
+      await api("/2fa/disable", { otp, ...(usePakInstead ? { pak: pak.trim() } : { totp }) });
+    } catch (e) { setTotp(""); throw e; }
+    setSuccess("Two-factor authentication is off.");
+    onSecurityUpdated();
+    reset(); setView("overview");
+  });
+
   // ── Delete account ───────────────────────────────────────────────────────
 
   const requestDeleteOtp = () => run(async () => {
@@ -1067,7 +1144,7 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
           </div>
           <div>
             <h3 className="text-xl font-bold font-display">Security</h3>
-            <p className="text-sm text-muted-foreground">Transaction password &amp; authorization key</p>
+            <p className="text-sm text-muted-foreground">Transaction password, authorization key &amp; two-factor</p>
           </div>
         </motion.div>
       )}
@@ -1190,10 +1267,50 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
                   Set Transaction Password
                 </button>
               ) : (
-                <button onClick={() => { reset(); setView("chg-txn-pak"); }} disabled={!user.hasPak}
+                <button onClick={() => { reset(); setView(user.twoFactorEnabled ? "chg-txn-2fa" : "chg-txn-pak"); }}
+                  disabled={!user.twoFactorEnabled && !user.hasPak}
                   className="px-3 py-1.5 rounded-lg bg-secondary text-foreground text-xs font-semibold flex items-center gap-1.5 hover:bg-secondary/80 transition-colors disabled:opacity-40"
-                  title={!user.hasPak ? "Generate a PAK first to change passwords" : undefined}>
+                  title={!user.twoFactorEnabled && !user.hasPak ? "Generate a PAK first to change passwords" : undefined}>
                   <RefreshCw className="w-3 h-3" /> Change
+                </button>
+              )}
+            </div>
+          </motion.div>
+
+          {/* Two-factor authentication card */}
+          <motion.div variants={fadeUp} className="p-5 rounded-2xl border border-border bg-white space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center shrink-0",
+                  user.twoFactorEnabled ? "bg-green-100 text-green-600" : "bg-secondary text-muted-foreground")}>
+                  <Smartphone className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-semibold text-foreground text-sm">Two-factor authentication</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {user.twoFactorEnabled
+                      ? "Authenticator code required to sign in and to change your transaction password"
+                      : "Add a code from Google Authenticator, Authy or 1Password when you sign in"}
+                  </p>
+                </div>
+              </div>
+              <span className={cn("px-2.5 py-1 rounded-full text-xs font-bold shrink-0",
+                user.twoFactorEnabled ? "bg-green-100 text-green-700" : "bg-secondary text-muted-foreground")}>
+                {user.twoFactorEnabled ? "On" : "Off"}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {user.twoFactorEnabled ? (
+                <button onClick={startTfaDisable} disabled={isLoading}
+                  className="px-3 py-1.5 rounded-lg bg-secondary text-foreground text-xs font-semibold flex items-center gap-1.5 hover:bg-secondary/80 transition-colors disabled:opacity-60">
+                  {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldOff className="w-3 h-3" />} Turn off
+                </button>
+              ) : authConfig?.totpAvailable === false ? (
+                <p className="text-xs text-muted-foreground">Authenticator 2FA isn't available right now.</p>
+              ) : (
+                <button onClick={startTfaSetup} disabled={isLoading}
+                  className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-primary/90 transition-colors disabled:opacity-60">
+                  {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Smartphone className="w-3 h-3" />} Set up
                 </button>
               )}
             </div>
@@ -1443,6 +1560,144 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
             onSubmit={confirmChangeTxn}
             isLoading={isLoading} error={error}
           />
+        </motion.div>
+      )}
+
+      {/* ── CHANGE TRANSACTION PASSWORD — with 2FA ── */}
+      {view === "chg-txn-2fa" && (
+        <motion.div variants={fadeUp} className="space-y-4">
+          {panelHeader("Change Transaction Password", codeSent ? "Step 2 of 2 — email code + authenticator code" : "Step 1 of 2 — choose a new password")}
+          {error && <InlineError message={error} />}
+          {!codeSent ? (
+            <>
+              <PasswordInput label="New Transaction Password (min 6 chars)" value={pwd} onChange={setPwd} disabled={isLoading} />
+              <div>
+                <PasswordInput label="Confirm New Password" value={pwd2} onChange={setPwd2} disabled={isLoading} />
+                {pwd2.length > 0 && (
+                  <p className={cn("text-xs mt-1.5 flex items-center gap-1.5", pwd === pwd2 ? "text-green-600" : "text-destructive")}>
+                    {pwd === pwd2
+                      ? <><CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Passwords match</>
+                      : <><AlertCircle className="w-3.5 h-3.5 shrink-0" /> Passwords do not match</>}
+                  </p>
+                )}
+              </div>
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                onClick={requestChangeTxn2fa} disabled={isLoading || pwd.length < 6 || pwd !== pwd2}
+                className="w-full bg-primary text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-primary/25 transition-shadow disabled:opacity-70 text-sm">
+                {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+                {isLoading ? "Sending…" : "Send email code"}
+              </motion.button>
+            </>
+          ) : (
+            <>
+              <div>
+                <label htmlFor="chg-txn-email-code" className="block text-sm font-medium text-foreground mb-1.5">Email code</label>
+                <TotpInput id="chg-txn-email-code" value={otp} onChange={setOtp} disabled={isLoading} />
+                <p className="text-xs text-muted-foreground mt-1.5">Sent to your email just now.</p>
+              </div>
+              <div>
+                <label htmlFor="chg-txn-totp" className="flex items-center gap-1.5 text-sm font-medium text-foreground mb-1.5">
+                  <Smartphone className="w-4 h-4 opacity-60" /> Authenticator app code
+                </label>
+                <TotpInput id="chg-txn-totp" value={totp} onChange={setTotp} disabled={isLoading} />
+              </div>
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                onClick={confirmChangeTxn2fa} disabled={isLoading || otp.length < 6 || totp.length < 6}
+                className="w-full bg-primary text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-primary/25 transition-shadow disabled:opacity-70 text-sm">
+                {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                {isLoading ? "Changing…" : "Change Transaction Password"}
+              </motion.button>
+              <button onClick={resendOtp} disabled={isLoading} className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors py-1">
+                Resend email code
+              </button>
+            </>
+          )}
+        </motion.div>
+      )}
+
+      {/* ── TWO-FACTOR — setup ── */}
+      {view === "tfa-setup" && tfaSetup && (
+        <motion.div variants={fadeUp} className="space-y-5">
+          {panelHeader("Set up two-factor authentication", "Scan the code with your authenticator app")}
+          <ol className="space-y-4 text-sm">
+            <li className="flex gap-3">
+              <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold grid place-items-center shrink-0">1</span>
+              <span className="text-muted-foreground">Open <strong className="text-foreground">Google Authenticator</strong>, <strong className="text-foreground">Authy</strong>, <strong className="text-foreground">1Password</strong> or another authenticator app and add a new account.</span>
+            </li>
+            <li className="flex gap-3">
+              <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold grid place-items-center shrink-0">2</span>
+              <div className="space-y-3 min-w-0 flex-1">
+                <span className="text-muted-foreground">Scan this QR code:</span>
+                <img src={tfaSetup.qr} alt="QR code for your authenticator app" width={200} height={200}
+                  className="rounded-xl border border-border bg-white p-2" />
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Can't scan it? Enter this key instead:</p>
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-secondary">
+                    <code className="flex-1 font-mono text-xs break-all select-all">{tfaSetup.secret.replace(/(.{4})/g, "$1 ").trim()}</code>
+                    <CopyButton text={tfaSetup.secret} />
+                  </div>
+                </div>
+              </div>
+            </li>
+            <li className="flex gap-3">
+              <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold grid place-items-center shrink-0">3</span>
+              <div className="space-y-2 min-w-0 flex-1">
+                <label htmlFor="tfa-setup-code" className="text-muted-foreground">Enter the 6-digit code it shows:</label>
+                <TotpInput id="tfa-setup-code" value={totp} onChange={setTotp} disabled={isLoading} />
+              </div>
+            </li>
+          </ol>
+          {error && <InlineError message={error} />}
+          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+            onClick={enableTfa} disabled={isLoading || totp.length < 6}
+            className="w-full bg-primary text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-primary/25 transition-shadow disabled:opacity-70 text-sm">
+            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+            {isLoading ? "Verifying…" : "Turn on two-factor authentication"}
+          </motion.button>
+        </motion.div>
+      )}
+
+      {/* ── TWO-FACTOR — turn off ── */}
+      {view === "tfa-disable" && (
+        <motion.div variants={fadeUp} className="space-y-4">
+          {panelHeader("Turn off two-factor authentication", "Confirm with your email and your authenticator app")}
+          {error && <InlineError message={error} />}
+          <div>
+            <label htmlFor="tfa-off-email" className="block text-sm font-medium text-foreground mb-1.5">Email code</label>
+            <TotpInput id="tfa-off-email" value={otp} onChange={setOtp} disabled={isLoading} />
+            <p className="text-xs text-muted-foreground mt-1.5">Sent to your email just now.</p>
+          </div>
+          {usePakInstead ? (
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-1.5">
+                <KeyRound className="w-4 h-4 inline mr-1.5 opacity-60" /> Personal Authorization Key (PAK)
+              </label>
+              <input value={pak} onChange={(e) => setPak(e.target.value)} placeholder="Your 40-character PAK"
+                className="w-full px-4 py-2.5 rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none text-sm font-mono" />
+            </div>
+          ) : (
+            <div>
+              <label htmlFor="tfa-off-totp" className="flex items-center gap-1.5 text-sm font-medium text-foreground mb-1.5">
+                <Smartphone className="w-4 h-4 opacity-60" /> Authenticator app code
+              </label>
+              <TotpInput id="tfa-off-totp" value={totp} onChange={setTotp} disabled={isLoading} />
+            </div>
+          )}
+          {user.hasPak && (
+            <button onClick={() => { setUsePakInstead((v) => !v); setError(null); }}
+              className="text-xs font-semibold text-primary hover:underline">
+              {usePakInstead ? "Use my authenticator app instead" : "Lost your phone? Use your PAK instead"}
+            </button>
+          )}
+          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+            onClick={confirmTfaDisable} disabled={isLoading}
+            className="w-full bg-foreground text-background font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-shadow disabled:opacity-70 text-sm">
+            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldOff className="w-4 h-4" />}
+            {isLoading ? "Turning off…" : "Turn off two-factor authentication"}
+          </motion.button>
+          <button onClick={resendOtp} disabled={isLoading} className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors py-1">
+            Resend email code
+          </button>
         </motion.div>
       )}
 

@@ -52,6 +52,20 @@ export const usersTable = pgTable("users", {
   // loginAttempts is reset so the counter starts fresh after the ban expires.
   loginAttempts: integer("login_attempts").notNull().default(0),
   lockedUntil:   timestamp("locked_until"),
+
+  // ── Google sign-in ────────────────────────────────────────────────────────
+  // Google's stable account id ("sub"). Set on first Google sign-in; accounts
+  // created through Google get an unusable random password hash.
+  googleSub: text("google_sub").unique(),
+
+  // ── Authenticator-app 2FA (TOTP, optional) ────────────────────────────────
+  // Secrets are AES-256-GCM encrypted (see api-server lib/totp.ts).
+  // pending = generated during setup, promoted to active once a code verifies.
+  totpSecretEnc:        text("totp_secret_enc"),
+  totpPendingSecretEnc: text("totp_pending_secret_enc"),
+  totpEnabledAt:        timestamp("totp_enabled_at"),
+  // Last accepted 30-second time step — stops a code being replayed.
+  totpLastStep:         integer("totp_last_step"),
 });
 
 export const insertUserSchema = createInsertSchema(usersTable).omit({ id: true, createdAt: true, claimedBalance: true });

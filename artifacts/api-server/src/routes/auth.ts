@@ -3,8 +3,11 @@ import bcrypt from "bcrypt";
 import { db, usersTable, otpCodesTable, escrowsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
 import { generateToken, requireAuth } from "../lib/auth.js";
+import { googleClientId, verifyGoogleCredential } from "../lib/google.js";
+import { checkUserTotp, consumeLoginChallenge, hasTotp, issueLoginChallenge, readLoginChallenge } from "../lib/two-factor.js";
+import { isTotpConfigured } from "../lib/totp.js";
 import { hashEmail } from "../lib/escrow.js";
-import { creditBalance } from "../lib/ledger.js";
+import { claimPendingEscrows } from "../lib/ledger.js";
 import { createUserCircleWallet, ensureAllChainWallets } from "../lib/circle.js";
 import { sendOtpEmail, sendVerificationEmail, sendPasswordResetEmail } from "../lib/email.js";
 import { randomUUID, randomInt } from "node:crypto";
@@ -345,7 +348,7 @@ router.post("/login", async (req, res) => {
 
     const code = await issueOtp(user.id, "login");
     await sendOtpEmail(normalizedEmail, code, "login");
-    res.json({ requiresOtp: true, userId: user.id });
+    res.json({ requiresOtp: true, requiresTotp: hasTotp(user), userId: user.id });
   } catch (error: any) {
     req.log.error({ err: error }, "Login error");
     res.status(500).json({ error: "Internal server error", message: error.message });
@@ -360,6 +363,12 @@ router.post("/verify-otp", async (req, res) => {
 
     if (typeof userId !== "number" || typeof code !== "string" || (type !== "register" && type !== "login")) {
       res.status(400).json({ error: "Validation error", message: "userId (number), code (string), and type (register|login) are required" });
+      return;
+    }
+
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (!user) {
+      res.status(401).json({ error: "Invalid code", message: "Incorrect verification code or it has expired. Please try again." });
       return;
     }
 
@@ -383,30 +392,33 @@ router.post("/verify-otp", async (req, res) => {
       return;
     }
 
-    await db.update(otpCodesTable).set({ used: true }).where(eq(otpCodesTable.id, otp.id));
+    // Accounts with authenticator 2FA need the app code too. Checked before the
+    // email code is consumed, so a wrong authenticator code doesn't burn it.
+    if (type === "login" && hasTotp(user)) {
+      const { totp } = req.body as { totp?: unknown };
+      if (typeof totp !== "string" || !totp.trim()) {
+        res.status(401).json({ error: "Authenticator code required", code: "TOTP_REQUIRED", message: "Enter the 6-digit code from your authenticator app." });
+        return;
+      }
+      if (!(await checkUserTotp(user, totp))) {
+        res.status(401).json({ error: "Invalid authenticator code", code: "TOTP_INVALID", message: "That authenticator code is incorrect or has already been used." });
+        return;
+      }
+    }
 
-    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-    if (!user) {
-      res.status(404).json({ error: "Not found", message: "User not found" });
+    const consumed = await db.update(otpCodesTable)
+      .set({ used: true })
+      .where(and(eq(otpCodesTable.id, otp.id), eq(otpCodesTable.used, false)))
+      .returning({ id: otpCodesTable.id });
+    if (consumed.length === 0) {
+      res.status(401).json({ error: "Invalid code", message: "Incorrect verification code or it has expired. Please try again." });
       return;
     }
 
     // Auto-credit any pending escrows sent to this email before they registered
     if (type === "register") {
       try {
-        const { hashEmail } = await import("../lib/escrow.js");
-        const emailHash = hashEmail(user.email);
-        // Flip pending → claimed and credit in one transaction; the status guard means a
-        // concurrent verify can't claim (and credit) the same escrows twice.
-        const { total, count } = await db.transaction(async (tx) => {
-          const claimed = await tx.update(escrowsTable)
-            .set({ status: "claimed", recipientUserId: user.id, claimedAt: new Date() })
-            .where(and(eq(escrowsTable.emailHash, emailHash), eq(escrowsTable.status, "pending")))
-            .returning({ amount: escrowsTable.amount });
-          const total = claimed.reduce((s, e) => s + parseFloat(e.amount), 0);
-          if (total > 0) await creditBalance(tx, user.id, total);
-          return { total, count: claimed.length };
-        });
+        const { total, count } = await claimPendingEscrows(user.id, user.email);
         if (count > 0) {
           req.log.info({ userId: user.id, total, count }, "[register] Auto-credited pending escrows");
         }
@@ -430,6 +442,155 @@ router.post("/verify-otp", async (req, res) => {
     });
   } catch (error: any) {
     req.log.error({ err: error }, "Verify OTP error");
+    res.status(500).json({ error: "Internal server error", message: error.message });
+  }
+});
+
+// ─── GET /api/auth/config ─────────────────────────────────────────────────────
+// Public sign-in options for the frontend (the Google client ID is not secret).
+router.get("/config", (_req, res) => {
+  res.json({ googleClientId: googleClientId(), totpAvailable: isTotpConfigured() });
+});
+
+function sessionResponse(user: typeof usersTable.$inferSelect, extra: Record<string, unknown> = {}) {
+  return {
+    token: generateToken({ userId: user.id, email: user.email }),
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      walletAddress: user.walletAddress,
+      circleWalletAddress: user.circleWalletAddress,
+      createdAt: user.createdAt,
+    },
+    ...extra,
+  };
+}
+
+// An unusable password for accounts that sign in with Google (they can set a real
+// one later through "Forgot password").
+const unusablePasswordHash = () => bcrypt.hash(randomUUID() + randomUUID(), 10);
+
+// ─── POST /api/auth/google ────────────────────────────────────────────────────
+// Sign up or sign in with a Google ID token. Google has verified the email, so no
+// email code is needed; accounts with authenticator 2FA get a challenge instead
+// of a session.
+router.post("/google", async (req, res) => {
+  try {
+    const { credential } = req.body as { credential?: unknown };
+    if (typeof credential !== "string" || !credential) {
+      res.status(400).json({ error: "Validation error", message: "credential is required" });
+      return;
+    }
+    if (!googleClientId()) {
+      res.status(503).json({ error: "Unavailable", message: "Google sign-in isn't set up yet." });
+      return;
+    }
+
+    let identity;
+    try {
+      identity = await verifyGoogleCredential(credential);
+    } catch (e: any) {
+      res.status(401).json({ error: "Unauthorized", message: e?.message ?? "Google sign-in failed" });
+      return;
+    }
+
+    let [user] = await db.select().from(usersTable).where(eq(usersTable.googleSub, identity.sub)).limit(1);
+    let isNewUser = false;
+
+    if (!user) {
+      const [byEmail] = await db.select().from(usersTable).where(eq(usersTable.email, identity.email)).limit(1);
+      if (byEmail) {
+        if (byEmail.googleSub && byEmail.googleSub !== identity.sub) {
+          res.status(409).json({ error: "Conflict", message: "This email is already linked to a different Google account." });
+          return;
+        }
+        // Link Google to the existing account. If it was never verified, whoever
+        // registered it didn't prove they own the inbox — Google just did — so their
+        // password is discarded rather than left working on a now-verified account.
+        const link: Partial<typeof usersTable.$inferInsert> = { googleSub: identity.sub };
+        if (!(byEmail as any).emailVerified) {
+          Object.assign(link, {
+            emailVerified: true,
+            emailVerificationToken: null,
+            emailVerificationTokenExpiresAt: null,
+            passwordHash: await unusablePasswordHash(),
+          });
+        }
+        [user] = await db.update(usersTable).set(link as any).where(eq(usersTable.id, byEmail.id)).returning();
+      } else {
+        try {
+          [user] = await db.insert(usersTable).values({
+            email: identity.email,
+            emailHash: hashEmail(identity.email),
+            passwordHash: await unusablePasswordHash(),
+            name: identity.name,
+            emailVerified: true,
+            googleSub: identity.sub,
+          } as any).returning();
+        } catch {
+          res.status(409).json({ error: "Conflict", message: "An account for this email was just created. Please try again." });
+          return;
+        }
+        isNewUser = true;
+
+        (async () => {
+          try {
+            const { walletId, address, walletIdsJson, walletAddressesJson } = await createUserCircleWallet(user!.id);
+            await db.update(usersTable)
+              .set({ circleWalletId: walletId, circleWalletAddress: address, circleWalletIdsJson: walletIdsJson, circleWalletAddressesJson: walletAddressesJson } as any)
+              .where(eq(usersTable.id, user!.id));
+          } catch (e: any) {
+            console.warn(`[Circle] Wallet provisioning failed for user ${user!.id}:`, e?.message || e);
+          }
+        })();
+
+        try {
+          const { total, count } = await claimPendingEscrows(user!.id, user!.email);
+          if (count > 0) req.log.info({ userId: user!.id, total, count }, "[google] Auto-credited pending escrows");
+        } catch (e: any) {
+          req.log.warn({ err: e.message }, "[google] Auto-credit pending escrows failed (non-fatal)");
+        }
+      }
+    }
+
+    if (hasTotp(user!)) {
+      res.json({ requiresTotp: true, challenge: issueLoginChallenge(user!.id) });
+      return;
+    }
+    res.json(sessionResponse(user!, { isNewUser }));
+  } catch (error: any) {
+    req.log.error({ err: error }, "Google sign-in error");
+    res.status(500).json({ error: "Internal server error", message: error.message });
+  }
+});
+
+// ─── POST /api/auth/2fa/verify-login ──────────────────────────────────────────
+// Completes a Google sign-in for an account with authenticator 2FA.
+router.post("/2fa/verify-login", async (req, res) => {
+  try {
+    const { challenge, code } = req.body as { challenge?: unknown; code?: unknown };
+    let ch;
+    try {
+      ch = readLoginChallenge(challenge);
+    } catch (e: any) {
+      res.status(401).json({ error: "Unauthorized", code: "CHALLENGE_INVALID", message: e?.message?.startsWith("Too many") ? e.message : "This sign-in has expired. Please sign in again." });
+      return;
+    }
+
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, ch.userId)).limit(1);
+    if (!user || !hasTotp(user)) {
+      res.status(401).json({ error: "Unauthorized", code: "CHALLENGE_INVALID", message: "This sign-in has expired. Please sign in again." });
+      return;
+    }
+    if (!(await checkUserTotp(user, code))) {
+      res.status(401).json({ error: "Invalid authenticator code", code: "TOTP_INVALID", message: "That authenticator code is incorrect or has already been used." });
+      return;
+    }
+    consumeLoginChallenge(ch.jti);
+    res.json(sessionResponse(user));
+  } catch (error: any) {
+    req.log.error({ err: error }, "2FA login error");
     res.status(500).json({ error: "Internal server error", message: error.message });
   }
 });
@@ -628,6 +789,8 @@ router.get("/me", requireAuth, async (req, res) => {
       pakCreatedAt: dbUser.pakCreatedAt?.toISOString() ?? null,
       pakCanRegenerate,
       nextPakAllowedAt,
+      twoFactorEnabled: hasTotp(dbUser),
+      googleLinked: !!dbUser.googleSub,
     });
   } catch (error: any) {
     req.log.error({ err: error }, "Get current user error");

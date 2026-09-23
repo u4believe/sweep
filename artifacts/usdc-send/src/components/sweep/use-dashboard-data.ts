@@ -25,7 +25,8 @@ export function useDashboardData() {
     refetchInterval: 30_000,
     queryFn: async () => {
       const res = await fetch(`${API_BASE}/api/recurring`, { headers: authHeaders() });
-      return res.ok ? ((await res.json()) as Array<{ status: string }>) : [];
+      const json = res.ok ? await res.json().catch(() => null) : null;
+      return Array.isArray(json) ? (json as Array<{ status: string }>) : [];
     },
   });
   const subs = useQuery({
@@ -33,7 +34,8 @@ export function useDashboardData() {
     refetchInterval: 30_000,
     queryFn: async () => {
       const res = await fetch(`${API_BASE}/api/subscriptions/my`, { headers: authHeaders() });
-      return res.ok ? ((await res.json()) as { subscriptions: Array<{ status: string }> }).subscriptions : [];
+      const json = res.ok ? await res.json().catch(() => null) : null;
+      return Array.isArray(json?.subscriptions) ? (json.subscriptions as Array<{ status: string }>) : [];
     },
   });
   const recurringActive = recurring.data?.filter((r) => r.status === "active").length;

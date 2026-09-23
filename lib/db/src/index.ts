@@ -24,6 +24,19 @@ export * from "./schema";
 export async function runStartupMigrations(): Promise<void> {
   const client = await pool.connect();
   try {
+    // User columns run on their own so a failing deposits index below can't skip them.
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS login_attempts integer NOT NULL DEFAULT 0;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until timestamp;
+
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub text;
+      CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_unique ON users(google_sub) WHERE google_sub IS NOT NULL;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret_enc text;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_secret_enc text;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled_at timestamp;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step integer;
+    `);
+
     await client.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS deposits_tx_hash_unique
         ON deposits(tx_hash) WHERE tx_hash IS NOT NULL;
@@ -31,8 +44,6 @@ export async function runStartupMigrations(): Promise<void> {
       CREATE UNIQUE INDEX IF NOT EXISTS deposits_deposit_reference_unique
         ON deposits(deposit_reference) WHERE deposit_reference IS NOT NULL;
 
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS login_attempts integer NOT NULL DEFAULT 0;
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until timestamp;
     `);
     console.info("[db-migration] Unique indexes verified on deposits table.");
   } catch (err: any) {

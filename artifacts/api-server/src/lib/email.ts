@@ -633,6 +633,7 @@ const SECURITY_ACTION_LABELS: Record<string, { subject: string; heading: string;
   "chg-login":   { subject: "Change your sign-in password",          heading: "Change sign-in password",  desc: "to change your sign-in password" },
   "chg-txn-pwd": { subject: "Change your transaction password",      heading: "Change transaction password", desc: "to change your transaction password" },
   "del-account": { subject: "Confirm account deletion — SweepUSDC",  heading: "Delete your account",         desc: "to permanently delete your account" },
+  "disable-2fa": { subject: "Turn off two-factor authentication",   heading: "Turn off 2FA",                desc: "to turn off authenticator-app two-factor authentication" },
 };
 
 export async function sendSecurityOtpEmail(to: string, code: string, actionType: string): Promise<void> {

@@ -1,20 +1,31 @@
 import { useState, useRef, useEffect } from "react";
 import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
-import { Mail, Lock, ArrowRight, Loader2, Send, ShieldCheck, RefreshCw, Info, CheckCircle2, Eye, EyeOff } from "lucide-react";
+import { Mail, Lock, ArrowRight, Loader2, Send, ShieldCheck, RefreshCw, Info, CheckCircle2, Eye, EyeOff, Smartphone } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AppLayout } from "@/components/layout";
 
 import { API_BASE } from "@/lib/api";
+import { finishSignIn, TWO_FACTOR_CHALLENGE_KEY } from "@/lib/auth-session";
+import { GoogleSignInButton, type GoogleAuthResult } from "@/components/auth/google-sign-in";
+import { TotpInput } from "@/components/auth/totp-input";
 
-type Step = "credentials" | "otp" | "unverified";
+type Step = "credentials" | "otp" | "unverified" | "google-2fa";
+
+const readStoredChallenge = () => {
+  try { return sessionStorage.getItem(TWO_FACTOR_CHALLENGE_KEY); } catch { return null; }
+};
 
 export default function Login() {
   const queryClient = useQueryClient();
 
-  const [step, setStep]               = useState<Step>("credentials");
+  const [challenge, setChallenge]     = useState<string | null>(readStoredChallenge);
+  const [step, setStep]               = useState<Step>(() => (challenge ? "google-2fa" : "credentials"));
+  // Accounts with authenticator 2FA enter the app code alongside the email code.
+  const [requiresTotp, setRequiresTotp] = useState(false);
+  const [totp, setTotp]               = useState("");
   const [userId, setUserId]           = useState<number | null>(null);
   const [sentEmail, setSentEmail]     = useState("");
   const [isPending, setIsPending]     = useState(false);
@@ -38,7 +49,47 @@ export default function Login() {
     }
   }, [step]);
 
-  const handleCredentials = async (e: React.FormEvent) => {
+  const backToCredentials = (message = "") => {
+    setStep("credentials");
+    setError(message);
+    setOtp(["", "", "", "", "", ""]);
+    setTotp("");
+    setChallenge(null);
+    try { sessionStorage.removeItem(TWO_FACTOR_CHALLENGE_KEY); } catch { /* storage unavailable */ }
+  };
+
+  const handleGoogleResult = (r: GoogleAuthResult) => {
+    if (r.kind === "session") { finishSignIn(r.token, queryClient); return; }
+    setChallenge(r.challenge);
+    setTotp("");
+    setError("");
+    setStep("google-2fa");
+  };
+
+  const handleGoogle2fa = async (e: React.SyntheticEvent) => {
+    e.preventDefault();
+    if (totp.length < 6) { setError("Enter the 6-digit code from your authenticator app."); return; }
+    setError("");
+    setIsPending(true);
+    try {
+      const res  = await fetch(`${API_BASE}/api/auth/2fa/verify-login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challenge, code: totp }),
+      });
+      const json = await res.json();
+      if (json.code === "CHALLENGE_INVALID") { backToCredentials(json.message ?? "Please sign in again."); return; }
+      if (!res.ok) throw new Error(json.message ?? "Verification failed");
+      finishSignIn(json.token, queryClient);
+    } catch (err: any) {
+      setTotp("");
+      setError(err.message ?? "Incorrect code. Please try again.");
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  const handleCredentials = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     if (!email || !password) { setError("Email and password are required."); return; }
     setError("");
@@ -57,6 +108,8 @@ export default function Login() {
       }
       if (!res.ok) throw new Error(json.message ?? "Login failed");
       setUserId(json.userId);
+      setRequiresTotp(!!json.requiresTotp);
+      setTotp("");
       setSentEmail(email.toLowerCase().trim());
       setStep("otp");
       toast.success(`Verification code sent to ${email.toLowerCase().trim()}`, { style: { fontWeight: "bold", color: "#16a34a" } });
@@ -90,26 +143,24 @@ export default function Login() {
     otpRefs.current[Math.min(text.length, 5)]?.focus();
   };
 
-  const handleVerifyOtp = async (e: React.FormEvent) => {
+  const handleVerifyOtp = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     const code = otp.join("");
     if (code.length < 6) { setError("Please enter the full 6-digit code."); return; }
+    if (requiresTotp && totp.length < 6) { setError("Enter the 6-digit code from your authenticator app."); return; }
     setError("");
     setIsPending(true);
     try {
       const res  = await fetch(`${API_BASE}/api/auth/verify-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, code, type: "login" }),
+        body: JSON.stringify({ userId, code, type: "login", ...(requiresTotp ? { totp } : {}) }),
       });
       const json = await res.json();
+      if (json.code === "TOTP_REQUIRED") setRequiresTotp(true);
+      if (json.code === "TOTP_INVALID") setTotp("");
       if (!res.ok) throw new Error(json.message ?? "Verification failed");
-      localStorage.setItem("token", json.token);
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      const next = new URLSearchParams(window.location.search).get("next");
-      window.location.href = next
-        ? (import.meta.env.BASE_URL || "").replace(/\/$/, "") + next
-        : import.meta.env.BASE_URL || "/";
+      finishSignIn(json.token, queryClient);
     } catch (err: any) {
       setError(err.message ?? "Incorrect code. Please try again.");
     } finally {
@@ -217,6 +268,10 @@ export default function Login() {
                     </motion.div>
                   )}
                 </AnimatePresence>
+
+                <div className="mb-6">
+                  <GoogleSignInButton text="signin_with" onResult={handleGoogleResult} onError={setError} />
+                </div>
 
                 <form onSubmit={handleCredentials} className="space-y-5">
                   <div>
@@ -347,7 +402,7 @@ export default function Login() {
                 </div>
               </div>
             </motion.div>
-          ) : (
+          ) : step === "otp" ? (
             <motion.div
               key="otp"
               initial={{ opacity: 0, y: 16 }}
@@ -408,9 +463,19 @@ export default function Login() {
                     </div>
                   </div>
 
+                  {requiresTotp && (
+                    <div>
+                      <label htmlFor="login-totp" className="flex items-center justify-center gap-1.5 text-sm font-medium text-foreground mb-3">
+                        <Smartphone className="w-4 h-4 text-primary" /> Authenticator app code
+                      </label>
+                      <TotpInput id="login-totp" value={totp} onChange={setTotp} disabled={isPending} />
+                      <p className="text-xs text-muted-foreground text-center mt-2">Open your authenticator app and enter the current 6-digit code for Sweep.</p>
+                    </div>
+                  )}
+
                   <motion.button
                     type="submit"
-                    disabled={isPending || otp.join("").length < 6}
+                    disabled={isPending || otp.join("").length < 6 || (requiresTotp && totp.length < 6)}
                     whileHover={!isPending ? { scale: 1.02, y: -1 } : {}}
                     whileTap={!isPending ? { scale: 0.98 } : {}}
                     className="w-full flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl font-bold text-white bg-primary hover:shadow-lg hover:shadow-primary/30 transition-shadow disabled:opacity-70 disabled:cursor-not-allowed"
@@ -434,12 +499,64 @@ export default function Login() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => { setStep("credentials"); setError(""); setOtp(["", "", "", "", "", ""]); }}
+                    onClick={() => backToCredentials()}
                     className="block mx-auto text-sm text-muted-foreground hover:text-foreground transition-colors"
                   >
                     ← Back to login
                   </button>
                 </div>
+              </div>
+            </motion.div>
+          ) : null}
+
+          {step === "google-2fa" && (
+            <motion.div
+              key="google-2fa"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25 }}
+            >
+              <div className="text-center mb-8">
+                <h1 className="text-3xl font-display font-bold">Two-factor authentication</h1>
+                <p className="text-muted-foreground mt-2">Enter the 6-digit code from your authenticator app to finish signing in with Google.</p>
+              </div>
+              <div className="glass-panel p-8 rounded-3xl">
+                <AnimatePresence>
+                  {error && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="mb-6 p-4 rounded-xl bg-destructive/10 text-destructive text-sm font-medium border border-destructive/20 overflow-hidden"
+                    >
+                      {error}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                <form onSubmit={handleGoogle2fa} className="space-y-6">
+                  <div>
+                    <label htmlFor="google-totp" className="flex items-center justify-center gap-1.5 text-sm font-medium text-foreground mb-3">
+                      <Smartphone className="w-4 h-4 text-primary" /> Authenticator app code
+                    </label>
+                    <TotpInput id="google-totp" value={totp} onChange={setTotp} disabled={isPending} />
+                  </div>
+                  <motion.button
+                    type="submit"
+                    disabled={isPending || totp.length < 6}
+                    whileHover={!isPending ? { scale: 1.02, y: -1 } : {}}
+                    whileTap={!isPending ? { scale: 0.98 } : {}}
+                    className="w-full flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl font-bold text-white bg-primary hover:shadow-lg hover:shadow-primary/30 transition-shadow disabled:opacity-70 disabled:cursor-not-allowed"
+                  >
+                    {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <><span>Verify &amp; Sign In</span> <ShieldCheck className="w-5 h-5" /></>}
+                  </motion.button>
+                </form>
+                <button
+                  type="button"
+                  onClick={() => backToCredentials()}
+                  className="block mx-auto mt-6 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  ← Back to login
+                </button>
               </div>
             </motion.div>
           )}

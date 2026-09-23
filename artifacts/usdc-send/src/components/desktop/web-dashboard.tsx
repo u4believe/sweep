@@ -73,7 +73,6 @@ export function WebDashboard({ user, balance, depositAddresses, withdraw, onBala
 
           <NavItem label="Dashboard" active={page === "dash"} onClick={() => setPage("dash")} />
           <NavItem label="History" count={count(txTotal)} active={page === "history"} onClick={() => setPage("history")} />
-          <NavItem label="Sweep" hint="Send" onClick={focusSend} />
           <NavItem label="Add money" onClick={() => setFundOpen(true)} />
           <NavItem label="Recurring" count={count(recurringActive)} active={page === "recurring"} onClick={() => setPage("recurring")} />
           <NavItem label="P2P" soon />
@@ -207,10 +206,9 @@ export function WebDashboard({ user, balance, depositAddresses, withdraw, onBala
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
-function NavItem({ label, count, hint, active, soon, onClick }: {
+function NavItem({ label, count, active, soon, onClick }: {
   label: string;
   count?: string;
-  hint?: string;
   active?: boolean;
   soon?: boolean;
   onClick?: () => void;
@@ -228,7 +226,7 @@ function NavItem({ label, count, hint, active, soon, onClick }: {
       className={cn("flex items-center justify-between px-3 py-[11px] rounded-xl text-sm font-bold text-left transition-colors",
         active ? "bg-(--sw-tint) text-(--sw-blue)" : "text-(--sw-label) hover:bg-[#f3f5fb]")}>
       <span>{label}</span>
-      {(count || hint) && <span className="text-xs font-semibold text-(--sw-faint)">{count || hint}</span>}
+      {count && <span className="text-xs font-semibold text-(--sw-faint)">{count}</span>}
     </button>
   );
 }

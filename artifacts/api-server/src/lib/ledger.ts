@@ -120,3 +120,20 @@ export async function chargeSubscription(
     });
   }
 }
+
+/**
+ * Credits every pending escrow sent to `email` before the user signed up.
+ * The status guard makes this safe to call concurrently — each escrow is claimed once.
+ */
+export async function claimPendingEscrows(userId: number, email: string): Promise<{ total: number; count: number }> {
+  const emailHash = hashEmail(email);
+  return db.transaction(async (tx) => {
+    const claimed = await tx.update(escrowsTable)
+      .set({ status: "claimed", recipientUserId: userId, claimedAt: new Date() })
+      .where(and(eq(escrowsTable.emailHash, emailHash), eq(escrowsTable.status, "pending")))
+      .returning({ amount: escrowsTable.amount });
+    const total = claimed.reduce((sum, e) => sum + parseFloat(e.amount), 0);
+    if (total > 0) await creditBalance(tx, userId, total);
+    return { total, count: claimed.length };
+  });
+}

@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { createHmac, randomUUID } from "node:crypto";
 import { Request, Response, NextFunction } from "express";
 
 // ─── JWT secret validation ────────────────────────────────────────────────────
@@ -29,6 +30,18 @@ export function generateToken(payload: JwtPayload): string {
 
 export function verifyToken(token: string): JwtPayload {
   return jwt.verify(token, JWT_SECRET) as JwtPayload;
+}
+
+// Short-lived tokens for a single purpose (e.g. a pending 2FA login). Signed with a
+// key derived per scope, so they can never pass verifyToken / requireAuth.
+const scopedSecret = (scope: string) => createHmac("sha256", JWT_SECRET).update(`scope:${scope}`).digest("hex");
+
+export function signScopedToken(scope: string, payload: object, expiresIn: `${number}m`): string {
+  return jwt.sign({ ...payload, jti: randomUUID() }, scopedSecret(scope), { expiresIn });
+}
+
+export function verifyScopedToken<T extends object>(scope: string, token: string): T & { jti: string } {
+  return jwt.verify(token, scopedSecret(scope)) as T & { jti: string };
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {

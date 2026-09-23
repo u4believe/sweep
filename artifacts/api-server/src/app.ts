@@ -43,6 +43,9 @@ app.use(
     // Allow inline scripts for Vite dev only — restrict in prod
     contentSecurityPolicy: false, // API server; CSP belongs on the frontend
     crossOriginResourcePolicy: { policy: "cross-origin" }, // allow Vite frontend to fetch
+    // Google Sign-In opens a popup that reports back via window.opener; the default
+    // "same-origin" policy severs that link.
+    crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
   }),
 );
 

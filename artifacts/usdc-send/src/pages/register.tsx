@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
+import { useQueryClient } from "@tanstack/react-query";
 import { Mail, Lock, User, ArrowRight, Loader2, CheckCircle2, RefreshCw, Eye, EyeOff } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
@@ -7,10 +8,14 @@ import { AppLayout } from "@/components/layout";
 import { TurnstileWidget } from "@/components/TurnstileWidget";
 
 import { API_BASE } from "@/lib/api";
+import { finishSignIn, TWO_FACTOR_CHALLENGE_KEY } from "@/lib/auth-session";
+import { GoogleSignInButton, type GoogleAuthResult } from "@/components/auth/google-sign-in";
 
 type Step = "form" | "check-email";
 
 export default function Register() {
+  const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
   const [step, setStep]           = useState<Step>("form");
   const [sentEmail, setSentEmail] = useState("");
   const [isPending, setIsPending] = useState(false);
@@ -19,7 +24,8 @@ export default function Register() {
   const [cfToken, setCfToken]     = useState("");
 
   const [name,         setName]         = useState("");
-  const [email,        setEmail]        = useState("");
+  // Prefilled when arriving from the landing page's "Get started" box (?email=…)
+  const [email,        setEmail]        = useState(() => new URLSearchParams(window.location.search).get("email") ?? "");
   const [password,     setPassword]     = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
@@ -93,6 +99,14 @@ export default function Register() {
                 </div>
 
                 <div className="glass-panel p-8 rounded-3xl">
+                  <div className="mb-6">
+                    <GoogleSignInButton text="signup_with" onError={setError} onResult={(r: GoogleAuthResult) => {
+                      if (r.kind === "session") { finishSignIn(r.token, queryClient); return; }
+                      // Existing account with authenticator 2FA — finish on the login page.
+                      try { sessionStorage.setItem(TWO_FACTOR_CHALLENGE_KEY, r.challenge); } catch { /* storage unavailable */ }
+                      setLocation("/login");
+                    }} />
+                  </div>
                   <AnimatePresence>
                     {error && (
                       <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}

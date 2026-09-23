@@ -19,8 +19,15 @@
  * ─────────────────────────────────────
  *  POST /api/security/change-login-password/request-otp  — verifies PAK, sends OTP
  *  POST /api/security/change-login-password/confirm      — verifies OTP, updates login password
- *  POST /api/security/change-txn-password/request-otp   — verifies PAK, sends OTP
- *  POST /api/security/change-txn-password/confirm        — verifies OTP, updates txn password
+ *  POST /api/security/change-txn-password/request-otp   — verifies PAK (with 2FA on: nothing), sends OTP
+ *  POST /api/security/change-txn-password/confirm        — OTP + PAK (with 2FA on: OTP + authenticator code)
+ *
+ * Authenticator-app 2FA (optional)
+ * ─────────────────────────────────
+ *  POST /api/security/2fa/setup                  — creates a pending secret, returns it + otpauth URL
+ *  POST /api/security/2fa/enable                 — verifies a code from the app, turns 2FA on
+ *  POST /api/security/2fa/disable/request-otp    — sends an email code
+ *  POST /api/security/2fa/disable                — email code + authenticator code (or PAK), turns 2FA off
  */
 
 import { Router, type IRouter } from "express";
@@ -32,6 +39,8 @@ import { eq, and, gt, ne, sql } from "drizzle-orm";
 import { requireAuth, requireEmailVerified } from "../lib/auth.js";
 import { sendSecurityOtpEmail } from "../lib/email.js";
 import { logger } from "../lib/logger.js";
+import { encryptSecret, decryptSecret, generateTotpSecret, isTotpConfigured, otpauthUrl, verifyTotp } from "../lib/totp.js";
+import { checkUserTotp, hasTotp } from "../lib/two-factor.js";
 
 const router: IRouter = Router();
 
@@ -55,7 +64,7 @@ async function issueOtp(userId: number, type: string): Promise<string> {
   return code;
 }
 
-async function verifyOtp(userId: number, code: string, type: string): Promise<boolean> {
+async function findOtp(userId: number, code: string, type: string): Promise<number | null> {
   const [otp] = await db
     .select()
     .from(otpCodesTable)
@@ -70,9 +79,21 @@ async function verifyOtp(userId: number, code: string, type: string): Promise<bo
     )
     .limit(1);
 
-  if (!otp) return false;
-  await db.update(otpCodesTable).set({ used: true }).where(eq(otpCodesTable.id, otp.id));
-  return true;
+  return otp?.id ?? null;
+}
+
+/** Marks an OTP used; false if another request already used it. */
+async function consumeOtp(id: number): Promise<boolean> {
+  const rows = await db.update(otpCodesTable)
+    .set({ used: true })
+    .where(and(eq(otpCodesTable.id, id), eq(otpCodesTable.used, false)))
+    .returning({ id: otpCodesTable.id });
+  return rows.length === 1;
+}
+
+async function verifyOtp(userId: number, code: string, type: string): Promise<boolean> {
+  const id = await findOtp(userId, code, type);
+  return id !== null && consumeOtp(id);
 }
 
 function generatePak(): string {
@@ -119,6 +140,7 @@ router.get("/status", requireAuth, async (req, res) => {
       pakCreatedAt: user.pakCreatedAt?.toISOString() ?? null,
       pakCanRegenerate,
       nextPakAllowedAt,
+      twoFactorEnabled: hasTotp(user),
     });
   } catch (err: any) {
     logger.error({ err }, "[security/status]");
@@ -396,21 +418,26 @@ router.post("/change-txn-password/request-otp", requireAuth, async (req, res) =>
     const { userId, email } = (req as any).user;
     const { pak } = req.body as { pak?: unknown };
 
-    if (typeof pak !== "string" || !pak.trim()) {
-      res.status(400).json({ error: "Validation error", message: "pak is required" });
-      return;
-    }
-
     const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-    if (!user?.pakHash) {
-      res.status(400).json({ error: "No PAK", message: "You must generate a PAK before changing your transaction password" });
+    if (!user) {
+      res.status(404).json({ error: "Not found", message: "User not found" });
       return;
     }
 
-    const pakValid = await bcrypt.compare(pak.trim(), user.pakHash);
-    if (!pakValid) {
-      res.status(401).json({ error: "Invalid PAK", message: "The authorization key you entered is incorrect" });
-      return;
+    // With authenticator 2FA on, the authenticator code (checked at confirm) replaces the PAK.
+    if (!hasTotp(user)) {
+      if (typeof pak !== "string" || !pak.trim()) {
+        res.status(400).json({ error: "Validation error", message: "pak is required" });
+        return;
+      }
+      if (!user.pakHash) {
+        res.status(400).json({ error: "No PAK", message: "You must generate a PAK before changing your transaction password" });
+        return;
+      }
+      if (!(await bcrypt.compare(pak.trim(), user.pakHash))) {
+        res.status(401).json({ error: "Invalid PAK", message: "The authorization key you entered is incorrect" });
+        return;
+      }
     }
 
     const code = await issueOtp(userId, "chg-txn-pwd");
@@ -428,10 +455,10 @@ router.post("/change-txn-password/request-otp", requireAuth, async (req, res) =>
 router.post("/change-txn-password/confirm", requireAuth, async (req, res) => {
   try {
     const { userId } = (req as any).user;
-    const { pak, newPassword, otp } = req.body as { pak?: unknown; newPassword?: unknown; otp?: unknown };
+    const { pak, newPassword, otp, totp } = req.body as { pak?: unknown; newPassword?: unknown; otp?: unknown; totp?: unknown };
 
-    if (typeof pak !== "string" || typeof newPassword !== "string" || typeof otp !== "string") {
-      res.status(400).json({ error: "Validation error", message: "pak, newPassword, and otp are required" });
+    if (typeof newPassword !== "string" || typeof otp !== "string") {
+      res.status(400).json({ error: "Validation error", message: "newPassword and otp are required" });
       return;
     }
     if (newPassword.length < 6) {
@@ -440,19 +467,35 @@ router.post("/change-txn-password/confirm", requireAuth, async (req, res) => {
     }
 
     const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-    if (!user?.pakHash) {
-      res.status(400).json({ error: "No PAK", message: "You must generate a PAK before changing your transaction password" });
+    if (!user) {
+      res.status(404).json({ error: "Not found", message: "User not found" });
       return;
     }
 
-    const pakValid = await bcrypt.compare(pak.trim(), user.pakHash);
-    if (!pakValid) {
-      res.status(401).json({ error: "Invalid PAK", message: "The authorization key you entered is incorrect" });
+    // Check the email code without spending it, so a wrong second factor doesn't burn it.
+    const otpId = await findOtp(userId, otp, "chg-txn-pwd");
+    if (otpId === null) {
+      res.status(401).json({ error: "Invalid code", message: "OTP is invalid or has expired" });
       return;
     }
 
-    const otpValid = await verifyOtp(userId, otp, "chg-txn-pwd");
-    if (!otpValid) {
+    if (hasTotp(user)) {
+      if (!(await checkUserTotp(user, totp))) {
+        res.status(401).json({ error: "Invalid authenticator code", code: "TOTP_INVALID", message: "That authenticator code is incorrect or has already been used." });
+        return;
+      }
+    } else {
+      if (typeof pak !== "string" || !user.pakHash) {
+        res.status(400).json({ error: "No PAK", message: "You must generate a PAK before changing your transaction password" });
+        return;
+      }
+      if (!(await bcrypt.compare(pak.trim(), user.pakHash))) {
+        res.status(401).json({ error: "Invalid PAK", message: "The authorization key you entered is incorrect" });
+        return;
+      }
+    }
+
+    if (!(await consumeOtp(otpId))) {
       res.status(401).json({ error: "Invalid code", message: "OTP is invalid or has expired" });
       return;
     }
@@ -564,6 +607,142 @@ router.post("/delete-account/confirm", requireAuth, async (req, res) => {
     res.json({ success: true, message: "Your account has been permanently deleted." });
   } catch (err: any) {
     logger.error({ err }, "[security/delete-account/confirm]");
+    res.status(500).json({ error: "Internal server error", message: err.message });
+  }
+});
+
+// ── POST /api/security/2fa/setup ─────────────────────────────────────────────
+// Creates a new (pending) secret. It only becomes active after /2fa/enable
+// verifies a code from the app, so a half-finished setup never locks anyone out.
+
+router.post("/2fa/setup", requireAuth, requireEmailVerified, async (req, res) => {
+  try {
+    const { userId, email } = (req as any).user;
+    if (!isTotpConfigured()) {
+      res.status(503).json({ error: "Unavailable", message: "Authenticator 2FA isn't available right now." });
+      return;
+    }
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (!user) { res.status(404).json({ error: "Not found", message: "User not found" }); return; }
+    if (hasTotp(user)) {
+      res.status(400).json({ error: "Already enabled", message: "Two-factor authentication is already on." });
+      return;
+    }
+
+    const secret = generateTotpSecret();
+    await db.update(usersTable).set({ totpPendingSecretEnc: encryptSecret(secret) }).where(eq(usersTable.id, userId));
+    res.json({ secret, otpauthUrl: otpauthUrl(secret, email) });
+  } catch (err: any) {
+    logger.error({ err }, "[security/2fa/setup]");
+    res.status(500).json({ error: "Internal server error", message: err.message });
+  }
+});
+
+// ── POST /api/security/2fa/enable ────────────────────────────────────────────
+
+router.post("/2fa/enable", requireAuth, requireEmailVerified, async (req, res) => {
+  try {
+    const { userId } = (req as any).user;
+    const { code } = req.body as { code?: unknown };
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (!user) { res.status(404).json({ error: "Not found", message: "User not found" }); return; }
+    if (hasTotp(user)) {
+      res.status(400).json({ error: "Already enabled", message: "Two-factor authentication is already on." });
+      return;
+    }
+    if (!user.totpPendingSecretEnc) {
+      res.status(400).json({ error: "No setup in progress", message: "Start the setup again to get a new QR code." });
+      return;
+    }
+
+    const step = typeof code === "string" ? verifyTotp(decryptSecret(user.totpPendingSecretEnc), code, null) : null;
+    if (step === null) {
+      res.status(401).json({ error: "Invalid code", code: "TOTP_INVALID", message: "That code doesn't match. Check the time on your phone and try the current code." });
+      return;
+    }
+
+    await db.update(usersTable).set({
+      totpSecretEnc: user.totpPendingSecretEnc,
+      totpPendingSecretEnc: null,
+      totpEnabledAt: new Date(),
+      totpLastStep: step,
+    }).where(eq(usersTable.id, userId));
+    logger.info({ userId }, "[security] Authenticator 2FA enabled");
+    res.json({ success: true, message: "Two-factor authentication is on." });
+  } catch (err: any) {
+    logger.error({ err }, "[security/2fa/enable]");
+    res.status(500).json({ error: "Internal server error", message: err.message });
+  }
+});
+
+// ── POST /api/security/2fa/disable/request-otp ───────────────────────────────
+
+router.post("/2fa/disable/request-otp", requireAuth, async (req, res) => {
+  try {
+    const { userId, email } = (req as any).user;
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (!user || !hasTotp(user)) {
+      res.status(400).json({ error: "Not enabled", message: "Two-factor authentication is not on." });
+      return;
+    }
+    const code = await issueOtp(userId, "disable-2fa");
+    await sendSecurityOtpEmail(email, code, "disable-2fa");
+    res.json({ sent: true, message: "Verification code sent to your email." });
+  } catch (err: any) {
+    logger.error({ err }, "[security/2fa/disable/request-otp]");
+    res.status(500).json({ error: "Internal server error", message: err.message });
+  }
+});
+
+// ── POST /api/security/2fa/disable ───────────────────────────────────────────
+// Email code + authenticator code. If the phone is lost, the PAK can stand in
+// for the authenticator code.
+
+router.post("/2fa/disable", requireAuth, async (req, res) => {
+  try {
+    const { userId } = (req as any).user;
+    const { otp, totp, pak } = req.body as { otp?: unknown; totp?: unknown; pak?: unknown };
+    if (typeof otp !== "string") {
+      res.status(400).json({ error: "Validation error", message: "otp is required" });
+      return;
+    }
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (!user || !hasTotp(user)) {
+      res.status(400).json({ error: "Not enabled", message: "Two-factor authentication is not on." });
+      return;
+    }
+
+    const otpId = await findOtp(userId, otp, "disable-2fa");
+    if (otpId === null) {
+      res.status(401).json({ error: "Invalid code", message: "OTP is invalid or has expired" });
+      return;
+    }
+
+    if (typeof pak === "string" && pak.trim()) {
+      if (!user.pakHash || !(await bcrypt.compare(pak.trim(), user.pakHash))) {
+        res.status(401).json({ error: "Invalid PAK", message: "The authorization key you entered is incorrect" });
+        return;
+      }
+    } else if (!(await checkUserTotp(user, totp))) {
+      res.status(401).json({ error: "Invalid authenticator code", code: "TOTP_INVALID", message: "That authenticator code is incorrect or has already been used." });
+      return;
+    }
+
+    if (!(await consumeOtp(otpId))) {
+      res.status(401).json({ error: "Invalid code", message: "OTP is invalid or has expired" });
+      return;
+    }
+
+    await db.update(usersTable).set({
+      totpSecretEnc: null,
+      totpPendingSecretEnc: null,
+      totpEnabledAt: null,
+      totpLastStep: null,
+    }).where(eq(usersTable.id, userId));
+    logger.info({ userId }, "[security] Authenticator 2FA disabled");
+    res.json({ success: true, message: "Two-factor authentication is off." });
+  } catch (err: any) {
+    logger.error({ err }, "[security/2fa/disable]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
 });
