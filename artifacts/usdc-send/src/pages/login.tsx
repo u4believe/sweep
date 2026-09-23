@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, Send, ShieldCheck, RefreshCw, Info, CheckCircle2, Eye, EyeOff, Smartphone } from "lucide-react";
+import { Loader2, Send, ShieldCheck, RefreshCw, Eye, EyeOff, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -9,6 +9,9 @@ import { API_BASE } from "@/lib/api";
 import { finishSignIn, TWO_FACTOR_CHALLENGE_KEY } from "@/lib/auth-session";
 import { GoogleSignInButton, type GoogleAuthResult } from "@/components/auth/google-sign-in";
 import { TotpInput } from "@/components/auth/totp-input";
+import {
+  AuthBackLink, AuthError, AuthNotice, AuthShell, AuthTitle, authCodeField, authField, authPrimary,
+} from "@/components/auth/auth-shell";
 
 type Step = "credentials" | "otp" | "unverified" | "google-2fa";
 
@@ -214,65 +217,32 @@ export default function Login() {
     errorParam === "server-error"  ? { tone: "bad",  text: "We couldn't verify your email just now. Please try the link again." } :
     null;
 
-  const field = "h-[54px] w-full rounded-[14px] border border-(--sw-field-line) bg-(--sw-bg) px-4 text-[15px] font-medium text-(--sw-ink) outline-none placeholder:text-[#9aa4b5] focus:border-(--sw-blue) focus:bg-white transition-colors disabled:opacity-60";
-  const primary = "h-14 w-full rounded-2xl bg-(--sw-blue) text-white text-base font-bold flex items-center justify-center gap-2 hover:bg-(--sw-blue-hover) active:scale-[.98] transition disabled:bg-[#c5ccd8] disabled:cursor-not-allowed disabled:active:scale-100";
-  const totpField = "h-[54px] rounded-[14px] border border-(--sw-field-line) bg-(--sw-bg) focus:border-(--sw-blue) focus:bg-white focus:ring-0";
-  const back = (
-    <button type="button" onClick={() => backToCredentials()}
-      className="self-center text-sm font-semibold text-(--sw-muted) hover:text-(--sw-ink)">
-      ← Back to log in
-    </button>
-  );
-  const errorBox = error ? (
-    <div role="alert" className="rounded-2xl bg-[#fef3f2] text-[#b42318] px-4 py-3 text-sm font-medium">{error}</div>
-  ) : null;
+  const back = <AuthBackLink onClick={() => backToCredentials()}>← Back to log in</AuthBackLink>;
+  const errorBox = <AuthError message={error} />;
 
   return (
-    <div className="sweep-ui min-h-[100dvh] flex flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(480px,560px)]">
-      {/* Brand panel — full-height on desktop, the top of the screen on phones */}
-      <section aria-label="Sweep" className="relative flex-1 lg:flex-none bg-(--sw-blue) text-white px-6 sm:px-10 lg:px-14 pt-10 pb-12 lg:py-12 flex flex-col justify-between gap-12 overflow-hidden min-h-[300px]">
-        <img src="/sweep-mark-white.svg" alt="" aria-hidden className="absolute -right-16 -bottom-24 w-[420px] opacity-[.07] pointer-events-none hidden lg:block" />
-        <Link href="/landing" className="relative flex items-center gap-2.5 self-start" aria-label="Sweep home">
-          <img src="/sweep-mark-white.svg" alt="" className="w-6" />
-          <span className="font-extrabold text-xl tracking-[-0.02em]">Sweep</span>
-        </Link>
-        <div className="relative flex flex-col gap-3 max-w-[520px]">
-          <span className="text-xs font-semibold tracking-[0.04em] opacity-80">TESTNET · POWERED BY CIRCLE</span>
-          <h2 className="font-extrabold text-[42px] lg:text-[64px] leading-[1.04] tracking-[-0.035em]">Send dollars to any email.</h2>
-          <p className="text-[15px] lg:text-lg leading-relaxed opacity-85 max-w-[340px] lg:max-w-[420px]">No wallet, no seed phrase, no gas. Backed 1:1 by USDC.</p>
-        </div>
-      </section>
-
-      {/* Form sheet — rises over the brand panel on phones, its own column on desktop */}
-      <main className="relative -mt-5 lg:mt-0 bg-white rounded-t-3xl lg:rounded-none px-5 sm:px-10 pt-6 pb-8 lg:px-14 lg:py-12 flex flex-col lg:justify-center">
-        <div className="w-full max-w-[420px] mx-auto flex flex-col gap-3">
+    <AuthShell>
 
           {step === "credentials" && (
             <>
-              <h1 className="font-extrabold text-2xl tracking-[-0.02em] mb-1">Log in</h1>
-              {notice && (
-                <div className={cn("flex items-start gap-2.5 rounded-2xl px-4 py-3 text-sm font-medium",
-                  notice.tone === "ok" ? "bg-[#ecfdf3] text-[#067647]" : notice.tone === "warn" ? "bg-[#fffaeb] text-[#b54708]" : "bg-[#fef3f2] text-[#b42318]")}>
-                  {notice.tone === "ok" ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <Info className="w-4 h-4 shrink-0 mt-0.5" />}
-                  <span>{notice.text}</span>
-                </div>
-              )}
+              <AuthTitle>Log in</AuthTitle>
+              {notice && <AuthNotice tone={notice.tone as "ok" | "warn" | "bad"}>{notice.text}</AuthNotice>}
               {errorBox}
               <GoogleSignInButton text="signin_with" onResult={handleGoogleResult} onError={setError} />
               <form onSubmit={handleCredentials} className="flex flex-col gap-3" noValidate>
                 <label htmlFor="login-email" className="sr-only">Email</label>
                 <input id="login-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com" autoComplete="email" inputMode="email" autoCapitalize="none" required className={field} />
+                  placeholder="you@example.com" autoComplete="email" inputMode="email" autoCapitalize="none" required className={authField} />
                 <label htmlFor="login-password" className="sr-only">Password</label>
                 <div className="relative">
                   <input id="login-password" type={showPassword ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Password" autoComplete="current-password" required className={cn(field, "pr-12")} />
+                    placeholder="Password" autoComplete="current-password" required className={cn(authField, "pr-12")} />
                   <button type="button" onClick={() => setShowPassword((v) => !v)} aria-label={showPassword ? "Hide password" : "Show password"}
                     className="absolute inset-y-0 right-0 px-4 flex items-center text-(--sw-muted) hover:text-(--sw-ink)">
                     {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
                 </div>
-                <button type="submit" disabled={isPending} className={primary}>
+                <button type="submit" disabled={isPending} className={authPrimary}>
                   {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : "Log in"}
                 </button>
               </form>
@@ -285,16 +255,12 @@ export default function Login() {
 
           {step === "unverified" && (
             <>
-              <h1 className="font-extrabold text-2xl tracking-[-0.02em]">Verify your email</h1>
+              <AuthTitle>Verify your email</AuthTitle>
               <p className="text-sm text-(--sw-muted) leading-relaxed">
                 We need to verify <span className="font-bold text-(--sw-ink)">{sentEmail}</span> before you can log in. Check your inbox for a verification link — it's valid for 72 hours.
               </p>
-              {resentVerification && (
-                <div className="flex items-start gap-2.5 rounded-2xl bg-[#ecfdf3] text-[#067647] px-4 py-3 text-sm font-medium">
-                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> <span>Verification email resent — check your inbox.</span>
-                </div>
-              )}
-              <button type="button" onClick={handleResendVerification} disabled={isPending} className={cn(primary, "mt-2")}>
+              {resentVerification && <AuthNotice tone="ok">Verification email resent — check your inbox.</AuthNotice>}
+              <button type="button" onClick={handleResendVerification} disabled={isPending} className={cn(authPrimary, "mt-2")}>
                 {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Send className="w-5 h-5" /> Resend verification email</>}
               </button>
               {back}
@@ -303,7 +269,7 @@ export default function Login() {
 
           {step === "otp" && (
             <form onSubmit={handleVerifyOtp} className="flex flex-col gap-3">
-              <h1 className="font-extrabold text-2xl tracking-[-0.02em]">Check your email</h1>
+              <AuthTitle>Check your email</AuthTitle>
               <p className="text-sm text-(--sw-muted)">
                 We sent a 6-digit code to <span className="font-bold text-(--sw-ink)">{sentEmail}</span>
               </p>
@@ -334,11 +300,11 @@ export default function Login() {
                   <label htmlFor="login-totp" className="flex items-center gap-1.5 text-[13px] font-bold text-(--sw-label) mb-2">
                     <Smartphone className="w-4 h-4 text-(--sw-blue)" /> Authenticator app code
                   </label>
-                  <TotpInput id="login-totp" value={totp} onChange={setTotp} disabled={isPending} className={totpField} />
+                  <TotpInput id="login-totp" value={totp} onChange={setTotp} disabled={isPending} className={authCodeField} />
                   <p className="text-xs text-(--sw-muted) mt-2">Open your authenticator app and enter the current code for Sweep.</p>
                 </div>
               )}
-              <button type="submit" disabled={isPending || otp.join("").length < 6 || (requiresTotp && totp.length < 6)} className={cn(primary, "mt-2")}>
+              <button type="submit" disabled={isPending || otp.join("").length < 6 || (requiresTotp && totp.length < 6)} className={cn(authPrimary, "mt-2")}>
                 {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ShieldCheck className="w-5 h-5" /> Verify &amp; log in</>}
               </button>
               <button type="button" onClick={handleResend} disabled={isPending}
@@ -351,21 +317,19 @@ export default function Login() {
 
           {step === "google-2fa" && (
             <form onSubmit={handleGoogle2fa} className="flex flex-col gap-3">
-              <h1 className="font-extrabold text-2xl tracking-[-0.02em]">Two-factor authentication</h1>
+              <AuthTitle>Two-factor authentication</AuthTitle>
               <p className="text-sm text-(--sw-muted)">Enter the 6-digit code from your authenticator app to finish signing in with Google.</p>
               {errorBox}
               <label htmlFor="google-totp" className="flex items-center gap-1.5 text-[13px] font-bold text-(--sw-label) mt-1">
                 <Smartphone className="w-4 h-4 text-(--sw-blue)" /> Authenticator app code
               </label>
-              <TotpInput id="google-totp" value={totp} onChange={setTotp} disabled={isPending} className={totpField} />
-              <button type="submit" disabled={isPending || totp.length < 6} className={cn(primary, "mt-2")}>
+              <TotpInput id="google-totp" value={totp} onChange={setTotp} disabled={isPending} className={authCodeField} />
+              <button type="submit" disabled={isPending || totp.length < 6} className={cn(authPrimary, "mt-2")}>
                 {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ShieldCheck className="w-5 h-5" /> Verify &amp; log in</>}
               </button>
               {back}
             </form>
           )}
-        </div>
-      </main>
-    </div>
+    </AuthShell>
   );
 }
