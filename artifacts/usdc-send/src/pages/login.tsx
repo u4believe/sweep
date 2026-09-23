@@ -1,11 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
-import { Mail, Lock, ArrowRight, Loader2, Send, ShieldCheck, RefreshCw, Info, CheckCircle2, Eye, EyeOff, Smartphone } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { Loader2, Send, ShieldCheck, RefreshCw, Info, CheckCircle2, Eye, EyeOff, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { AppLayout } from "@/components/layout";
 
 import { API_BASE } from "@/lib/api";
 import { finishSignIn, TWO_FACTOR_CHALLENGE_KEY } from "@/lib/auth-session";
@@ -206,363 +204,168 @@ export default function Login() {
     }
   };
 
+  // Messages for the redirects from the email-verification link (/api/auth/verify-email).
+  const notice =
+    verifiedParam === "true"    ? { tone: "ok",   text: "Email verified! You can now log in." } :
+    verifiedParam === "already" ? { tone: "ok",   text: "Your email is already verified — log in below." } :
+    errorParam === "link-expired"  ? { tone: "warn", text: "Your verification link has expired. Log in below and we'll send you a new one." } :
+    errorParam === "invalid-token" ? { tone: "warn", text: "That verification link isn't valid. Log in below and we'll send you a new one." } :
+    errorParam === "missing-token" ? { tone: "warn", text: "That verification link is incomplete. Log in below and we'll send you a new one." } :
+    errorParam === "server-error"  ? { tone: "bad",  text: "We couldn't verify your email just now. Please try the link again." } :
+    null;
+
+  const field = "h-[54px] w-full rounded-[14px] border border-(--sw-field-line) bg-(--sw-bg) px-4 text-[15px] font-medium text-(--sw-ink) outline-none placeholder:text-[#9aa4b5] focus:border-(--sw-blue) focus:bg-white transition-colors disabled:opacity-60";
+  const primary = "h-14 w-full rounded-2xl bg-(--sw-blue) text-white text-base font-bold flex items-center justify-center gap-2 hover:bg-(--sw-blue-hover) active:scale-[.98] transition disabled:bg-[#c5ccd8] disabled:cursor-not-allowed disabled:active:scale-100";
+  const totpField = "h-[54px] rounded-[14px] border border-(--sw-field-line) bg-(--sw-bg) focus:border-(--sw-blue) focus:bg-white focus:ring-0";
+  const back = (
+    <button type="button" onClick={() => backToCredentials()}
+      className="self-center text-sm font-semibold text-(--sw-muted) hover:text-(--sw-ink)">
+      ← Back to log in
+    </button>
+  );
+  const errorBox = error ? (
+    <div role="alert" className="rounded-2xl bg-[#fef3f2] text-[#b42318] px-4 py-3 text-sm font-medium">{error}</div>
+  ) : null;
+
   return (
-    <AppLayout>
-      <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
-        <div className="orb orb-blue w-[600px] h-[600px] top-[-200px] right-[-100px]" />
-        <div className="orb orb-cyan w-[400px] h-[400px] bottom-[-100px] left-[-100px]" />
-      </div>
+    <div className="sweep-ui min-h-[100dvh] flex flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(480px,560px)]">
+      {/* Brand panel — full-height on desktop, the top of the screen on phones */}
+      <section aria-label="Sweep" className="relative flex-1 lg:flex-none bg-(--sw-blue) text-white px-6 sm:px-10 lg:px-14 pt-10 pb-12 lg:py-12 flex flex-col justify-between gap-12 overflow-hidden min-h-[300px]">
+        <img src="/sweep-mark-white.svg" alt="" aria-hidden className="absolute -right-16 -bottom-24 w-[420px] opacity-[.07] pointer-events-none hidden lg:block" />
+        <Link href="/landing" className="relative flex items-center gap-2.5 self-start" aria-label="Sweep home">
+          <img src="/sweep-mark-white.svg" alt="" className="w-6" />
+          <span className="font-extrabold text-xl tracking-[-0.02em]">Sweep</span>
+        </Link>
+        <div className="relative flex flex-col gap-3 max-w-[520px]">
+          <span className="text-xs font-semibold tracking-[0.04em] opacity-80">TESTNET · POWERED BY CIRCLE</span>
+          <h2 className="font-extrabold text-[42px] lg:text-[64px] leading-[1.04] tracking-[-0.035em]">Send dollars to any email.</h2>
+          <p className="text-[15px] lg:text-lg leading-relaxed opacity-85 max-w-[340px] lg:max-w-[420px]">No wallet, no seed phrase, no gas. Backed 1:1 by USDC.</p>
+        </div>
+      </section>
 
-      <div className="min-h-[calc(100vh-5rem)] flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
+      {/* Form sheet — rises over the brand panel on phones, its own column on desktop */}
+      <main className="relative -mt-5 lg:mt-0 bg-white rounded-t-3xl lg:rounded-none px-5 sm:px-10 pt-6 pb-8 lg:px-14 lg:py-12 flex flex-col lg:justify-center">
+        <div className="w-full max-w-[420px] mx-auto flex flex-col gap-3">
 
-          {/* Logo */}
-          <div className="flex justify-center mb-8">
-            <Link href="/landing">
-              <motion.div
-                animate={{ y: [0, -4, 0] }}
-                transition={{ repeat: Infinity, duration: 4, ease: "easeInOut" }}
-              >
-                <img src="/Sweep_logo_exact.svg" alt="Sweep" className="h-10 w-auto cursor-pointer" />
-              </motion.div>
-            </Link>
-          </div>
-
-          {/* Step panels — no AnimatePresence to avoid blank-screen transition bug */}
-          {step === "credentials" ? (
-            <motion.div
-              key="credentials"
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25 }}
-            >
-              {verifiedParam === "true" && (
-                <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}
-                  className="mb-6 flex items-start gap-3 px-4 py-3 rounded-xl bg-green-50 border border-green-200 text-green-700 text-sm font-medium">
-                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>Email verified! You can now sign in.</span>
-                </motion.div>
+          {step === "credentials" && (
+            <>
+              <h1 className="font-extrabold text-2xl tracking-[-0.02em] mb-1">Log in</h1>
+              {notice && (
+                <div className={cn("flex items-start gap-2.5 rounded-2xl px-4 py-3 text-sm font-medium",
+                  notice.tone === "ok" ? "bg-[#ecfdf3] text-[#067647]" : notice.tone === "warn" ? "bg-[#fffaeb] text-[#b54708]" : "bg-[#fef3f2] text-[#b42318]")}>
+                  {notice.tone === "ok" ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <Info className="w-4 h-4 shrink-0 mt-0.5" />}
+                  <span>{notice.text}</span>
+                </div>
               )}
-              {errorParam === "link-expired" && (
-                <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}
-                  className="mb-6 flex items-start gap-3 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium">
-                  <Info className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>Your verification link has expired. Log in below and we'll send you a new one.</span>
-                </motion.div>
-              )}
-              <div className="text-center mb-8">
-                <h1 className="text-3xl font-display font-bold">Welcome back</h1>
-                <p className="text-muted-foreground mt-2">Log in to claim and manage your USD.</p>
-              </div>
-
-              <div className="glass-panel p-8 rounded-3xl">
-                <AnimatePresence>
-                  {error && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: "auto" }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="mb-6 p-4 rounded-xl bg-destructive/10 text-destructive text-sm font-medium border border-destructive/20 overflow-hidden"
-                    >
-                      {error}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                <div className="mb-6">
-                  <GoogleSignInButton text="signin_with" onResult={handleGoogleResult} onError={setError} />
-                </div>
-
-                <form onSubmit={handleCredentials} className="space-y-5">
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-2">Email</label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-muted-foreground">
-                        <Mail className="w-5 h-5" />
-                      </div>
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={e => setEmail(e.target.value)}
-                        className="w-full pl-11 pr-4 py-3 rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all outline-none"
-                        placeholder="you@example.com"
-                        autoComplete="email"
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="block text-sm font-medium text-foreground">Password</label>
-                      <Link href="/forgot-password" className="text-xs font-medium text-primary hover:underline">Forgot password?</Link>
-                    </div>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-muted-foreground">
-                        <Lock className="w-5 h-5" />
-                      </div>
-                      <input
-                        type={showPassword ? "text" : "password"}
-                        value={password}
-                        onChange={e => setPassword(e.target.value)}
-                        className="w-full pl-11 pr-11 py-3 rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all outline-none"
-                        placeholder="••••••••"
-                        autoComplete="current-password"
-                        required
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(v => !v)}
-                        className="absolute inset-y-0 right-0 pr-4 flex items-center text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <motion.button
-                    type="submit"
-                    disabled={isPending}
-                    whileHover={!isPending ? { scale: 1.02, y: -1 } : {}}
-                    whileTap={!isPending ? { scale: 0.98 } : {}}
-                    className="w-full flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl font-bold text-white bg-primary hover:shadow-lg hover:shadow-primary/30 transition-shadow disabled:opacity-70 disabled:cursor-not-allowed"
-                  >
-                    {isPending
-                      ? <Loader2 className="w-5 h-5 animate-spin" />
-                      : <><span>Log In</span> <ArrowRight className="w-5 h-5" /></>
-                    }
-                  </motion.button>
-                </form>
-
-                <div className="mt-6 text-center">
-                  <p className="text-sm text-muted-foreground">
-                    Don't have an account?{" "}
-                    <Link href="/register" className="font-semibold text-primary hover:underline">Sign up</Link>
-                  </p>
-                </div>
-              </div>
-            </motion.div>
-          ) : step === "unverified" ? (
-            <motion.div
-              key="unverified"
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25 }}
-            >
-              <div className="text-center mb-8">
-                <h1 className="text-3xl font-display font-bold">Verify your email</h1>
-                <p className="text-muted-foreground mt-2">
-                  We need to verify{" "}
-                  <span className="font-semibold text-foreground">{sentEmail}</span>{" "}
-                  before you can log in.
-                </p>
-              </div>
-
-              <div className="glass-panel p-8 rounded-3xl">
-                <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 mb-6">
-                  <Info className="w-4 h-4 shrink-0" />
-                  <p className="text-sm">Check your inbox for a verification link. It's valid for 72 hours.</p>
-                </div>
-
-                <AnimatePresence>
-                  {resentVerification && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: "auto" }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="mb-6 flex items-start gap-3 px-4 py-3 rounded-xl bg-green-50 border border-green-200 text-green-700 text-sm font-medium overflow-hidden"
-                    >
-                      <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                      <span>Verification email resent! Check your inbox.</span>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                <div className="space-y-4">
-                  <motion.button
-                    type="button"
-                    onClick={handleResendVerification}
-                    disabled={isPending}
-                    whileHover={!isPending ? { scale: 1.02, y: -1 } : {}}
-                    whileTap={!isPending ? { scale: 0.98 } : {}}
-                    className="w-full flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl font-bold text-white bg-primary hover:shadow-lg hover:shadow-primary/30 transition-shadow disabled:opacity-70 disabled:cursor-not-allowed"
-                  >
-                    {isPending
-                      ? <Loader2 className="w-5 h-5 animate-spin" />
-                      : <><Send className="w-5 h-5" /><span>Resend Verification Email</span></>
-                    }
-                  </motion.button>
-                  <button
-                    type="button"
-                    onClick={() => { setStep("credentials"); setError(""); }}
-                    className="block mx-auto text-sm text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    ← Back to login
+              {errorBox}
+              <GoogleSignInButton text="signin_with" onResult={handleGoogleResult} onError={setError} />
+              <form onSubmit={handleCredentials} className="flex flex-col gap-3" noValidate>
+                <label htmlFor="login-email" className="sr-only">Email</label>
+                <input id="login-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com" autoComplete="email" inputMode="email" autoCapitalize="none" required className={field} />
+                <label htmlFor="login-password" className="sr-only">Password</label>
+                <div className="relative">
+                  <input id="login-password" type={showPassword ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Password" autoComplete="current-password" required className={cn(field, "pr-12")} />
+                  <button type="button" onClick={() => setShowPassword((v) => !v)} aria-label={showPassword ? "Hide password" : "Show password"}
+                    className="absolute inset-y-0 right-0 px-4 flex items-center text-(--sw-muted) hover:text-(--sw-ink)">
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
                 </div>
-              </div>
-            </motion.div>
-          ) : step === "otp" ? (
-            <motion.div
-              key="otp"
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25 }}
-            >
-              <div className="text-center mb-8">
-                <h1 className="text-3xl font-display font-bold">Check your email</h1>
-                <p className="text-muted-foreground mt-2">
-                  We sent a 6-digit code to{" "}
-                  <span className="font-semibold text-foreground">{sentEmail}</span>
-                </p>
-              </div>
-
-              <div className="glass-panel p-8 rounded-3xl">
-                <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-primary/5 border border-primary/10 mb-7">
-                  <ShieldCheck className="w-4 h-4 text-primary shrink-0" />
-                  <p className="text-sm text-muted-foreground">Enter the code to confirm it's you</p>
-                </div>
-
-                {/* Dev-mode hint when SMTP isn't configured */}
-
-                <AnimatePresence>
-                  {error && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: "auto" }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="mb-6 p-4 rounded-xl bg-destructive/10 text-destructive text-sm font-medium border border-destructive/20 overflow-hidden"
-                    >
-                      {error}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                <form onSubmit={handleVerifyOtp} className="space-y-6">
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-4 text-center">
-                      Verification Code
-                    </label>
-                    <div className="flex items-center justify-center gap-2" onPaste={handleOtpPaste}>
-                      {otp.map((digit, i) => (
-                        <input
-                          key={i}
-                          ref={el => { otpRefs.current[i] = el; }}
-                          type="text"
-                          inputMode="numeric"
-                          maxLength={1}
-                          value={digit}
-                          onChange={e => handleOtpChange(i, e.target.value)}
-                          onKeyDown={e => handleOtpKeyDown(i, e)}
-                          className={cn(
-                            "w-11 h-14 text-center text-xl font-bold rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all outline-none",
-                            digit && "border-primary/60",
-                          )}
-                        />
-                      ))}
-                    </div>
-                  </div>
-
-                  {requiresTotp && (
-                    <div>
-                      <label htmlFor="login-totp" className="flex items-center justify-center gap-1.5 text-sm font-medium text-foreground mb-3">
-                        <Smartphone className="w-4 h-4 text-primary" /> Authenticator app code
-                      </label>
-                      <TotpInput id="login-totp" value={totp} onChange={setTotp} disabled={isPending} />
-                      <p className="text-xs text-muted-foreground text-center mt-2">Open your authenticator app and enter the current 6-digit code for Sweep.</p>
-                    </div>
-                  )}
-
-                  <motion.button
-                    type="submit"
-                    disabled={isPending || otp.join("").length < 6 || (requiresTotp && totp.length < 6)}
-                    whileHover={!isPending ? { scale: 1.02, y: -1 } : {}}
-                    whileTap={!isPending ? { scale: 0.98 } : {}}
-                    className="w-full flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl font-bold text-white bg-primary hover:shadow-lg hover:shadow-primary/30 transition-shadow disabled:opacity-70 disabled:cursor-not-allowed"
-                  >
-                    {isPending
-                      ? <Loader2 className="w-5 h-5 animate-spin" />
-                      : <><span>Verify &amp; Sign In</span> <ShieldCheck className="w-5 h-5" /></>
-                    }
-                  </motion.button>
-                </form>
-
-                <div className="mt-6 text-center space-y-2">
-                  <p className="text-sm text-muted-foreground">Didn't receive it?</p>
-                  <button
-                    type="button"
-                    onClick={handleResend}
-                    disabled={isPending}
-                    className="flex items-center gap-1.5 mx-auto text-sm font-medium text-primary hover:underline disabled:opacity-50"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" /> Resend code
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => backToCredentials()}
-                    className="block mx-auto text-sm text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    ← Back to login
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          ) : null}
-
-          {step === "google-2fa" && (
-            <motion.div
-              key="google-2fa"
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25 }}
-            >
-              <div className="text-center mb-8">
-                <h1 className="text-3xl font-display font-bold">Two-factor authentication</h1>
-                <p className="text-muted-foreground mt-2">Enter the 6-digit code from your authenticator app to finish signing in with Google.</p>
-              </div>
-              <div className="glass-panel p-8 rounded-3xl">
-                <AnimatePresence>
-                  {error && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: "auto" }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="mb-6 p-4 rounded-xl bg-destructive/10 text-destructive text-sm font-medium border border-destructive/20 overflow-hidden"
-                    >
-                      {error}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-                <form onSubmit={handleGoogle2fa} className="space-y-6">
-                  <div>
-                    <label htmlFor="google-totp" className="flex items-center justify-center gap-1.5 text-sm font-medium text-foreground mb-3">
-                      <Smartphone className="w-4 h-4 text-primary" /> Authenticator app code
-                    </label>
-                    <TotpInput id="google-totp" value={totp} onChange={setTotp} disabled={isPending} />
-                  </div>
-                  <motion.button
-                    type="submit"
-                    disabled={isPending || totp.length < 6}
-                    whileHover={!isPending ? { scale: 1.02, y: -1 } : {}}
-                    whileTap={!isPending ? { scale: 0.98 } : {}}
-                    className="w-full flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl font-bold text-white bg-primary hover:shadow-lg hover:shadow-primary/30 transition-shadow disabled:opacity-70 disabled:cursor-not-allowed"
-                  >
-                    {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <><span>Verify &amp; Sign In</span> <ShieldCheck className="w-5 h-5" /></>}
-                  </motion.button>
-                </form>
-                <button
-                  type="button"
-                  onClick={() => backToCredentials()}
-                  className="block mx-auto mt-6 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  ← Back to login
+                <button type="submit" disabled={isPending} className={primary}>
+                  {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : "Log in"}
                 </button>
+              </form>
+              <div className="flex justify-between text-sm font-semibold px-1 pt-1">
+                <Link href="/register" className="text-(--sw-blue) hover:text-(--sw-blue-hover)">Create account</Link>
+                <Link href="/forgot-password" className="text-(--sw-muted) hover:text-(--sw-ink)">Forgot password?</Link>
               </div>
-            </motion.div>
+            </>
           )}
 
+          {step === "unverified" && (
+            <>
+              <h1 className="font-extrabold text-2xl tracking-[-0.02em]">Verify your email</h1>
+              <p className="text-sm text-(--sw-muted) leading-relaxed">
+                We need to verify <span className="font-bold text-(--sw-ink)">{sentEmail}</span> before you can log in. Check your inbox for a verification link — it's valid for 72 hours.
+              </p>
+              {resentVerification && (
+                <div className="flex items-start gap-2.5 rounded-2xl bg-[#ecfdf3] text-[#067647] px-4 py-3 text-sm font-medium">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> <span>Verification email resent — check your inbox.</span>
+                </div>
+              )}
+              <button type="button" onClick={handleResendVerification} disabled={isPending} className={cn(primary, "mt-2")}>
+                {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Send className="w-5 h-5" /> Resend verification email</>}
+              </button>
+              {back}
+            </>
+          )}
+
+          {step === "otp" && (
+            <form onSubmit={handleVerifyOtp} className="flex flex-col gap-3">
+              <h1 className="font-extrabold text-2xl tracking-[-0.02em]">Check your email</h1>
+              <p className="text-sm text-(--sw-muted)">
+                We sent a 6-digit code to <span className="font-bold text-(--sw-ink)">{sentEmail}</span>
+              </p>
+              {errorBox}
+              <fieldset className="mt-1">
+                <legend className="text-[13px] font-bold text-(--sw-label) mb-2">Email code</legend>
+                <div className="grid grid-cols-6 gap-2" onPaste={handleOtpPaste}>
+                  {otp.map((digit, i) => (
+                    <input
+                      key={i}
+                      ref={(el) => { otpRefs.current[i] = el; }}
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete={i === 0 ? "one-time-code" : "off"}
+                      maxLength={1}
+                      value={digit}
+                      aria-label={`Digit ${i + 1}`}
+                      onChange={(e) => handleOtpChange(i, e.target.value)}
+                      onKeyDown={(e) => handleOtpKeyDown(i, e)}
+                      className={cn("h-14 w-full min-w-0 text-center text-xl font-extrabold rounded-[14px] border bg-(--sw-bg) outline-none transition-colors focus:border-(--sw-blue) focus:bg-white",
+                        digit ? "border-(--sw-blue)" : "border-(--sw-field-line)")}
+                    />
+                  ))}
+                </div>
+              </fieldset>
+              {requiresTotp && (
+                <div className="mt-1">
+                  <label htmlFor="login-totp" className="flex items-center gap-1.5 text-[13px] font-bold text-(--sw-label) mb-2">
+                    <Smartphone className="w-4 h-4 text-(--sw-blue)" /> Authenticator app code
+                  </label>
+                  <TotpInput id="login-totp" value={totp} onChange={setTotp} disabled={isPending} className={totpField} />
+                  <p className="text-xs text-(--sw-muted) mt-2">Open your authenticator app and enter the current code for Sweep.</p>
+                </div>
+              )}
+              <button type="submit" disabled={isPending || otp.join("").length < 6 || (requiresTotp && totp.length < 6)} className={cn(primary, "mt-2")}>
+                {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ShieldCheck className="w-5 h-5" /> Verify &amp; log in</>}
+              </button>
+              <button type="button" onClick={handleResend} disabled={isPending}
+                className="self-center flex items-center gap-1.5 text-sm font-semibold text-(--sw-blue) disabled:opacity-50">
+                <RefreshCw className="w-3.5 h-3.5" /> Resend email code
+              </button>
+              {back}
+            </form>
+          )}
+
+          {step === "google-2fa" && (
+            <form onSubmit={handleGoogle2fa} className="flex flex-col gap-3">
+              <h1 className="font-extrabold text-2xl tracking-[-0.02em]">Two-factor authentication</h1>
+              <p className="text-sm text-(--sw-muted)">Enter the 6-digit code from your authenticator app to finish signing in with Google.</p>
+              {errorBox}
+              <label htmlFor="google-totp" className="flex items-center gap-1.5 text-[13px] font-bold text-(--sw-label) mt-1">
+                <Smartphone className="w-4 h-4 text-(--sw-blue)" /> Authenticator app code
+              </label>
+              <TotpInput id="google-totp" value={totp} onChange={setTotp} disabled={isPending} className={totpField} />
+              <button type="submit" disabled={isPending || totp.length < 6} className={cn(primary, "mt-2")}>
+                {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ShieldCheck className="w-5 h-5" /> Verify &amp; log in</>}
+              </button>
+              {back}
+            </form>
+          )}
         </div>
-      </div>
-    </AppLayout>
+      </main>
+    </div>
   );
 }
