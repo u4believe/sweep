@@ -23,7 +23,7 @@
 import { Router, type IRouter } from "express";
 import bcrypt from "bcrypt";
 import crypto from "node:crypto";
-import { db, usersTable, otpCodesTable, escrowsTable } from "@workspace/db";
+import { db, usersTable, otpCodesTable } from "@workspace/db";
 import {
   subscriptionPlansTable,
   subscriptionIntervalsTable,
@@ -34,7 +34,6 @@ import {
 } from "@workspace/db";
 import { eq, and, gt, isNull, ne } from "drizzle-orm";
 import { requireAuth, requireEmailVerified } from "../lib/auth.js";
-import { hashEmail, parseUsdcAmount } from "../lib/escrow.js";
 import {
   sendSubscriptionOtpEmail,
   sendSubscriptionConfirmationCodeEmail,
@@ -45,6 +44,12 @@ import {
   sendSubscriptionCancelledEmail,
 } from "../lib/email.js";
 import { enqueueWebhook } from "../lib/webhookDelivery.js";
+import {
+  chargeSubscription,
+  isSelfSubscription,
+  InsufficientBalanceError,
+  SelfPaymentError,
+} from "../lib/ledger.js";
 import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
@@ -77,6 +82,8 @@ function generateConfirmationCode(): string {
 function hashCode(code: string): string {
   return crypto.createHash("sha256").update(code).digest("hex");
 }
+
+class CodeAlreadyUsedError extends Error {}
 
 function generateOtp(): string {
   return String(crypto.randomInt(100000, 1000000));
@@ -490,6 +497,11 @@ router.post("/confirmation-code/request-otp", requireAuth, requireEmailVerified,
       }
     }
 
+    if (isSelfSubscription({ id: user.userId, email: dbUser!.email }, plan)) {
+      res.status(400).json({ error: "Invalid subscription", message: "You cannot subscribe to your own plan" });
+      return;
+    }
+
     // Issue OTP
     const otp = await issueOtp(user.userId, "sub-code-gen");
     await sendSubscriptionOtpEmail(dbUser!.email, otp);
@@ -688,6 +700,15 @@ router.post("/activate", async (req, res) => {
     const subscriberUserId = codeRecord.subscriberUserId;
     const [subscriber] = await db.select().from(usersTable).where(eq(usersTable.id, subscriberUserId)).limit(1);
 
+    if (!subscriber) {
+      res.status(404).json({ error: "Not found", message: "Subscriber not found" });
+      return;
+    }
+    if (isSelfSubscription(subscriber, plan!)) {
+      res.status(400).json({ error: "Invalid subscription", message: "You cannot subscribe to your own plan" });
+      return;
+    }
+
     const amount = parseFloat(intervalRecord!.amount);
 
     const now = new Date();
@@ -720,71 +741,46 @@ router.post("/activate", async (req, res) => {
       });
     } else {
       // Immediate billing
-      if (parseFloat(subscriber?.claimedBalance ?? "0") < amount) {
-        res.status(402).json({ error: "Insufficient balance", message: "Your account balance is too low to start this subscription" });
-        return;
-      }
-
-      const newBalance   = (parseFloat(subscriber!.claimedBalance ?? "0") - amount).toFixed(6);
-      const creatorEmail = plan!.paymentEmail.toLowerCase().trim();
-      const emailHash    = hashEmail(creatorEmail);
-
-      const [creatorUser] = await db
-        .select()
-        .from(usersTable)
-        .where(eq(usersTable.email, creatorEmail))
-        .limit(1);
-
       status        = "active";
       nextBillingAt = advanceBillingDate(now, planInterval as Interval);
 
-      [subscription] = await db.transaction(async (tx) => {
-        // Cancel old subscription, debit subscriber, credit creator, create new subscription — all atomic
-        await tx.update(subscriptionsTable)
-          .set({ status: "cancelled", cancelledAt: now, updatedAt: now })
-          .where(and(eq(subscriptionsTable.subscriberUserId, subscriberUserId), eq(subscriptionsTable.merchantId, merchantId)));
+      try {
+        [subscription] = await db.transaction(async (tx) => {
+          // Consume the code first — the guard makes a concurrent replay of the same code a no-op
+          const consumed = await tx.update(subscriptionConfirmationCodesTable)
+            .set({ usedAt: now })
+            .where(and(eq(subscriptionConfirmationCodesTable.id, codeRecord.id), isNull(subscriptionConfirmationCodesTable.usedAt)))
+            .returning({ id: subscriptionConfirmationCodesTable.id });
+          if (consumed.length === 0) throw new CodeAlreadyUsedError();
 
-        await tx.update(usersTable)
-          .set({ claimedBalance: newBalance })
-          .where(eq(usersTable.id, subscriberUserId));
+          // Cancel old subscription, debit subscriber, credit creator, create new subscription — all atomic
+          await tx.update(subscriptionsTable)
+            .set({ status: "cancelled", cancelledAt: now, updatedAt: now })
+            .where(and(eq(subscriptionsTable.subscriberUserId, subscriberUserId), eq(subscriptionsTable.merchantId, merchantId)));
 
-        if (creatorUser) {
-          const creatorNewBalance = (parseFloat(creatorUser.claimedBalance ?? "0") + amount).toFixed(6);
-          await tx.update(usersTable)
-            .set({ claimedBalance: creatorNewBalance })
-            .where(eq(usersTable.id, creatorUser.id));
+          await chargeSubscription(tx, subscriber, plan!, amount, now);
 
-          await tx.insert(escrowsTable).values({
-            senderAddress:   subscriber!.email,
-            recipientEmail:  creatorEmail,
-            emailHash,
-            amount:          amount.toFixed(6),
-            amountWei:       parseUsdcAmount(amount.toFixed(6)).toString(),
-            status:          "claimed",
-            recipientUserId: creatorUser.id,
-            claimedAt:       now,
-          });
-        } else {
-          await tx.insert(escrowsTable).values({
-            senderAddress:  subscriber!.email,
-            recipientEmail: creatorEmail,
-            emailHash,
-            amount:         amount.toFixed(6),
-            amountWei:      parseUsdcAmount(amount.toFixed(6)).toString(),
-            status:         "pending",
-          });
+          return tx.insert(subscriptionsTable).values({
+            subscriberUserId, planId: plan!.id, intervalId: intervalRecord!.id,
+            merchantId, planInterval, amount: amount.toFixed(6),
+            status, startedAt: now, trialEndsAt, nextBillingAt,
+          }).returning();
+        });
+      } catch (err) {
+        if (err instanceof InsufficientBalanceError) {
+          res.status(402).json({ error: "Insufficient balance", message: "Your account balance is too low to start this subscription" });
+          return;
         }
-
-        await tx.update(subscriptionConfirmationCodesTable)
-          .set({ usedAt: now })
-          .where(eq(subscriptionConfirmationCodesTable.id, codeRecord.id));
-
-        return tx.insert(subscriptionsTable).values({
-          subscriberUserId, planId: plan!.id, intervalId: intervalRecord!.id,
-          merchantId, planInterval, amount: amount.toFixed(6),
-          status, startedAt: now, trialEndsAt, nextBillingAt,
-        }).returning();
-      });
+        if (err instanceof SelfPaymentError) {
+          res.status(400).json({ error: "Invalid subscription", message: "You cannot subscribe to your own plan" });
+          return;
+        }
+        if (err instanceof CodeAlreadyUsedError) {
+          res.status(400).json({ error: "Invalid code", message: "Confirmation code is invalid, expired, or already used" });
+          return;
+        }
+        throw err;
+      }
     }
 
     // Auto-issue or reactivate Subscription Passport on successful confirmation-code activation
@@ -1106,6 +1102,11 @@ router.post("/passport/activate", requireAuth, requireEmailVerified, async (req,
 
     const isDevPlan = plan.pakHash === "dev-api-plan";
 
+    if (isSelfSubscription(dbUser, plan)) {
+      res.status(400).json({ error: "Invalid subscription", message: "You cannot subscribe to your own plan" });
+      return;
+    }
+
     if (plan.hasFreeTrial && plan.trialDurationDays) {
       status        = "trialing";
       trialEndsAt   = new Date(now.getTime() + plan.trialDurationDays * 24 * 60 * 60 * 1000);
@@ -1133,75 +1134,43 @@ router.post("/passport/activate", requireAuth, requireEmailVerified, async (req,
       });
     } else {
       // Immediate billing
-      if (parseFloat(dbUser.claimedBalance ?? "0") < amount) {
-        res.status(402).json({ error: "Insufficient balance", message: "Your account balance is too low to start this subscription" });
-        return;
-      }
-
-      const newBalance   = (parseFloat(dbUser.claimedBalance ?? "0") - amount).toFixed(6);
-      const creatorEmail = plan.paymentEmail.toLowerCase().trim();
-      const emailHash    = hashEmail(creatorEmail);
-
-      const [creatorUser] = await db
-        .select()
-        .from(usersTable)
-        .where(eq(usersTable.email, creatorEmail))
-        .limit(1);
-
       status        = "active";
       nextBillingAt = advanceBillingDate(now, planInterval as Interval);
 
-      [passportSubscription] = await db.transaction(async (tx) => {
-        await tx.update(subscriptionsTable)
-          .set({ status: "cancelled", cancelledAt: now, updatedAt: now })
-          .where(and(eq(subscriptionsTable.subscriberUserId, subscriberUserId), eq(subscriptionsTable.merchantId, merchantId)));
+      try {
+        [passportSubscription] = await db.transaction(async (tx) => {
+          await tx.update(subscriptionsTable)
+            .set({ status: "cancelled", cancelledAt: now, updatedAt: now })
+            .where(and(eq(subscriptionsTable.subscriberUserId, subscriberUserId), eq(subscriptionsTable.merchantId, merchantId)));
 
-        await tx.update(usersTable)
-          .set({ claimedBalance: newBalance })
-          .where(eq(usersTable.id, subscriberUserId));
+          await chargeSubscription(tx, dbUser, plan, amount, now);
 
-        if (creatorUser) {
-          const creatorNewBalance = (parseFloat(creatorUser.claimedBalance ?? "0") + amount).toFixed(6);
-          await tx.update(usersTable)
-            .set({ claimedBalance: creatorNewBalance })
-            .where(eq(usersTable.id, creatorUser.id));
-
-          await tx.insert(escrowsTable).values({
-            senderAddress:   dbUser.email,
-            recipientEmail:  creatorEmail,
-            emailHash,
-            amount:          amount.toFixed(6),
-            amountWei:       parseUsdcAmount(amount.toFixed(6)).toString(),
-            status:          "claimed",
-            recipientUserId: creatorUser.id,
-            claimedAt:       now,
-          });
-        } else {
-          await tx.insert(escrowsTable).values({
-            senderAddress:  dbUser.email,
-            recipientEmail: creatorEmail,
-            emailHash,
-            amount:         amount.toFixed(6),
-            amountWei:      parseUsdcAmount(amount.toFixed(6)).toString(),
-            status:         "pending",
-          });
+          return tx.insert(subscriptionsTable).values({
+            subscriberUserId,
+            planId:           plan.id,
+            intervalId:       intervalRecord.id,
+            merchantId,
+            planInterval,
+            amount:           amount.toFixed(6),
+            status,
+            startedAt:        now,
+            trialEndsAt:      null,
+            nextBillingAt,
+            externalRef:      isDevPlan ? (externalRef?.trim() || null) : null,
+            activationMethod: isDevPlan ? "checkout" : "passport",
+          }).returning();
+        });
+      } catch (err) {
+        if (err instanceof InsufficientBalanceError) {
+          res.status(402).json({ error: "Insufficient balance", message: "Your account balance is too low to start this subscription" });
+          return;
         }
-
-        return tx.insert(subscriptionsTable).values({
-          subscriberUserId,
-          planId:           plan.id,
-          intervalId:       intervalRecord.id,
-          merchantId,
-          planInterval,
-          amount:           amount.toFixed(6),
-          status,
-          startedAt:        now,
-          trialEndsAt:      null,
-          nextBillingAt,
-          externalRef:      isDevPlan ? (externalRef?.trim() || null) : null,
-          activationMethod: isDevPlan ? "checkout" : "passport",
-        }).returning();
-      });
+        if (err instanceof SelfPaymentError) {
+          res.status(400).json({ error: "Invalid subscription", message: "You cannot subscribe to your own plan" });
+          return;
+        }
+        throw err;
+      }
     }
 
     // Fire webhook for developer-class plans

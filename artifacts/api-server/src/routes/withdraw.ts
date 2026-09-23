@@ -373,18 +373,27 @@ router.post("/fiat", requireAuth, requireEmailVerified, withdrawalLimiter, async
       return;
     }
 
-    const newBalance = (claimedBalance - withdrawAmount).toFixed(6);
-    await db
-      .update(usersTable)
-      .set({ claimedBalance: newBalance })
-      .where(eq(usersTable.id, user.userId));
+    const newBalance = await atomicDeduct(user.userId, withdrawAmount);
+    if (newBalance === null) {
+      res.status(400).json({
+        error:   "Insufficient balance",
+        message: `Insufficient balance for a $${withdrawAmount.toFixed(2)} withdrawal.`,
+      });
+      return;
+    }
 
-    const { transferId, status } = await initiateWireTransfer(withdrawAmount.toFixed(2), {
-      bankAccountNumber,
-      routingNumber,
-      accountHolderName,
-      country: country ?? "US",
-    });
+    let transferId: string, status: string;
+    try {
+      ({ transferId, status } = await initiateWireTransfer(withdrawAmount.toFixed(2), {
+        bankAccountNumber,
+        routingNumber,
+        accountHolderName,
+        country: country ?? "US",
+      }));
+    } catch (wireErr) {
+      await atomicRestore(user.userId, withdrawAmount);
+      throw wireErr;
+    }
 
     req.log.info({ transferId, status, amount }, "[withdraw] Circle payout initiated");
 

@@ -10,12 +10,11 @@ import {
   subscriptionPlansTable, subscriptionIntervalsTable,
   subscriptionConfirmationCodesTable, subscriptionsTable,
   subscriptionPassportsTable, subscriptionPaymentsTable,
-  escrowsTable,
 } from "@workspace/db";
 import { eq, and, gt, isNull } from "drizzle-orm";
 import { requireApiKey } from "../../lib/apiKeyAuth.js";
 import { enqueueWebhook } from "../../lib/webhookDelivery.js";
-import { hashEmail, parseUsdcAmount } from "../../lib/escrow.js";
+import { chargeSubscription, isSelfSubscription, InsufficientBalanceError, SelfPaymentError } from "../../lib/ledger.js";
 import { sendPassportCreatedEmail, sendSubscriptionActivatedEmail } from "../../lib/email.js";
 import { logger } from "../../lib/logger.js";
 
@@ -223,6 +222,15 @@ router.post("/validate", requireApiKey, async (req, res) => {
       .where(eq(usersTable.id, codeRecord.subscriberUserId))
       .limit(1);
 
+    if (!subscriber) {
+      res.status(404).json({ error: "Not found", message: "Subscriber not found" });
+      return;
+    }
+    if (isSelfSubscription(subscriber, plan!)) {
+      res.status(400).json({ error: "Invalid subscription", message: "Subscriber cannot subscribe to their own plan" });
+      return;
+    }
+
     const amount  = parseFloat(intervalRecord!.amount);
     const now     = new Date();
     const planInterval = codeRecord.planInterval as Interval;
@@ -236,52 +244,19 @@ router.post("/validate", requireApiKey, async (req, res) => {
       trialEndsAt   = new Date(now.getTime() + plan!.trialDurationDays * 86_400_000);
       nextBillingAt = trialEndsAt;
     } else {
-      if (parseFloat(subscriber?.claimedBalance ?? "0") < amount) {
-        res.status(402).json({ error: "Insufficient balance", message: "Subscriber has insufficient balance" });
-        return;
-      }
-
-      const newBalance   = (parseFloat(subscriber!.claimedBalance ?? "0") - amount).toFixed(6);
-      const creatorEmail = plan!.paymentEmail.toLowerCase().trim();
-      const emailHash    = hashEmail(creatorEmail);
-
-      const [creatorUser] = await db
-        .select()
-        .from(usersTable)
-        .where(eq(usersTable.email, creatorEmail))
-        .limit(1);
-
-      await db.transaction(async (tx) => {
-        await tx.update(usersTable)
-          .set({ claimedBalance: newBalance })
-          .where(eq(usersTable.id, subscriber!.id));
-
-        if (creatorUser) {
-          const creatorNewBalance = (parseFloat(creatorUser.claimedBalance ?? "0") + amount).toFixed(6);
-          await tx.update(usersTable)
-            .set({ claimedBalance: creatorNewBalance })
-            .where(eq(usersTable.id, creatorUser.id));
-          await tx.insert(escrowsTable).values({
-            senderAddress:   subscriber!.email,
-            recipientEmail:  creatorEmail,
-            emailHash,
-            amount:          amount.toFixed(6),
-            amountWei:       parseUsdcAmount(amount.toFixed(6)).toString(),
-            status:          "claimed",
-            recipientUserId: creatorUser.id,
-            claimedAt:       now,
-          });
-        } else {
-          await tx.insert(escrowsTable).values({
-            senderAddress:  subscriber!.email,
-            recipientEmail: creatorEmail,
-            emailHash,
-            amount:         amount.toFixed(6),
-            amountWei:      parseUsdcAmount(amount.toFixed(6)).toString(),
-            status:         "pending",
-          });
+      try {
+        await db.transaction((tx) => chargeSubscription(tx, subscriber, plan!, amount, now));
+      } catch (err) {
+        if (err instanceof InsufficientBalanceError) {
+          res.status(402).json({ error: "Insufficient balance", message: "Subscriber has insufficient balance" });
+          return;
         }
-      });
+        if (err instanceof SelfPaymentError) {
+          res.status(400).json({ error: "Invalid subscription", message: "Subscriber cannot subscribe to their own plan" });
+          return;
+        }
+        throw err;
+      }
 
       status        = "active";
       nextBillingAt = advanceBillingDate(now, planInterval);

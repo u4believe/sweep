@@ -1,4 +1,4 @@
-import { db, usersTable, escrowsTable } from "@workspace/db";
+import { db, usersTable } from "@workspace/db";
 import {
   subscriptionsTable,
   subscriptionPlansTable,
@@ -8,7 +8,7 @@ import {
 import { eq, and, lte, lt, ne } from "drizzle-orm";
 import { enqueueWebhook } from "./webhookDelivery.js";
 import { logger } from "./logger.js";
-import { hashEmail, parseUsdcAmount } from "./escrow.js";
+import { chargeSubscription, isSelfSubscription, InsufficientBalanceError } from "./ledger.js";
 import {
   sendSubscriptionBillingSuccessEmail,
   sendSubscriptionBillingFailureEmail,
@@ -36,54 +36,27 @@ async function attemptBilling(
   plan:       typeof subscriptionPlansTable.$inferSelect,
   subscriber: typeof usersTable.$inferSelect,
 ): Promise<boolean> {
-  const amount       = parseFloat(sub.amount);
-  const balance      = parseFloat(subscriber.claimedBalance ?? "0");
+  try {
+    await db.transaction((tx) => chargeSubscription(tx, subscriber, plan, sub.amount));
+    return true;
+  } catch (err) {
+    if (err instanceof InsufficientBalanceError) return false;
+    throw err;
+  }
+}
 
-  if (balance < amount) return false;
-
-  const newBalance   = (balance - amount).toFixed(6);
-  const creatorEmail = plan.paymentEmail.toLowerCase().trim();
-  const emailHash    = hashEmail(creatorEmail);
-
-  const [creatorUser] = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.email, creatorEmail))
-    .limit(1);
-
-  await db.transaction(async (tx) => {
-    await tx.update(usersTable)
-      .set({ claimedBalance: newBalance })
-      .where(eq(usersTable.id, subscriber.id));
-
-    if (creatorUser) {
-      const creatorNewBalance = (parseFloat(creatorUser.claimedBalance ?? "0") + amount).toFixed(6);
-      await tx.update(usersTable)
-        .set({ claimedBalance: creatorNewBalance })
-        .where(eq(usersTable.id, creatorUser.id));
-
-      await tx.insert(escrowsTable).values({
-        senderAddress:   subscriber.email,
-        recipientEmail:  creatorEmail,
-        emailHash,
-        amount:          amount.toFixed(6),
-        amountWei:       parseUsdcAmount(amount.toFixed(6)).toString(),
-        status:          "claimed",
-        recipientUserId: creatorUser.id,
-        claimedAt:       new Date(),
-      });
-    } else {
-      await tx.insert(escrowsTable).values({
-        senderAddress:  subscriber.email,
-        recipientEmail: creatorEmail,
-        emailHash,
-        amount:         amount.toFixed(6),
-        amountWei:      parseUsdcAmount(amount.toFixed(6)).toString(),
-        status:         "pending",
-      });
-    }
-  });
-
+// Self-subscriptions (subscriber is the plan's creator / payout account) must never be billed —
+// cancel any that slipped through before activation-time checks existed.
+async function cancelIfSelfSubscription(
+  sub:        typeof subscriptionsTable.$inferSelect,
+  plan:       typeof subscriptionPlansTable.$inferSelect,
+  subscriber: typeof usersTable.$inferSelect,
+): Promise<boolean> {
+  if (!isSelfSubscription(subscriber, plan)) return false;
+  await db.update(subscriptionsTable)
+    .set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() })
+    .where(eq(subscriptionsTable.id, sub.id));
+  logger.warn({ subscriptionId: sub.id, userId: subscriber.id }, "[subscriptionWorker] Self-subscription cancelled without billing");
   return true;
 }
 
@@ -187,6 +160,7 @@ export async function processSubscriptionBilling() {
       const [subscriber] = await db.select().from(usersTable)
         .where(eq(usersTable.id, sub.subscriberUserId)).limit(1);
       if (!subscriber) continue;
+      if (await cancelIfSelfSubscription(sub, plan, subscriber)) continue;
 
       try {
         const success = await attemptBilling(sub, plan, subscriber);
@@ -238,6 +212,7 @@ export async function processSubscriptionBilling() {
       const [subscriber] = await db.select().from(usersTable)
         .where(eq(usersTable.id, sub.subscriberUserId)).limit(1);
       if (!subscriber) continue;
+      if (await cancelIfSelfSubscription(sub, plan, subscriber)) continue;
 
       try {
         const success       = await attemptBilling(sub, plan, subscriber);
@@ -290,6 +265,7 @@ export async function processSubscriptionBilling() {
       const [subscriber] = await db.select().from(usersTable)
         .where(eq(usersTable.id, sub.subscriberUserId)).limit(1);
       if (!subscriber) continue;
+      if (await cancelIfSelfSubscription(sub, plan, subscriber)) continue;
 
       try {
         const success       = await attemptBilling(sub, plan, subscriber);

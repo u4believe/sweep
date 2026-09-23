@@ -6,7 +6,7 @@
 import { Router, type IRouter } from "express";
 import crypto from "node:crypto";
 import {
-  db, usersTable, escrowsTable,
+  db, usersTable,
   subscriptionPlansTable, subscriptionIntervalsTable,
   subscriptionsTable, subscriptionPassportsTable,
   subscriptionPaymentsTable,
@@ -14,7 +14,7 @@ import {
 import { eq, and } from "drizzle-orm";
 import { requireApiKey } from "../../lib/apiKeyAuth.js";
 import { enqueueWebhook } from "../../lib/webhookDelivery.js";
-import { hashEmail, parseUsdcAmount } from "../../lib/escrow.js";
+import { chargeSubscription, isSelfSubscription, InsufficientBalanceError, SelfPaymentError } from "../../lib/ledger.js";
 import { sendSubscriptionActivatedEmail } from "../../lib/email.js";
 import { logger } from "../../lib/logger.js";
 
@@ -157,6 +157,11 @@ router.post("/activate", requireApiKey, async (req, res) => {
       return;
     }
 
+    if (isSelfSubscription(subscriber, plan)) {
+      res.status(400).json({ error: "Invalid subscription", message: "Subscriber cannot subscribe to their own plan" });
+      return;
+    }
+
     const planInterval = intervalRecord.interval as Interval;
     const amount       = parseFloat(intervalRecord.amount);
     const now          = new Date();
@@ -170,36 +175,19 @@ router.post("/activate", requireApiKey, async (req, res) => {
       trialEndsAt   = new Date(now.getTime() + plan.trialDurationDays * 86_400_000);
       nextBillingAt = trialEndsAt;
     } else {
-      if (parseFloat(subscriber.claimedBalance ?? "0") < amount) {
-        res.status(402).json({ error: "Insufficient balance", message: "User has insufficient balance" });
-        return;
-      }
-
-      const newBalance   = (parseFloat(subscriber.claimedBalance ?? "0") - amount).toFixed(6);
-      const creatorEmail = plan.paymentEmail.toLowerCase().trim();
-      const emailHash    = hashEmail(creatorEmail);
-
-      const [creatorUser] = await db.select().from(usersTable).where(eq(usersTable.email, creatorEmail)).limit(1);
-
-      await db.transaction(async (tx) => {
-        await tx.update(usersTable).set({ claimedBalance: newBalance }).where(eq(usersTable.id, subscriber.id));
-
-        if (creatorUser) {
-          const creatorNewBalance = (parseFloat(creatorUser.claimedBalance ?? "0") + amount).toFixed(6);
-          await tx.update(usersTable).set({ claimedBalance: creatorNewBalance }).where(eq(usersTable.id, creatorUser.id));
-          await tx.insert(escrowsTable).values({
-            senderAddress: subscriber.email, recipientEmail: creatorEmail, emailHash,
-            amount: amount.toFixed(6), amountWei: parseUsdcAmount(amount.toFixed(6)).toString(),
-            status: "claimed", recipientUserId: creatorUser.id, claimedAt: now,
-          });
-        } else {
-          await tx.insert(escrowsTable).values({
-            senderAddress: subscriber.email, recipientEmail: creatorEmail, emailHash,
-            amount: amount.toFixed(6), amountWei: parseUsdcAmount(amount.toFixed(6)).toString(),
-            status: "pending",
-          });
+      try {
+        await db.transaction((tx) => chargeSubscription(tx, subscriber, plan, amount, now));
+      } catch (err) {
+        if (err instanceof InsufficientBalanceError) {
+          res.status(402).json({ error: "Insufficient balance", message: "User has insufficient balance" });
+          return;
         }
-      });
+        if (err instanceof SelfPaymentError) {
+          res.status(400).json({ error: "Invalid subscription", message: "Subscriber cannot subscribe to their own plan" });
+          return;
+        }
+        throw err;
+      }
 
       status        = "active";
       nextBillingAt = advanceBillingDate(now, planInterval);

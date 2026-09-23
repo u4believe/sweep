@@ -4,6 +4,7 @@ import { db, usersTable, otpCodesTable, escrowsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
 import { generateToken, requireAuth } from "../lib/auth.js";
 import { hashEmail } from "../lib/escrow.js";
+import { creditBalance } from "../lib/ledger.js";
 import { createUserCircleWallet, ensureAllChainWallets } from "../lib/circle.js";
 import { sendOtpEmail, sendVerificationEmail, sendPasswordResetEmail } from "../lib/email.js";
 import { randomUUID, randomInt } from "node:crypto";
@@ -395,18 +396,19 @@ router.post("/verify-otp", async (req, res) => {
       try {
         const { hashEmail } = await import("../lib/escrow.js");
         const emailHash = hashEmail(user.email);
-        const pendingEscrows = await db.select().from(escrowsTable)
-          .where(and(eq(escrowsTable.emailHash, emailHash), eq(escrowsTable.status, "pending")));
-        if (pendingEscrows.length > 0) {
-          const total = pendingEscrows.reduce((s, e) => s + parseFloat(e.amount), 0);
-          const newBalance = (parseFloat(user.claimedBalance ?? "0") + total).toFixed(6);
-          await db.update(usersTable).set({ claimedBalance: newBalance }).where(eq(usersTable.id, user.id));
-          for (const e of pendingEscrows) {
-            await db.update(escrowsTable)
-              .set({ status: "claimed", recipientUserId: user.id, claimedAt: new Date() })
-              .where(eq(escrowsTable.id, e.id));
-          }
-          req.log.info({ userId: user.id, total, count: pendingEscrows.length }, "[register] Auto-credited pending escrows");
+        // Flip pending → claimed and credit in one transaction; the status guard means a
+        // concurrent verify can't claim (and credit) the same escrows twice.
+        const { total, count } = await db.transaction(async (tx) => {
+          const claimed = await tx.update(escrowsTable)
+            .set({ status: "claimed", recipientUserId: user.id, claimedAt: new Date() })
+            .where(and(eq(escrowsTable.emailHash, emailHash), eq(escrowsTable.status, "pending")))
+            .returning({ amount: escrowsTable.amount });
+          const total = claimed.reduce((s, e) => s + parseFloat(e.amount), 0);
+          if (total > 0) await creditBalance(tx, user.id, total);
+          return { total, count: claimed.length };
+        });
+        if (count > 0) {
+          req.log.info({ userId: user.id, total, count }, "[register] Auto-credited pending escrows");
         }
       } catch (e: any) {
         req.log.warn({ err: e.message }, "[register] Auto-credit pending escrows failed (non-fatal)");

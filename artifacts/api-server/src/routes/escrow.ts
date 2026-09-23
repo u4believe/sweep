@@ -4,6 +4,7 @@ import { eq, and, inArray, sql } from "drizzle-orm";
 import bcrypt from "bcrypt";
 import { requireAuth, requireEmailVerified } from "../lib/auth.js";
 import { hashEmail, parseUsdcAmount } from "../lib/escrow.js";
+import { debitBalance, creditBalance, InsufficientBalanceError } from "../lib/ledger.js";
 import {
   sendEscrowClaimedEmail,
 } from "../lib/email.js";
@@ -237,46 +238,47 @@ router.post("/send/platform", requireAuth, requireEmailVerified, async (req, res
       return;
     }
 
-    const newBalance = (currentBalance - numAmount).toFixed(6);
     const emailHash = hashEmail(recipientEmail);
     const amountStr = numAmount.toFixed(6);
 
-    // Deduct from sender
-    await db.update(usersTable)
-      .set({ claimedBalance: newBalance })
-      .where(eq(usersTable.id, user.userId));
-
     // Look up recipient and credit immediately if they exist
-    const [recipient] = await db.select().from(usersTable)
+    const [recipient] = await db.select({ id: usersTable.id }).from(usersTable)
       .where(eq(usersTable.email, recipientEmail))
       .limit(1);
 
-    let escrowStatus: "claimed" | "pending";
-    let recipientUserId: number | null = null;
+    const escrowStatus: "claimed" | "pending" = recipient ? "claimed" : "pending";
+    const recipientUserId = recipient?.id ?? null;
 
-    if (recipient) {
-      const recipientNewBalance = (parseFloat(recipient.claimedBalance ?? "0") + numAmount).toFixed(6);
-      await db.update(usersTable)
-        .set({ claimedBalance: recipientNewBalance })
-        .where(eq(usersTable.id, recipient.id));
-      escrowStatus = "claimed";
-      recipientUserId = recipient.id;
-    } else {
-      // Recipient not yet registered — keep as pending so they receive it on sign-up
-      escrowStatus = "pending";
+    // Debit sender, credit recipient, record transfer — atomic, using the row's live balance
+    let newBalance: string;
+    let escrow: typeof escrowsTable.$inferSelect;
+    try {
+      ({ newBalance, escrow } = await db.transaction(async (tx) => {
+        const newBalance = await debitBalance(tx, user.userId, amountStr);
+        if (recipient) await creditBalance(tx, recipient.id, amountStr);
+        const [escrow] = await tx.insert(escrowsTable).values({
+          senderAddress: user.email,
+          recipientEmail,
+          emailHash,
+          amount: amountStr,
+          amountWei: parseUsdcAmount(amountStr).toString(),
+          status: escrowStatus,
+          recipientUserId,
+          claimedAt: escrowStatus === "claimed" ? new Date() : null,
+          txHash: null,
+        }).returning();
+        return { newBalance, escrow: escrow! };
+      }));
+    } catch (err) {
+      if (err instanceof InsufficientBalanceError) {
+        res.status(400).json({
+          error: "Insufficient balance",
+          message: "Your balance is too low for this transfer. Top up your balance first.",
+        });
+        return;
+      }
+      throw err;
     }
-
-    const [escrow] = await db.insert(escrowsTable).values({
-      senderAddress: user.email,
-      recipientEmail,
-      emailHash,
-      amount: amountStr,
-      amountWei: parseUsdcAmount(amountStr).toString(),
-      status: escrowStatus,
-      recipientUserId,
-      claimedAt: escrowStatus === "claimed" ? new Date() : null,
-      txHash: null,
-    }).returning();
 
     res.json({
       success: true,

@@ -15,7 +15,7 @@
 
 import { Router, type IRouter } from "express";
 import crypto from "node:crypto";
-import { db, usersTable, escrowsTable } from "@workspace/db";
+import { db, usersTable } from "@workspace/db";
 import {
   subscriptionPlansTable,
   subscriptionIntervalsTable,
@@ -24,7 +24,7 @@ import {
 } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, requireEmailVerified } from "../lib/auth.js";
-import { hashEmail, parseUsdcAmount } from "../lib/escrow.js";
+import { chargeSubscription, isSelfSubscription, InsufficientBalanceError, SelfPaymentError } from "../lib/ledger.js";
 import { enqueueWebhook } from "../lib/webhookDelivery.js";
 import { logger } from "../lib/logger.js";
 
@@ -104,6 +104,11 @@ router.post("/checkout", requireAuth, requireEmailVerified, async (req, res) => 
       return;
     }
 
+    if (isSelfSubscription(subscriber, plan)) {
+      res.status(400).json({ error: "Invalid subscription", message: "You cannot subscribe to your own plan" });
+      return;
+    }
+
     const amount       = parseFloat(intervalRecord.amount);
     const planInterval = intervalRecord.interval as Interval;
 
@@ -128,55 +133,22 @@ router.post("/checkout", requireAuth, requireEmailVerified, async (req, res) => 
       trialEndsAt   = new Date(now.getTime() + plan.trialDurationDays * 24 * 60 * 60 * 1000);
       nextBillingAt = trialEndsAt;
     } else {
-      if (parseFloat(subscriber.claimedBalance ?? "0") < amount) {
-        res.status(402).json({
-          error:   "Insufficient balance",
-          message: "Your Sweep balance is too low. Add funds to your account to subscribe.",
-        });
-        return;
-      }
-
-      const newBalance     = (parseFloat(subscriber.claimedBalance ?? "0") - amount).toFixed(6);
-      const recipientEmail = plan.paymentEmail.toLowerCase().trim();
-      const emailHash      = hashEmail(recipientEmail);
-
-      const [recipientUser] = await db
-        .select()
-        .from(usersTable)
-        .where(eq(usersTable.email, recipientEmail))
-        .limit(1);
-
-      await db.transaction(async (tx) => {
-        await tx.update(usersTable)
-          .set({ claimedBalance: newBalance })
-          .where(eq(usersTable.id, user.userId));
-
-        if (recipientUser) {
-          const newRecipientBalance = (parseFloat(recipientUser.claimedBalance ?? "0") + amount).toFixed(6);
-          await tx.update(usersTable)
-            .set({ claimedBalance: newRecipientBalance })
-            .where(eq(usersTable.id, recipientUser.id));
-          await tx.insert(escrowsTable).values({
-            senderAddress:   subscriber.email,
-            recipientEmail,
-            emailHash,
-            amount:          amount.toFixed(6),
-            amountWei:       parseUsdcAmount(amount.toFixed(6)).toString(),
-            status:          "claimed",
-            recipientUserId: recipientUser.id,
-            claimedAt:       new Date(),
+      try {
+        await db.transaction((tx) => chargeSubscription(tx, subscriber, plan, amount, now));
+      } catch (err) {
+        if (err instanceof InsufficientBalanceError) {
+          res.status(402).json({
+            error:   "Insufficient balance",
+            message: "Your Sweep balance is too low. Add funds to your account to subscribe.",
           });
-        } else {
-          await tx.insert(escrowsTable).values({
-            senderAddress:  subscriber.email,
-            recipientEmail,
-            emailHash,
-            amount:         amount.toFixed(6),
-            amountWei:      parseUsdcAmount(amount.toFixed(6)).toString(),
-            status:         "pending",
-          });
+          return;
         }
-      });
+        if (err instanceof SelfPaymentError) {
+          res.status(400).json({ error: "Invalid subscription", message: "You cannot subscribe to your own plan" });
+          return;
+        }
+        throw err;
+      }
 
       status        = "active";
       nextBillingAt = advanceBillingDate(now, planInterval);

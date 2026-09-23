@@ -2,6 +2,7 @@ import { db, recurringTransfersTable, escrowsTable, usersTable } from "@workspac
 import { eq, and, lte } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { hashEmail, parseUsdcAmount } from "./escrow.js";
+import { debitBalance, InsufficientBalanceError } from "./ledger.js";
 
 export async function processRecurringTransfers() {
   try {
@@ -56,14 +57,11 @@ export async function processRecurringTransfers() {
       }
 
       // Sufficient balance: Deduct & Escrow
-      const newBalance = (currentBalance - numAmount).toFixed(6);
       const emailHash = hashEmail(recurring.recipientEmail);
 
       try {
         await db.transaction(async (tx) => {
-          await tx.update(usersTable)
-            .set({ claimedBalance: newBalance })
-            .where(eq(usersTable.id, user.id));
+          await debitBalance(tx, user.id, numAmount);
 
           await tx.insert(escrowsTable).values({
             senderAddress: user.email,
@@ -82,6 +80,14 @@ export async function processRecurringTransfers() {
         logger.info({ senderEmail: recurring.senderEmail }, "Recurring transfer executed successfully");
 
       } catch (txnError: any) {
+        if (txnError instanceof InsufficientBalanceError) {
+          // Balance dropped between the check above and the debit — skip this interval
+          await db.update(recurringTransfersTable)
+            .set({ nextRunAt })
+            .where(eq(recurringTransfersTable.id, recurring.id));
+          logger.info({ senderEmail: recurring.senderEmail }, "Insufficient funds — recurring transfer skipped");
+          continue;
+        }
         logger.error({ err: txnError }, "Recurring transaction failed");
       }
     }
