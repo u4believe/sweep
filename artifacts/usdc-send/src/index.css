@@ -75,6 +75,13 @@
   --sw-line: #eceff4;
   --sw-field-line: #e3e7ee;
   --sw-bg: #f6f7fa;
+  --sw-navy: #070b1a;
+  --sw-navy-card: #0f1629;
+  --sw-navy-line: #1c2740;
+  --sw-navy-chip: #131c30;
+  --sw-navy-chip-line: #243049;
+  --sw-sky: #7dd3fc;
+  --sw-on-navy: #c5ccd8;
   --primary: 234 92% 51%;
   --ring: 234 92% 51%;
   font-family: "Plus Jakarta Sans", system-ui, sans-serif;

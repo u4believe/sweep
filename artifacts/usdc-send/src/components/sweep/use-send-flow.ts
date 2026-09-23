@@ -29,7 +29,8 @@ export interface SendFlowOptions {
   available: number;
   userEmail: string;
   hasTransactionPassword: boolean;
-  withdraw: WithdrawMutation;
+  /** Needed for wallet (USDC) sends only; email-only surfaces can omit it. */
+  withdraw?: WithdrawMutation;
   onSent: () => void;
 }
 
@@ -163,6 +164,7 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
           newBalance: json.remainingBalance ?? null,
         });
       } else {
+        if (!withdraw) throw new Error("Wallet withdrawals aren't available here");
         const json = await withdraw.mutateAsync({
           data: {
             walletAddress: to,

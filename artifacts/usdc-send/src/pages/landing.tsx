@@ -1,153 +1,56 @@
-import { useState, useEffect, useRef } from "react";
-import { Link } from "wouter";
-import { motion, AnimatePresence, useInView } from "framer-motion";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
-import {
-  ArrowRight, ShieldCheck, Mail, Zap, Loader2, CheckCircle2,
-  AlertCircle, LogIn, UserPlus, Lock, Globe, RefreshCw,
-  Send, Users, Menu, X, Layers, ChevronRight, ChevronLeft,
-  Wallet, CreditCard, BadgeCheck,
-} from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Link, useLocation } from "wouter";
+import { AnimatePresence, motion, useInView } from "framer-motion";
+import { ArrowRight, CheckCircle2, Menu, X } from "lucide-react";
+import { useGetCurrentUser, useGetUserBalance } from "@workspace/api-client-react";
 import { cn } from "@/lib/utils";
-import { fadeUp, slideRight, scaleIn, staggerContainer, fadeIn } from "@/lib/motion";
+import { WITHDRAWAL_CHAINS } from "@/lib/wallet";
+import { fmtUsd } from "@/components/sweep/ui";
+import { LandingSend, type LandingSender } from "@/components/landing/landing-send";
 
-import { API_BASE } from "@/lib/api";
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-// ── Form schema ───────────────────────────────────────────────────────────────
+const scrollToId = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
 
-const sendSchema = z.object({
-  recipientEmail: z.string().email("Please enter a valid email address"),
-  amount: z
-    .string()
-    .min(1, "Amount is required")
-    .refine((v) => !isNaN(Number(v)) && Number(v) > 0, "Must be a positive number")
-    .refine((v) => Number(v) >= 0.01, "Minimum send is $0.01 USDC"),
-});
-type SendFormValues = z.infer<typeof sendSchema>;
+// ── Small building blocks ─────────────────────────────────────────────────────
 
-// ── World map ─────────────────────────────────────────────────────────────────
-
-const CITIES = [
-  { name: "New York",   x: 230, y: 175 },
-  { name: "London",     x: 460, y: 145 },
-  { name: "Lagos",      x: 472, y: 265 },
-  { name: "Dubai",      x: 592, y: 210 },
-  { name: "Singapore",  x: 720, y: 280 },
-  { name: "Tokyo",      x: 790, y: 175 },
-  { name: "São Paulo",  x: 278, y: 330 },
-  { name: "Nairobi",    x: 548, y: 288 },
-  { name: "Mumbai",     x: 638, y: 232 },
-  { name: "Sydney",     x: 810, y: 370 },
-  { name: "Toronto",    x: 215, y: 155 },
-  { name: "Frankfurt",  x: 490, y: 143 },
-];
-const ARCS: [number, number][] = [
-  [0, 1], [1, 3], [3, 4], [4, 5], [0, 6], [1, 2],
-  [2, 7], [7, 3], [8, 4], [1, 11], [10, 0], [4, 9],
-];
-function cubicBezierArc(x1: number, y1: number, x2: number, y2: number) {
-  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-  const dx = x2 - x1, dy = y2 - y1;
-  const len = Math.sqrt(dx * dx + dy * dy);
-  const lift = Math.min(len * 0.38, 120);
-  const cpx = mx - (dy / len) * lift;
-  const cpy = my - (dx / len) * lift * 0.4 - lift * 0.5;
-  return `M ${x1} ${y1} Q ${cpx} ${cpy} ${x2} ${y2}`;
-}
-
-function WorldMapBackground() {
+/** Fades content up the first time it scrolls into view. */
+function Reveal({ children, className, delay = 0, id }: { children: ReactNode; className?: string; delay?: number; id?: string }) {
   return (
-    <div className="absolute inset-0 -z-10 overflow-hidden">
-      <div className="absolute inset-0 bg-gradient-to-br from-slate-50 via-blue-50/60 to-indigo-50/80" />
-      <img
-        src={`${BASE}/images/world-map.png`}
-        alt=""
-        aria-hidden="true"
-        className="absolute inset-0 w-full h-full object-cover opacity-[0.18] select-none pointer-events-none"
-        style={{ filter: "saturate(0.4) contrast(0.9)" }}
-      />
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_40%,rgba(99,102,241,0.07)_0%,transparent_70%)]" />
-      <svg viewBox="0 0 1000 500" className="absolute inset-0 w-full h-full" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-        <defs>
-          <linearGradient id="arcGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#6366f1" stopOpacity="0" />
-            <stop offset="50%" stopColor="#6366f1" stopOpacity="0.7" />
-            <stop offset="100%" stopColor="#06b6d4" stopOpacity="0" />
-          </linearGradient>
-          <filter id="dotGlow" x="-100%" y="-100%" width="300%" height="300%">
-            <feGaussianBlur stdDeviation="3" result="blur" />
-            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-          </filter>
-          <clipPath id="mapClip"><rect x="0" y="0" width="1000" height="500" /></clipPath>
-        </defs>
-        <pattern id="dots" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
-          <circle cx="10" cy="10" r="0.8" fill="#94a3b8" />
-        </pattern>
-        <rect width="1000" height="500" fill="url(#dots)" opacity="0.2" />
-        <g clipPath="url(#mapClip)">
-          {ARCS.map(([i, j], idx) => {
-            const a = CITIES[i], b = CITIES[j];
-            const d = cubicBezierArc(a.x, a.y, b.x, b.y);
-            return (
-              <g key={idx}>
-                <path d={d} fill="none" stroke="#6366f1" strokeWidth="0.8" opacity="0.18" />
-                <motion.path
-                  d={d} fill="none" stroke="url(#arcGrad)" strokeWidth="1.6"
-                  strokeDasharray="12 200"
-                  initial={{ strokeDashoffset: 220 }}
-                  animate={{ strokeDashoffset: -220 }}
-                  transition={{ duration: 2.8 + (idx % 4) * 0.5, delay: idx * 0.45, repeat: Infinity, ease: "linear", repeatDelay: 0.8 }}
-                />
-              </g>
-            );
-          })}
-        </g>
-        {CITIES.map((city, idx) => (
-          <g key={city.name} filter="url(#dotGlow)">
-            <motion.circle cx={city.x} cy={city.y} r={6} fill="none" stroke="#6366f1" strokeWidth="1"
-              initial={{ opacity: 0.6, scale: 1 }} animate={{ opacity: 0, scale: 2.8 }}
-              transition={{ duration: 2.2, delay: idx * 0.18, repeat: Infinity, ease: "easeOut" }}
-              style={{ transformOrigin: `${city.x}px ${city.y}px` }}
-            />
-            <circle cx={city.x} cy={city.y} r={3} fill="#6366f1" opacity="0.85" />
-            <circle cx={city.x} cy={city.y} r={1.5} fill="white" opacity="0.9" />
-          </g>
-        ))}
-      </svg>
-      <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-slate-50 to-transparent" />
-      <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-slate-50/90 to-transparent" />
-      <div className="absolute top-[-80px] left-[8%]  w-[420px] h-[420px] rounded-full bg-indigo-400/10 blur-[90px] pointer-events-none" />
-      <div className="absolute top-[15%]  right-[4%]  w-[340px] h-[340px] rounded-full bg-cyan-400/10   blur-[80px] pointer-events-none" />
-      <div className="absolute bottom-[8%] left-[32%] w-[300px] h-[300px] rounded-full bg-violet-400/8  blur-[70px] pointer-events-none" />
-    </div>
+    <motion.div
+      id={id}
+      initial={{ opacity: 0, y: 18 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: "-60px 0px" }}
+      transition={{ duration: 0.5, delay, ease: [0.25, 0.46, 0.45, 0.94] }}
+      className={className}
+    >
+      {children}
+    </motion.div>
   );
 }
 
-// ── Animated counter ──────────────────────────────────────────────────────────
+function Kicker({ children, className }: { children: ReactNode; className?: string }) {
+  return <span className={cn("text-xs font-bold tracking-[0.06em] text-(--sw-blue)", className)}>{children}</span>;
+}
 
-function AnimatedCounter({
-  target, prefix = "", suffix = "", decimals = 0,
-}: { target: number; prefix?: string; suffix?: string; decimals?: number }) {
+function AnimatedCounter({ target, prefix = "", suffix = "", decimals = 0 }: {
+  target: number; prefix?: string; suffix?: string; decimals?: number;
+}) {
   const ref = useRef<HTMLSpanElement>(null);
   const isInView = useInView(ref, { once: true });
   const [count, setCount] = useState(0);
 
   useEffect(() => {
     if (!isInView) return;
-    const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (prefersReduced) { setCount(target); return; }
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { setCount(target); return; }
     const steps = 50;
-    const stepMs = 1800 / steps;
     let step = 0;
     const timer = setInterval(() => {
       step++;
-      const eased = 1 - Math.pow(1 - step / steps, 3);
-      setCount(eased * target);
+      setCount((1 - Math.pow(1 - step / steps, 3)) * target);
       if (step >= steps) clearInterval(timer);
-    }, stepMs);
+    }, 1800 / steps);
     return () => clearInterval(timer);
   }, [isInView, target]);
 
@@ -160,222 +63,129 @@ function AnimatedCounter({
   );
 }
 
-// ── Landing nav ───────────────────────────────────────────────────────────────
+// ── Nav ───────────────────────────────────────────────────────────────────────
+// Transparent over the navy hero; turns frosted white with ink text once the page scrolls.
 
-function LandingNav() {
+const NAV_LINKS = [
+  { label: "Product",   id: "product"   },
+  { label: "Use cases", id: "use-cases" },
+  { label: "Networks",  id: "networks"  },
+  { label: "Security",  id: "security"  },
+  { label: "FAQ",       id: "faq"       },
+];
+
+function LandingNav({ isLoggedIn }: { isLoggedIn: boolean }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [scrolled, setScrolled]  = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
-    setIsLoggedIn(!!localStorage.getItem("token"));
     const onScroll = () => setScrolled(window.scrollY > 24);
+    onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  const scrollTo = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
-    setMenuOpen(false);
-  };
-
-  const navLinks = [
-    { label: "Features",     id: "features"     },
-    { label: "How It Works", id: "how-it-works" },
-    { label: "Use Cases",    id: "use-cases"    },
-  ];
+  const go = (id: string) => { scrollToId(id); setMenuOpen(false); };
+  const light = scrolled; // light bar, dark text
 
   return (
     <header className={cn(
-      "fixed top-0 left-0 right-0 z-50 transition-all duration-300",
-      scrolled
-        ? "bg-white/95 backdrop-blur-md border-b border-border/50 shadow-sm"
-        : "bg-primary shadow-lg shadow-primary/20",
+      "fixed top-0 inset-x-0 z-50 transition-[background-color,box-shadow,border-color] duration-300 border-b",
+      light
+        ? "bg-white/90 backdrop-blur-md border-(--sw-line) shadow-[0_8px_30px_-18px_rgba(11,18,32,.35)]"
+        : menuOpen ? "bg-(--sw-navy) border-white/10" : "bg-transparent border-transparent",
     )}>
-      {/* Skip link */}
-      <a
-        href="#main-content"
-        className="sr-only focus-visible:not-sr-only focus-visible:absolute focus-visible:top-3 focus-visible:left-4 focus-visible:z-50 focus-visible:px-4 focus-visible:py-2 focus-visible:bg-white focus-visible:text-primary focus-visible:rounded-lg focus-visible:text-sm focus-visible:font-medium"
-      >
+      <a href="#main-content"
+        className="sr-only focus-visible:not-sr-only focus-visible:absolute focus-visible:top-3 focus-visible:left-4 focus-visible:z-50 focus-visible:px-4 focus-visible:py-2 focus-visible:bg-white focus-visible:text-(--sw-blue) focus-visible:rounded-lg focus-visible:text-sm focus-visible:font-bold">
         Skip to main content
       </a>
 
-      <nav aria-label="Main navigation" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-14 sm:h-16 lg:h-20">
-
-          <Link href={`${BASE}/landing`} className="flex items-center shrink-0" aria-label="Sweep home">
-            <img
-              src="/Sweep_logo_exact.svg"
-              alt="Sweep"
-              className={cn(
-                "h-11 sm:h-12 lg:h-16 w-auto object-contain transition-all duration-300",
-                scrolled ? "" : "brightness-0 invert",
-              )}
-            />
+      <nav aria-label="Main navigation" className="max-w-[1240px] mx-auto px-5 sm:px-7">
+        <div className="flex items-center gap-8 h-[72px]">
+          <Link href={`${BASE}/landing`} className="flex items-center gap-2.5 shrink-0" aria-label="Sweep home">
+            <img src={light ? "/sweep-mark-blue.svg" : "/sweep-mark-white.svg"} alt="" className="w-[22px]" />
+            <span className={cn("font-extrabold text-xl tracking-[-0.02em] transition-colors", light ? "text-(--sw-ink)" : "text-white")}>Sweep</span>
           </Link>
 
-          {/* Desktop nav */}
-          <div className="hidden md:flex items-center gap-1" role="list">
-            {navLinks.map((link) => (
-              <button
-                key={link.id}
-                role="listitem"
-                onClick={() => scrollTo(link.id)}
-                className={cn(
-                  "px-4 py-2 rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
-                  scrolled
-                    ? "text-muted-foreground hover:text-foreground hover:bg-secondary/60 focus-visible:ring-primary/40"
-                    : "text-white/80 hover:text-white hover:bg-white/15 focus-visible:ring-white/40",
-                )}
-              >
-                {link.label}
+          <div className="hidden lg:flex items-center gap-1 flex-1">
+            {NAV_LINKS.map((l) => (
+              <button key={l.id} type="button" onClick={() => go(l.id)}
+                className={cn("px-3 py-2 rounded-lg text-sm font-semibold transition-colors",
+                  light ? "text-(--sw-label) hover:text-(--sw-ink) hover:bg-(--sw-bg)" : "text-(--sw-on-navy) hover:text-white")}>
+                {l.label}
               </button>
             ))}
-            <Link
-              href={`${BASE}/docs`}
-              className={cn(
-                "flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors",
-                scrolled
-                  ? "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
-                  : "text-white/80 hover:text-white hover:bg-white/15",
-              )}
-            >
-              Documentation
+            <Link href={`${BASE}/docs`}
+              className={cn("px-3 py-2 rounded-lg text-sm font-semibold transition-colors",
+                light ? "text-(--sw-label) hover:text-(--sw-ink) hover:bg-(--sw-bg)" : "text-(--sw-on-navy) hover:text-white")}>
+              Docs
             </Link>
           </div>
 
-          {/* Desktop CTA */}
-          <div className="hidden md:flex items-center gap-3">
+          <div className="hidden lg:flex items-center gap-2.5">
             {isLoggedIn ? (
-              <Link
-                href={`${BASE}/dashboard`}
-                className={cn(
-                  "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2",
-                  scrolled
-                    ? "bg-primary text-white hover:bg-primary/90 focus-visible:ring-primary/40"
-                    : "bg-white text-primary hover:bg-white/90 focus-visible:ring-white/40",
-                )}
-              >
+              <Link href={`${BASE}/dashboard`}
+                className={cn("h-[42px] px-[18px] rounded-xl flex items-center gap-1.5 text-sm font-bold transition-colors",
+                  light ? "bg-(--sw-blue) text-white hover:bg-(--sw-blue-hover)" : "bg-white text-(--sw-navy) hover:bg-[#e0e5ff]")}>
                 Dashboard <ArrowRight className="w-4 h-4" aria-hidden />
               </Link>
             ) : (
               <>
-                <Link
-                  href={`${BASE}/login`}
-                  className={cn(
-                    "px-4 py-2 rounded-xl text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2",
-                    scrolled
-                      ? "text-foreground hover:bg-secondary/60 focus-visible:ring-primary/40"
-                      : "text-white/90 hover:text-white hover:bg-white/15 focus-visible:ring-white/40",
-                  )}
-                >
+                <Link href={`${BASE}/login`}
+                  className={cn("h-[42px] px-[18px] rounded-xl flex items-center text-sm font-bold transition-colors",
+                    light ? "text-(--sw-ink) hover:bg-(--sw-bg)" : "text-white hover:bg-white/10")}>
                   Log in
                 </Link>
-                <Link
-                  href={`${BASE}/register`}
-                  className={cn(
-                    "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold hover:shadow-md hover:-translate-y-0.5 transition-all focus-visible:outline-none focus-visible:ring-2",
-                    scrolled
-                      ? "bg-foreground text-background hover:bg-foreground/90 focus-visible:ring-foreground/40"
-                      : "bg-white text-primary hover:bg-white/90 focus-visible:ring-white/40",
-                  )}
-                >
-                  Get started <ChevronRight className="w-4 h-4" aria-hidden />
+                <Link href={`${BASE}/register`}
+                  className={cn("h-[42px] px-[18px] rounded-xl flex items-center text-sm font-bold transition-colors",
+                    light ? "bg-(--sw-blue) text-white hover:bg-(--sw-blue-hover)" : "bg-white text-(--sw-navy) hover:bg-[#e0e5ff]")}>
+                  Open account
                 </Link>
               </>
             )}
           </div>
 
-          {/* Mobile menu toggle */}
-          <button
-            type="button"
-            aria-label={menuOpen ? "Close navigation menu" : "Open navigation menu"}
-            aria-expanded={menuOpen}
-            aria-controls="mobile-nav"
-            onClick={() => setMenuOpen((v) => !v)}
-            className={cn(
-              "md:hidden p-2 rounded-xl transition-colors focus-visible:outline-none focus-visible:ring-2",
-              scrolled
-                ? "text-muted-foreground hover:text-foreground hover:bg-secondary/60 focus-visible:ring-primary/40"
-                : "text-white hover:bg-white/15 focus-visible:ring-white/40",
-            )}
-          >
+          <button type="button" onClick={() => setMenuOpen((v) => !v)}
+            aria-label={menuOpen ? "Close navigation menu" : "Open navigation menu"} aria-expanded={menuOpen} aria-controls="mobile-nav"
+            className={cn("lg:hidden ml-auto p-2 rounded-xl transition-colors",
+              light ? "text-(--sw-ink) hover:bg-(--sw-bg)" : "text-white hover:bg-white/10")}>
             {menuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
         </div>
 
-        {/* Mobile menu */}
         <AnimatePresence>
           {menuOpen && (
-            <motion.div
-              id="mobile-nav"
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
+            <motion.div id="mobile-nav"
+              initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
               transition={{ duration: 0.2, ease: "easeOut" }}
-              className={cn(
-                "md:hidden overflow-hidden border-t",
-                scrolled ? "border-border/50" : "border-white/20",
-              )}
-            >
-              <div className="py-3 space-y-1">
-                {navLinks.map((link) => (
-                  <button
-                    key={link.id}
-                    onClick={() => scrollTo(link.id)}
-                    className={cn(
-                      "w-full text-left px-4 py-2.5 rounded-xl text-sm font-medium transition-colors",
-                      scrolled
-                        ? "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
-                        : "text-white/80 hover:text-white hover:bg-white/15",
-                    )}
-                  >
-                    {link.label}
+              className={cn("lg:hidden overflow-hidden border-t", light ? "border-(--sw-line)" : "border-white/10")}>
+              <div className="py-3 flex flex-col gap-1">
+                {NAV_LINKS.map((l) => (
+                  <button key={l.id} type="button" onClick={() => go(l.id)}
+                    className={cn("text-left px-3 py-2.5 rounded-xl text-sm font-semibold",
+                      light ? "text-(--sw-label) hover:bg-(--sw-bg)" : "text-(--sw-on-navy) hover:bg-white/10 hover:text-white")}>
+                    {l.label}
                   </button>
                 ))}
-                <Link
-                  href={`${BASE}/docs`}
-                  className={cn(
-                    "block px-4 py-2.5 rounded-xl text-sm font-medium transition-colors",
-                    scrolled
-                      ? "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
-                      : "text-white/80 hover:text-white hover:bg-white/15",
-                  )}
-                >
-                  Documentation
+                <Link href={`${BASE}/docs`}
+                  className={cn("px-3 py-2.5 rounded-xl text-sm font-semibold",
+                    light ? "text-(--sw-label) hover:bg-(--sw-bg)" : "text-(--sw-on-navy) hover:bg-white/10 hover:text-white")}>
+                  Docs
                 </Link>
-                <div className="pt-2 flex flex-col gap-2 px-1">
+                <div className="pt-2 grid grid-cols-2 gap-2">
                   {isLoggedIn ? (
-                    <Link
-                      href={`${BASE}/dashboard`}
-                      className={cn(
-                        "text-center px-4 py-2.5 rounded-xl text-sm font-semibold",
-                        scrolled ? "bg-primary text-white" : "bg-white text-primary",
-                      )}
-                    >
+                    <Link href={`${BASE}/dashboard`} className="col-span-2 h-11 rounded-xl grid place-items-center text-sm font-bold bg-(--sw-blue) text-white">
                       Dashboard
                     </Link>
                   ) : (
                     <>
-                      <Link
-                        href={`${BASE}/login`}
-                        className={cn(
-                          "text-center px-4 py-2.5 rounded-xl text-sm font-medium border transition-colors",
-                          scrolled
-                            ? "border-border hover:bg-secondary/60"
-                            : "border-white/30 text-white hover:bg-white/15",
-                        )}
-                      >
+                      <Link href={`${BASE}/login`}
+                        className={cn("h-11 rounded-xl grid place-items-center text-sm font-bold border",
+                          light ? "border-(--sw-line) text-(--sw-ink)" : "border-white/25 text-white")}>
                         Log in
                       </Link>
-                      <Link
-                        href={`${BASE}/register`}
-                        className={cn(
-                          "text-center px-4 py-2.5 rounded-xl text-sm font-semibold",
-                          scrolled ? "bg-foreground text-background" : "bg-white text-primary",
-                        )}
-                      >
-                        Get started
+                      <Link href={`${BASE}/register`} className="h-11 rounded-xl grid place-items-center text-sm font-bold bg-(--sw-blue) text-white">
+                        Open account
                       </Link>
                     </>
                   )}
@@ -389,857 +199,478 @@ function LandingNav() {
   );
 }
 
-// ── Hero section ──────────────────────────────────────────────────────────────
+// ── Hero ──────────────────────────────────────────────────────────────────────
 
-function HeroSection({
-  isLoggedIn, hasTransactionPassword, txnPwd, setTxnPwd,
-  isSending, isLooking, formError, didSucceed,
-  successEmail, successAmount, successName,
-  preview, pendingData, setPreview, setFormError,
-  handleSubmit, onReview, onConfirm, register, errors, handleSendAnother,
-}: any) {
+const STATS = [
+  { prefix: "$", target: 23.8, suffix: "K+", decimals: 1, label: "Volume transacted" },
+  { prefix: "",  target: 150,  suffix: "+",  decimals: 0, label: "Signed-up users"   },
+  { prefix: "",  target: 99.9, suffix: "%",  decimals: 1, label: "Uptime"            },
+  { prefix: "<", target: 1,    suffix: "s",  decimals: 0, label: "Settlement time"   },
+];
+
+const PHONE_TXS = [
+  { mono: "T",   av: "bg-(--sw-blue) text-white",         fs: "text-[11px]", title: "Tunde Bello",  sub: "Email · Today",     amount: "−$25.00",  in: false },
+  { mono: "IN",  av: "bg-[#ecfdf3] text-[#067647]",       fs: "text-[8px]",  title: "Deposit",      sub: "Base · Yesterday",  amount: "+$200.00", in: true  },
+  { mono: "ARB", av: "bg-(--sw-tint) text-(--sw-blue)",   fs: "text-[7px]",  title: "0x91a4…7c2e",  sub: "Arbitrum · Sep 18", amount: "−$40.00",  in: false },
+  { mono: "K",   av: "bg-[#dfe4ff] text-(--sw-blue)",     fs: "text-[11px]", title: "Kemi Adeyemi", sub: "Email · Sep 15",    amount: "+$60.00",  in: true  },
+];
+
+function Hero({ isLoggedIn }: { isLoggedIn: boolean }) {
+  const [, setLocation] = useLocation();
+  const [email, setEmail] = useState("");
+
+  const getStarted = () => {
+    const q = email.trim() ? `?email=${encodeURIComponent(email.trim())}` : "";
+    setLocation(`${BASE}/register${q}`);
+  };
+
   return (
-    <section
-      aria-label="Hero"
-      className="relative overflow-hidden min-h-[calc(100vh-3.5rem)] sm:min-h-[calc(100vh-4rem)] lg:min-h-screen flex items-center pt-14 sm:pt-16 lg:pt-20"
-    >
-      <WorldMapBackground />
+    <section aria-label="Hero" className="relative bg-(--sw-navy) text-white overflow-hidden">
+      <div aria-hidden className="absolute inset-0 pointer-events-none [background-image:linear-gradient(rgba(255,255,255,.045)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.045)_1px,transparent_1px)] [background-size:56px_56px]" />
+      <div aria-hidden className="absolute left-1/2 -top-60 w-[1100px] h-[700px] -translate-x-[30%] pointer-events-none bg-[radial-gradient(closest-side,rgba(17,40,245,.55),transparent)]" />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24 w-full">
-        <div className="grid lg:grid-cols-2 gap-8 lg:gap-20 items-center">
+      <div className="relative max-w-[1240px] mx-auto px-5 sm:px-7 pt-[128px] grid lg:grid-cols-2 gap-10 items-end">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}
+          className="flex flex-col gap-6 pb-16 lg:pb-24">
+          <button type="button" onClick={() => scrollToId("security")}
+            className="self-start flex items-center gap-2.5 text-[13px] font-semibold text-(--sw-on-navy) pl-1.5 pr-3.5 py-1.5 rounded-full border border-white/15 bg-white/[.04] hover:bg-white/[.08]">
+            <span className="text-[11px] font-extrabold tracking-[0.04em] text-(--sw-navy) bg-(--sw-sky) px-[9px] py-1 rounded-full">TESTNET</span>
+            USDC by Circle · gas sponsored
+          </button>
+          <h1 className="font-extrabold text-[clamp(44px,6.4vw,88px)] leading-[.98] tracking-[-0.05em] text-balance">
+            Money that moves like email.
+          </h1>
+          <p className="text-lg sm:text-[19px] leading-relaxed text-(--sw-on-navy) max-w-[500px] text-pretty">
+            Send dollars to anyone's email, withdraw USDC to eight networks, and run recurring payments — from one balance, with zero gas. No wallet required.
+          </p>
 
-          {/* Left — copy */}
-          <motion.div variants={staggerContainer(0.12, 0.1)} initial="hidden" animate="show">
-            <motion.div variants={fadeUp}>
-              <motion.div
-                whileHover={{ scale: 1.04 }}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 text-primary font-medium text-sm mb-6 border border-primary/20 cursor-default"
-              >
-                <motion.span
-                  animate={{ rotate: [0, 15, -15, 0] }}
-                  transition={{ repeat: Infinity, duration: 2.5, ease: "easeInOut" }}
-                  aria-hidden
-                >
-                  <Zap className="w-4 h-4" />
-                </motion.span>
-                <span>Instant Web3 + Web2 Payments</span>
-              </motion.div>
-            </motion.div>
-
-            <motion.div variants={fadeUp}>
-              <h1 className="text-3xl sm:text-4xl lg:text-6xl xl:text-7xl font-bold text-foreground leading-[1.06] mb-6 text-balance">
-                Send USD/USDC{" "}
-                <span className="block">
-                  <span className="text-gradient-animated">Globally in Seconds</span>
-                </span>
-              </h1>
-            </motion.div>
-
-            <motion.p variants={fadeUp} className="text-lg lg:text-xl text-muted-foreground mb-8 leading-relaxed max-w-lg text-balance">
-              No wallet required. Send USD by email — funds are backed by the stablecoin reserve in the Sweep treasury.
-            </motion.p>
-
-            {/* Trust badges */}
-            <motion.div variants={staggerContainer(0.08)} className="flex flex-wrap gap-3 mb-10">
-              {[
-                { icon: <ShieldCheck className="w-4 h-4" aria-hidden />, label: "Secured Database" },
-                { icon: <BadgeCheck className="w-4 h-4" aria-hidden />,   label: "Circle-Powered" },
-                { icon: <Globe className="w-4 h-4" aria-hidden />,        label: "Worldwide Transfers" },
-              ].map((b) => (
-                <motion.div
-                  key={b.label}
-                  variants={fadeUp}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/80 border border-border/60 shadow-sm text-sm text-muted-foreground font-medium"
-                >
-                  <span className="text-primary">{b.icon}</span>
-                  {b.label}
-                </motion.div>
-              ))}
-            </motion.div>
-
-            {/* Feature cards */}
-            <motion.div variants={staggerContainer(0.1)} className="grid sm:grid-cols-2 gap-4">
-              {[
-                {
-                  icon: <ShieldCheck className="w-6 h-6 text-primary" />, bg: "bg-blue-100",
-                  title: "Stablecoin Backing",
-                  desc: "Funds are backed by Stablecoins in the platform Treasury.",
-                },
-                {
-                  icon: <Mail className="w-6 h-6 text-teal-600" />, bg: "bg-teal-100",
-                  title: "No Onboarding",
-                  desc: "Recipients only need their email address to claim funds — no wallet setup.",
-                },
-              ].map((f) => (
-                <motion.div
-                  key={f.title}
-                  variants={fadeUp}
-                  whileHover={{ y: -4, transition: { type: "spring", stiffness: 400, damping: 20 } }}
-                  className="flex gap-3 p-4 rounded-2xl bg-white/70 backdrop-blur border border-white/60 shadow-sm"
-                >
-                  <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center shrink-0", f.bg)}>
-                    {f.icon}
-                  </div>
-                  <div className="min-w-0">
-                    <h3 className="font-semibold text-foreground">{f.title}</h3>
-                    <p className="text-sm text-muted-foreground mt-0.5">{f.desc}</p>
-                  </div>
-                </motion.div>
-              ))}
-            </motion.div>
-          </motion.div>
-
-          {/* Right — send card */}
-          <motion.div variants={slideRight} initial="hidden" animate="show" transition={{ delay: 0.25 }}>
-            <div className="relative">
-              <div className="absolute inset-0 -m-8 pointer-events-none" aria-hidden>
-                <div className="absolute inset-0 rounded-full border border-primary/10 spin-slow" />
-                <div className="absolute inset-4 rounded-full border border-accent/10 spin-slow-reverse" />
-              </div>
-
-              <motion.div
-                animate={{ y: [0, -8, 0] }}
-                transition={{ repeat: Infinity, duration: 5, ease: "easeInOut" }}
-                className="glass-panel rounded-3xl p-8 relative overflow-hidden"
-              >
-                <div className="absolute top-0 right-0 w-64 h-64 bg-primary/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none" aria-hidden />
-                <div className="absolute bottom-0 left-0 w-48 h-48 bg-accent/5 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2 pointer-events-none" aria-hidden />
-
-                <AnimatePresence mode="wait">
-                  {didSucceed ? (
-                    <motion.div key="success" variants={scaleIn} initial="hidden" animate="show" exit="hidden" className="text-center py-6">
-                      <motion.div
-                        initial={{ scale: 0, rotate: -180 }} animate={{ scale: 1, rotate: 0 }}
-                        transition={{ type: "spring", stiffness: 260, damping: 20, delay: 0.1 }}
-                        className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-5 shadow-lg shadow-green-500/20"
-                        aria-hidden
-                      >
-                        <CheckCircle2 className="w-10 h-10" />
-                      </motion.div>
-                      <motion.div variants={staggerContainer(0.08)} initial="hidden" animate="show">
-                        <motion.h2 variants={fadeUp} className="text-2xl font-bold mb-1" aria-live="polite">Funds Sent!</motion.h2>
-                        <motion.p variants={fadeUp} className="text-muted-foreground text-sm mb-3">
-                          <span className="font-medium text-foreground">${successAmount} USD</span>{" "}
-                          sent to{" "}
-                          <span className="font-medium text-foreground">{successName || successEmail}</span>
-                          {successName && <span className="text-muted-foreground"> ({successEmail})</span>}.
-                          Their balance has been credited instantly.
-                        </motion.p>
-                        <motion.div variants={fadeUp} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-violet-50 text-violet-700 text-xs font-medium border border-violet-200 mb-5">
-                          <ShieldCheck className="w-3.5 h-3.5" aria-hidden />
-                          Sent from your platform balance — no wallet needed
-                        </motion.div>
-                        <br />
-                        <motion.button
-                          variants={fadeUp} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
-                          onClick={handleSendAnother}
-                          className="px-6 py-3 bg-secondary text-foreground rounded-xl font-medium hover:bg-secondary/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                        >
-                          Send Another Payment
-                        </motion.button>
-                      </motion.div>
-                    </motion.div>
-                  ) : preview ? (
-                    /* ── Confirmation screen ── */
-                    <motion.div key="confirm" variants={fadeIn} initial="hidden" animate="show" exit="hidden">
-                      <button
-                        type="button"
-                        onClick={() => { setPreview(null); setFormError(null); }}
-                        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4"
-                      >
-                        <ChevronLeft className="w-4 h-4" aria-hidden /> Back
-                      </button>
-                      <h2 className="text-2xl font-bold font-display mb-1">Confirm Transfer</h2>
-                      <p className="text-sm text-muted-foreground mb-5">Please review the details before sending</p>
-
-                      {/* Recipient card */}
-                      <div className="rounded-2xl border border-border bg-white/60 overflow-hidden mb-4">
-                        <div className="px-5 py-4 border-b border-border/60">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Sending to</p>
-                          <div className="flex items-center gap-3">
-                            <div className="w-11 h-11 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-lg shrink-0">
-                              {(preview.name ?? preview.email).charAt(0).toUpperCase()}
-                            </div>
-                            <div className="min-w-0">
-                              {preview.name && <p className="font-semibold text-foreground truncate">{preview.name}</p>}
-                              <p className="text-sm text-muted-foreground truncate">{preview.email}</p>
-                              {preview.registered ? (
-                                <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5 mt-1">
-                                  <CheckCircle2 className="w-3 h-3" aria-hidden /> Verified Sweep user
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 mt-1">
-                                  <AlertCircle className="w-3 h-3" aria-hidden /> Not yet on Sweep — funds held until they join
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="px-5 py-4 flex items-center justify-between">
-                          <span className="text-sm text-muted-foreground">Amount</span>
-                          <span className="text-2xl font-bold text-foreground tabular-nums">
-                            ${parseFloat(pendingData.amount).toFixed(2)}{" "}
-                            <span className="text-base font-medium text-muted-foreground">USD</span>
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Transaction password on confirm screen */}
-                      {isLoggedIn && hasTransactionPassword && (
-                        <div className="mb-4">
-                          <label htmlFor="hero-tx-password-confirm" className="flex items-center gap-1.5 text-sm font-medium text-foreground mb-2">
-                            <Lock className="w-3.5 h-3.5 opacity-60" aria-hidden />
-                            Transaction Password
-                          </label>
-                          <input
-                            id="hero-tx-password-confirm"
-                            type="password"
-                            autoComplete="current-password"
-                            value={txnPwd}
-                            onChange={(e) => setTxnPwd(e.target.value)}
-                            disabled={isSending}
-                            placeholder="Enter your transaction password"
-                            className="w-full px-4 py-3 rounded-xl bg-white border-2 border-border focus:outline-none focus-visible:border-primary focus-visible:ring-4 focus-visible:ring-primary/10 transition-all disabled:opacity-60 text-sm"
-                          />
-                        </div>
-                      )}
-
-                      <AnimatePresence>
-                        {formError && (
-                          <motion.div
-                            initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
-                            className="flex items-start gap-3 px-4 py-3 mb-4 rounded-xl bg-destructive/10 border border-destructive/20 text-sm text-destructive overflow-hidden"
-                            role="alert"
-                          >
-                            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" aria-hidden />
-                            <span>{formError}</span>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-
-                      <motion.button
-                        type="button"
-                        onClick={onConfirm}
-                        disabled={isSending}
-                        whileHover={!isSending ? { scale: 1.02, y: -1 } : {}}
-                        whileTap={!isSending ? { scale: 0.98 } : {}}
-                        className="w-full relative group flex items-center justify-center gap-2 px-6 py-4 rounded-xl font-bold text-white overflow-hidden bg-primary disabled:opacity-70 disabled:cursor-not-allowed transition-shadow hover:shadow-xl hover:shadow-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
-                      >
-                        <div className="absolute inset-0 bg-gradient-to-r from-primary to-accent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" aria-hidden />
-                        <span className="relative z-10 flex items-center gap-2">
-                          {isSending
-                            ? <><Loader2 className="w-5 h-5 animate-spin" aria-hidden />Sending…</>
-                            : <><ShieldCheck className="w-5 h-5" aria-hidden />Confirm &amp; Send <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" aria-hidden /></>}
-                        </span>
-                      </motion.button>
-                    </motion.div>
-
-                  ) : (
-                    <motion.div key="form" variants={fadeIn} initial="hidden" animate="show" exit="hidden">
-                      <div className="flex items-center justify-between mb-5">
-                        <h2 className="text-2xl font-bold font-display">Send Payment</h2>
-                        {isLoggedIn ? (
-                          <motion.div
-                            initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-50 text-violet-700 rounded-full text-xs font-semibold border border-violet-200"
-                          >
-                            <ShieldCheck className="w-3.5 h-3.5" aria-hidden />
-                            No wallet needed
-                          </motion.div>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <motion.a href={`${BASE}/login`} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
-                              className="flex items-center gap-1.5 px-3 py-1.5 bg-secondary text-foreground rounded-xl text-xs font-medium hover:bg-secondary/80 transition-colors">
-                              <LogIn className="w-3.5 h-3.5" aria-hidden /> Sign In
-                            </motion.a>
-                            <motion.a href={`${BASE}/register`} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
-                              className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-white rounded-xl text-xs font-medium hover:bg-primary/90 transition-colors">
-                              <UserPlus className="w-3.5 h-3.5" aria-hidden /> Create Account
-                            </motion.a>
-                          </div>
-                        )}
-                      </div>
-
-                      {!isLoggedIn && (
-                        <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
-                          className="flex items-start gap-3 px-4 py-3 mb-5 rounded-xl bg-primary/5 border border-primary/10 text-sm text-muted-foreground" role="note">
-                          <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0 text-primary" aria-hidden />
-                          <span>Sign in or create a free account to send USD without a crypto wallet.</span>
-                        </motion.div>
-                      )}
-
-                      <AnimatePresence>
-                        {formError && (
-                          <motion.div
-                            initial={{ opacity: 0, height: 0, y: -6 }} animate={{ opacity: 1, height: "auto", y: 0 }} exit={{ opacity: 0, height: 0 }}
-                            className="flex items-start gap-3 px-4 py-3 mb-5 rounded-xl bg-destructive/10 border border-destructive/20 text-sm text-destructive overflow-hidden"
-                            role="alert"
-                          >
-                            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" aria-hidden />
-                            <span>{formError}</span>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-
-                      <motion.form
-                        onSubmit={handleSubmit(onReview)}
-                        variants={staggerContainer(0.08, 0.05)} initial="hidden" animate="show"
-                        className="space-y-5"
-                        noValidate
-                      >
-                        <motion.div variants={fadeUp}>
-                          <label htmlFor="hero-recipient-email" className="block text-sm font-medium text-foreground mb-2">
-                            Recipient Email
-                          </label>
-                          <input
-                            id="hero-recipient-email"
-                            {...register("recipientEmail")}
-                            disabled={isLooking}
-                            type="email"
-                            name="recipientEmail"
-                            autoComplete="email"
-                            spellCheck={false}
-                            placeholder="satoshi@example.com"
-                            aria-invalid={!!errors.recipientEmail}
-                            aria-describedby={errors.recipientEmail ? "hero-email-error" : undefined}
-                            className={cn(
-                              "w-full px-4 py-3 rounded-xl bg-white border-2 border-border focus:outline-none focus-visible:border-primary focus-visible:ring-4 focus-visible:ring-primary/10 transition-all disabled:opacity-60",
-                              errors.recipientEmail && "border-destructive focus-visible:border-destructive focus-visible:ring-destructive/10",
-                            )}
-                          />
-                          <AnimatePresence>
-                            {errors.recipientEmail && (
-                              <motion.p id="hero-email-error" role="alert" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-1.5 text-sm text-destructive">
-                                {errors.recipientEmail.message}
-                              </motion.p>
-                            )}
-                          </AnimatePresence>
-                        </motion.div>
-
-                        <motion.div variants={fadeUp}>
-                          <label htmlFor="hero-amount" className="block text-sm font-medium text-foreground mb-2">
-                            Amount (USD)
-                          </label>
-                          <div className="relative">
-                            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none" aria-hidden>
-                              <span className="text-muted-foreground font-medium">$</span>
-                            </div>
-                            <input
-                              id="hero-amount"
-                              {...register("amount")}
-                              disabled={isLooking}
-                              type="number"
-                              name="amount"
-                              step="0.01"
-                              min="0.01"
-                              autoComplete="off"
-                              placeholder="100.00"
-                              aria-invalid={!!errors.amount}
-                              aria-describedby={errors.amount ? "hero-amount-error" : undefined}
-                              className={cn(
-                                "w-full pl-8 pr-16 py-3 rounded-xl bg-white border-2 border-border focus:outline-none focus-visible:border-primary focus-visible:ring-4 focus-visible:ring-primary/10 transition-all font-medium disabled:opacity-60",
-                                errors.amount && "border-destructive focus-visible:border-destructive focus-visible:ring-destructive/10",
-                              )}
-                            />
-                            <div className="absolute inset-y-0 right-0 pr-4 flex items-center pointer-events-none" aria-hidden>
-                              <span className="text-muted-foreground font-medium text-sm">USD</span>
-                            </div>
-                          </div>
-                          <AnimatePresence>
-                            {errors.amount && (
-                              <motion.p id="hero-amount-error" role="alert" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-1.5 text-sm text-destructive">
-                                {errors.amount.message}
-                              </motion.p>
-                            )}
-                          </AnimatePresence>
-                        </motion.div>
-
-                        <motion.div variants={fadeUp}>
-                          <motion.button
-                            type="submit"
-                            disabled={isLooking}
-                            whileHover={!isLooking ? { scale: 1.02, y: -1 } : {}}
-                            whileTap={!isLooking ? { scale: 0.98 } : {}}
-                            className="w-full relative group flex items-center justify-center gap-2 px-6 py-4 rounded-xl font-bold text-white overflow-hidden bg-primary disabled:opacity-70 disabled:cursor-not-allowed transition-shadow hover:shadow-xl hover:shadow-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
-                          >
-                            <div className="absolute inset-0 bg-gradient-to-r from-primary to-accent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" aria-hidden />
-                            <span className="relative z-10 flex items-center gap-2">
-                              {isLooking
-                                ? <><Loader2 className="w-5 h-5 animate-spin" aria-hidden />Looking up recipient…</>
-                                : isLoggedIn
-                                  ? <>Review Transfer <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" aria-hidden /></>
-                                  : <>Sign In to Send <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" aria-hidden /></>}
-                            </span>
-                          </motion.button>
-                        </motion.div>
-                      </motion.form>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </motion.div>
+          {isLoggedIn ? (
+            <div className="flex flex-wrap gap-2.5">
+              <Link href={`${BASE}/dashboard`}
+                className="h-14 px-6 rounded-2xl bg-white text-(--sw-navy) font-bold flex items-center gap-2 hover:bg-[#e0e5ff]">
+                Go to dashboard <ArrowRight className="w-4 h-4" aria-hidden />
+              </Link>
+              <button type="button" onClick={() => scrollToId("send")}
+                className="h-14 px-6 rounded-2xl border border-white/30 font-bold hover:bg-white/10">
+                Send money
+              </button>
             </div>
-          </motion.div>
-        </div>
-      </div>
+          ) : (
+            <form onSubmit={(e) => { e.preventDefault(); getStarted(); }} className="flex items-center bg-white rounded-2xl p-1.5 gap-1.5 w-full max-w-[440px]">
+              <label htmlFor="hero-email" className="sr-only">Your email</label>
+              <input id="hero-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Enter your email"
+                autoComplete="email" className="flex-1 min-w-0 px-3 h-[46px] text-[15px] font-medium text-(--sw-ink) bg-transparent outline-none placeholder:text-[#9aa4b5]" />
+              <button type="submit" className="h-[46px] px-5 rounded-xl bg-(--sw-blue) text-white text-[15px] font-bold whitespace-nowrap hover:bg-(--sw-blue-hover)">
+                Get started
+              </button>
+            </form>
+          )}
+          <span className="text-[13px] text-(--sw-faint) -mt-2">Free to open · Your email becomes your payment ID</span>
 
-      {/* Scroll hint */}
-      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 hidden lg:flex flex-col items-center gap-2 text-muted-foreground/50" aria-hidden>
-        <span className="text-xs font-medium uppercase tracking-widest">Scroll</span>
-        <motion.div animate={{ y: [0, 6, 0] }} transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
-          className="w-5 h-8 rounded-full border-2 border-current flex items-start justify-center p-1.5">
-          <div className="w-1 h-1.5 bg-current rounded-full" />
+          <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-4 pt-4 border-t border-white/10 max-w-[560px]">
+            {STATS.map((s) => (
+              <div key={s.label} className="flex flex-col-reverse gap-0.5">
+                <dt className="text-xs text-(--sw-faint)">{s.label}</dt>
+                <dd className="font-extrabold text-2xl tracking-[-0.03em]">
+                  <AnimatedCounter target={s.target} prefix={s.prefix} suffix={s.suffix} decimals={s.decimals} />
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </motion.div>
+
+        <motion.div initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.7, delay: 0.15 }}
+          className="relative flex justify-center min-h-[520px] sm:min-h-[560px]" aria-hidden>
+          <div className="w-[300px] h-[600px] rounded-[48px] bg-(--sw-ink) border-8 border-[#1c2336] shadow-[0_60px_120px_-40px_rgba(17,40,245,.6)] overflow-hidden flex flex-col -mb-[60px] relative z-[1]">
+            <div className="bg-(--sw-bg) flex-1 flex flex-col px-3 py-3.5 gap-2.5 text-(--sw-ink)">
+              <div className="flex justify-between items-center px-1.5 pt-1"><span className="text-[11px] font-bold">9:41</span><span className="w-[74px] h-5 bg-(--sw-ink) rounded-xl" /><span className="text-[10px] font-bold">5G</span></div>
+              <div className="px-1.5"><div className="text-[10px] text-(--sw-muted)">Good morning</div><div className="font-extrabold text-sm">Ada Okafor</div></div>
+              <div className="bg-(--sw-blue) text-white rounded-[18px] p-4">
+                <div className="text-[10px] opacity-80">Total balance · USD</div>
+                <div className="font-extrabold text-[30px] tracking-[-0.045em] mt-0.5 mb-3">$248.50</div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <span className="h-8 rounded-[10px] bg-white text-(--sw-blue) text-[11px] font-bold grid place-items-center">Sweep</span>
+                  <span className="h-8 rounded-[10px] border border-white/35 text-[11px] font-bold grid place-items-center">Add money</span>
+                </div>
+              </div>
+              <div className="bg-white border border-(--sw-line) rounded-xl px-3 py-2 flex justify-between text-[10px]"><span className="text-(--sw-muted) font-semibold">Payment ID</span><span className="font-bold">ada@example.com</span></div>
+              <div className="bg-white border border-(--sw-line) rounded-2xl py-1.5">
+                {PHONE_TXS.map((t) => (
+                  <div key={t.title} className="grid grid-cols-[30px_1fr_auto] gap-2 items-center px-3 py-[7px]">
+                    <span className={cn("w-[30px] h-[30px] rounded-full grid place-items-center font-extrabold", t.av, t.fs)}>{t.mono}</span>
+                    <span className="flex flex-col min-w-0"><span className="font-bold text-[11px] truncate">{t.title}</span><span className="text-[9px] text-(--sw-muted)">{t.sub}</span></span>
+                    <span className={cn("font-bold text-[11px] whitespace-nowrap", t.in ? "text-[#067647]" : "text-(--sw-ink)")}>{t.amount}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="hidden sm:flex absolute right-0 xl:-right-3 -top-9 z-[2] bg-white text-(--sw-ink) rounded-[18px] px-4 py-3.5 items-center gap-3 shadow-[0_20px_50px_-20px_rgba(0,0,0,.5)] w-60">
+            <span className="w-10 h-10 rounded-xl bg-(--sw-blue) grid place-items-center shrink-0"><img src="/sweep-mark-white.svg" alt="" className="w-[15px]" /></span>
+            <span className="flex flex-col min-w-0"><span className="font-extrabold text-[15px]">Swept. $25.00</span><span className="text-xs text-(--sw-muted) truncate">to tunde@example.com · now</span></span>
+          </div>
+          <div className="hidden sm:flex absolute left-0 xl:-left-3 bottom-1.5 z-[2] bg-(--sw-navy-chip) border border-(--sw-navy-chip-line) rounded-[18px] px-4 py-3.5 flex-col gap-2 w-[210px] shadow-[0_20px_50px_-20px_rgba(0,0,0,.6)]">
+            <span className="text-[11px] font-bold tracking-[0.05em] text-(--sw-faint)">WITHDRAW TO</span>
+            <div className="flex flex-wrap gap-[5px]">
+              <span className="text-[11px] font-bold px-[9px] py-1 rounded-full bg-(--sw-blue)">Base</span>
+              <span className="text-[11px] font-bold px-[9px] py-1 rounded-full border border-[#334064]">Arc</span>
+              <span className="text-[11px] font-bold px-[9px] py-1 rounded-full border border-[#334064]">Solana</span>
+              <span className="text-[11px] font-bold px-[9px] py-1 rounded-full border border-[#334064]">+5</span>
+            </div>
+          </div>
         </motion.div>
       </div>
     </section>
   );
 }
 
-// ── Stats section ─────────────────────────────────────────────────────────────
+// ── Promise strip ─────────────────────────────────────────────────────────────
 
-const STATS = [
-  { prefix: "$", target: 23.8, suffix: "K+", decimals: 1, label: "Volume in Transaction"       },
-  { prefix: "",  target: 150,  suffix: "+",  decimals: 0, label: "Signed up Users"      },
-  { prefix: "",  target: 99.9, suffix: "%",  decimals: 1, label: "Uptime"            },
-  { prefix: "<", target: 1,    suffix: "s",  decimals: 0, label: "Settlement Time"   },
+const PROMISES = [
+  { t: "Free email transfers", d: "No fee, gas sponsored" },
+  { t: "Instant delivery",     d: "Lands in their balance" },
+  { t: "8 networks",           d: "Withdraw on-chain" },
+  { t: "Backed 1:1 by USDC",   d: "Issued by Circle" },
 ];
 
-function StatsSection() {
-  const ref = useRef<HTMLDivElement>(null);
-  const isInView = useInView(ref, { once: true, margin: "-80px 0px" });
-
+function PromiseStrip() {
   return (
-    <section aria-label="Platform statistics" className="border-y border-border bg-white">
-      <div ref={ref} className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 lg:gap-0 lg:divide-x divide-border">
-          {STATS.map((stat, i) => (
-            <motion.div
-              key={stat.label}
-              initial={{ opacity: 0, y: 16 }}
-              animate={isInView ? { opacity: 1, y: 0 } : {}}
-              transition={{ delay: i * 0.1, duration: 0.5 }}
-              className="text-center lg:px-8 py-2"
-            >
-              <p className="text-2xl sm:text-3xl lg:text-4xl font-bold text-foreground font-display mb-1">
-                {isInView && <AnimatedCounter target={stat.target} prefix={stat.prefix} suffix={stat.suffix} decimals={stat.decimals} />}
-              </p>
-              <p className="text-sm text-muted-foreground font-medium">{stat.label}</p>
-            </motion.div>
-          ))}
-        </div>
+    <div className="bg-white border-b border-(--sw-line) relative">
+      <div className="max-w-[1240px] mx-auto px-5 sm:px-7 pt-9 pb-7 grid grid-cols-2 lg:grid-cols-4 gap-5">
+        {PROMISES.map((p) => (
+          <div key={p.t} className="flex flex-col gap-0.5 border-l-2 border-(--sw-blue) pl-3.5">
+            <span className="font-extrabold text-[17px] tracking-[-0.01em]">{p.t}</span>
+            <span className="text-sm text-(--sw-muted)">{p.d}</span>
+          </div>
+        ))}
       </div>
-    </section>
+    </div>
   );
 }
 
-// ── Features section ──────────────────────────────────────────────────────────
-
-const FEATURES = [
-  {
-    icon: <Send className="w-6 h-6" />,
-    color: "text-blue-600 bg-blue-50 border-blue-100",
-    title: "Instant USDC Transfers",
-    desc: "Send USD stablecoins to any email address in seconds. No wallet address, no gas fees for the sender.",
-  },
-  {
-    icon: <Wallet className="w-6 h-6" />,
-    color: "text-violet-600 bg-violet-50 border-violet-100",
-    title: "No Wallet Required",
-    desc: "Recipients claim funds with just their email — no seed phrases, no exchange accounts, no setup friction.",
-  },
-  {
-    icon: <ShieldCheck className="w-6 h-6" />,
-    color: "text-green-600 bg-green-50 border-green-100",
-    title: "Smart Contract Escrow",
-    desc: "Every transfer is locked on-chain. Funds can only be released to the verified recipient — no middlemen.",
-  },
-  {
-    icon: <RefreshCw className="w-6 h-6" />,
-    color: "text-cyan-600 bg-cyan-50 border-cyan-100",
-    title: "Recurring Subscriptions",
-    desc: "Create billing plans for your services. Customers subscribe once and are charged automatically.",
-  },
-  {
-    icon: <Layers className="w-6 h-6" />,
-    color: "text-primary bg-primary/5 border-primary/15",
-    title: "Circle-Powered Infrastructure",
-    desc: "Built on Circle's enterprise-grade developer-controlled wallets.",
-  },
-];
-
-function FeaturesSection() {
-  const ref = useRef<HTMLDivElement>(null);
-  const isInView = useInView(ref, { once: true, margin: "-60px 0px" });
-
-  return (
-    <section id="features" aria-labelledby="features-heading" className="bg-slate-50/80 py-20 lg:py-28">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center max-w-2xl mx-auto mb-14">
-          <motion.p
-            initial={{ opacity: 0, y: 12 }} animate={isInView ? { opacity: 1, y: 0 } : {}} transition={{ duration: 0.5 }}
-            className="text-sm font-bold uppercase tracking-widest text-primary mb-3"
-          >
-            Everything You Need
-          </motion.p>
-          <motion.h2
-            id="features-heading"
-            initial={{ opacity: 0, y: 16 }} animate={isInView ? { opacity: 1, y: 0 } : {}} transition={{ duration: 0.5, delay: 0.08 }}
-            className="text-3xl lg:text-4xl font-bold text-foreground text-balance mb-4"
-          >
-            Move Money Across Borders — Without the Friction
-          </motion.h2>
-          <motion.p
-            initial={{ opacity: 0, y: 16 }} animate={isInView ? { opacity: 1, y: 0 } : {}} transition={{ duration: 0.5, delay: 0.16 }}
-            className="text-muted-foreground text-lg text-balance"
-          >
-            One platform for sending, receiving, and managing USDC payments globally.
-          </motion.p>
-        </div>
-
-        <div ref={ref} className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {FEATURES.map((f, i) => (
-            <motion.div
-              key={f.title}
-              initial={{ opacity: 0, y: 24 }} animate={isInView ? { opacity: 1, y: 0 } : {}}
-              transition={{ delay: 0.1 + i * 0.07, duration: 0.5 }}
-              whileHover={{ y: -4, transition: { type: "spring", stiffness: 400, damping: 20 } }}
-              className="group p-6 rounded-2xl bg-white border border-border shadow-sm hover:shadow-md hover:border-primary/20 transition-all"
-            >
-              <div className={cn("w-12 h-12 rounded-xl border flex items-center justify-center mb-4 transition-transform group-hover:scale-110", f.color)}>
-                {f.icon}
-              </div>
-              <h3 className="text-base font-bold text-foreground mb-2">{f.title}</h3>
-              <p className="text-sm text-muted-foreground leading-relaxed">{f.desc}</p>
-            </motion.div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ── How It Works section ──────────────────────────────────────────────────────
+// ── Product ───────────────────────────────────────────────────────────────────
 
 const STEPS = [
-  {
-    step: "01",
-    icon: <UserPlus className="w-7 h-7" aria-hidden />,
-    title: "Create Your Account",
-    desc: "Sign up with your email in under 60 seconds. Set a transaction password for extra security — no crypto knowledge needed.",
-    cta: { label: "Create free account", href: "/register" },
-  },
-  {
-    step: "02",
-    icon: <Send className="w-7 h-7" aria-hidden />,
-    title: "Send by Email",
-    desc: "Enter the recipient's email and amount. Your USDC is locked in a smart contract escrow immediately — off your balance in seconds.",
-    cta: null,
-  },
-  {
-    step: "03",
-    icon: <CheckCircle2 className="w-7 h-7" aria-hidden />,
-    title: "Recipient Claims",
-    desc: "The recipient gets a notification, signs up, and verifies their email. Funds are released to their balance automatically.",
-    cta: null,
-  },
+  { title: "Create your account", desc: "Sign up with your email in under a minute and set a transaction password. No crypto knowledge needed." },
+  { title: "Send by email",       desc: "Enter their email and an amount. It comes off your balance in seconds — free, gas sponsored." },
+  { title: "They receive it",     desc: "On Sweep already? It lands instantly. Not yet? It's held for them and credited the moment they sign up." },
 ];
 
-function HowItWorksSection() {
-  const ref = useRef<HTMLDivElement>(null);
-  const isInView = useInView(ref, { once: true, margin: "-60px 0px" });
+const RECURRING_SAMPLE = [
+  ["mum@example.com",   "$50.00",  "Monthly · next Oct 1"],
+  ["rent@landlord.co",  "$120.00", "Weekly · next Sep 29"],
+  ["payroll@studio.co", "$400.00", "Monthly · next Oct 5"],
+];
 
+const RECEIVED_SAMPLE = [
+  ["Jide Musa",   "Coaching — monthly", "+$25.00"],
+  ["Ife Ola",     "Design pass",        "+$12.00"],
+  ["0x7c1e…a930", "Weekly check-in",    "+$8.00"],
+];
+
+function ProductSection({ isLoggedIn, sender, onSent }: { isLoggedIn: boolean; sender: LandingSender | null; onSent: () => void }) {
+  const card = "rounded-[28px] p-[30px] flex flex-col gap-[18px]";
   return (
-    <section id="how-it-works" aria-labelledby="hiw-heading" className="bg-white py-20 lg:py-28">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center max-w-2xl mx-auto mb-16">
-          <motion.p
-            initial={{ opacity: 0, y: 12 }} animate={isInView ? { opacity: 1, y: 0 } : {}} transition={{ duration: 0.5 }}
-            className="text-sm font-bold uppercase tracking-widest text-primary mb-3"
-          >
-            Simple by Design
-          </motion.p>
-          <motion.h2
-            id="hiw-heading"
-            initial={{ opacity: 0, y: 16 }} animate={isInView ? { opacity: 1, y: 0 } : {}} transition={{ duration: 0.5, delay: 0.08 }}
-            className="text-3xl lg:text-4xl font-bold text-foreground text-balance"
-          >
-            Send Your First Payment in 3 Steps
-          </motion.h2>
-        </div>
+    <section id="product" aria-labelledby="product-heading" className="max-w-[1240px] mx-auto px-5 sm:px-7 pt-24 pb-10 scroll-mt-20">
+      <Reveal className="flex flex-wrap items-end gap-5 mb-10">
+        <h2 id="product-heading" className="flex-1 min-w-[300px] font-extrabold text-[clamp(34px,4.4vw,56px)] leading-[1.02] tracking-[-0.045em] text-balance">
+          One balance.<br />Every way to pay.
+        </h2>
+        <p className="max-w-[380px] text-base leading-relaxed text-[#475467]">
+          Everything the dashboard does, on the web or in your pocket — and nothing asks for a seed phrase.
+        </p>
+      </Reveal>
 
-        <div ref={ref} className="relative">
-          {/* Connecting line on desktop */}
-          <div className="absolute top-[3.25rem] left-[calc(50%/3+3.25rem)] right-[calc(50%/3+3.25rem)] h-px bg-gradient-to-r from-primary/20 via-primary/50 to-primary/20 hidden lg:block" aria-hidden />
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-[18px]">
+        <Reveal id="send" className={cn(card, "bg-(--sw-blue) text-white min-h-[420px] scroll-mt-24")}>
+          <span className="text-xs font-bold tracking-[0.06em] opacity-80">EMAIL · USD</span>
+          <span className="font-extrabold text-[28px] leading-[1.1] tracking-[-0.03em]">Pay anyone by email. They don't need a wallet.</span>
+          <div className="mt-auto"><LandingSend sender={sender} onSent={onSent} /></div>
+        </Reveal>
 
-          <div className="grid lg:grid-cols-3 gap-8 lg:gap-12">
+        <Reveal delay={0.05} className={cn(card, "bg-white border border-(--sw-line) min-h-[420px]")}>
+          <Kicker>HOW IT WORKS</Kicker>
+          <span className="font-extrabold text-[28px] leading-[1.1] tracking-[-0.03em]">Three steps. They only need an email.</span>
+          <ol className="mt-auto flex flex-col gap-4">
             {STEPS.map((s, i) => (
-              <motion.div
-                key={s.step}
-                initial={{ opacity: 0, y: 28 }} animate={isInView ? { opacity: 1, y: 0 } : {}}
-                transition={{ delay: 0.15 + i * 0.15, duration: 0.55 }}
-                className="flex flex-col items-center text-center lg:items-start lg:text-left"
-              >
-                <div className="relative mb-6">
-                  <div className="w-[6.5rem] h-[6.5rem] rounded-2xl bg-primary/5 border border-primary/15 flex items-center justify-center text-primary shadow-sm">
-                    {s.icon}
-                  </div>
-                  <span className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-primary text-white text-xs font-bold flex items-center justify-center shadow-md shadow-primary/30" aria-label={`Step ${s.step}`}>
-                    {s.step}
-                  </span>
-                </div>
-                <h3 className="text-xl font-bold text-foreground mb-3">{s.title}</h3>
-                <p className="text-muted-foreground leading-relaxed text-balance mb-4">{s.desc}</p>
-                {s.cta && (
-                  <Link
-                    href={`${BASE}${s.cta.href}`}
-                    className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:text-primary/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded"
-                  >
-                    {s.cta.label} <ArrowRight className="w-4 h-4" aria-hidden />
-                  </Link>
-                )}
-              </motion.div>
+              <li key={s.title} className="grid grid-cols-[32px_1fr] gap-3">
+                <span className="w-8 h-8 rounded-full bg-(--sw-tint) text-(--sw-blue) grid place-items-center font-extrabold text-sm">{i + 1}</span>
+                <span className="flex flex-col gap-0.5">
+                  <span className="font-bold text-[15px]">{s.title}</span>
+                  <span className="text-sm leading-relaxed text-(--sw-muted)">{s.desc}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
+          {!isLoggedIn && (
+            <Link href={`${BASE}/register`} className="inline-flex items-center gap-1.5 text-sm font-bold text-(--sw-blue)">
+              Create free account <ArrowRight className="w-4 h-4" aria-hidden />
+            </Link>
+          )}
+        </Reveal>
+
+        <Reveal delay={0.1} className={cn(card, "bg-(--sw-navy) text-white min-h-[420px]")}>
+          <span className="text-xs font-bold tracking-[0.06em] text-(--sw-sky)">WALLET · USDC</span>
+          <span className="font-extrabold text-[28px] leading-[1.1] tracking-[-0.03em]">Withdraw on-chain, fee shown up front.</span>
+          <div className="mt-auto flex flex-col gap-2">
+            {WITHDRAWAL_CHAINS.slice(0, 4).map((c, i) => (
+              <div key={c.key} className={cn("flex justify-between items-center px-3.5 py-3 rounded-[14px] border",
+                i === 1 ? "bg-(--sw-blue) border-(--sw-blue)" : "bg-(--sw-navy-card) border-(--sw-navy-line)")}>
+                <span className="font-bold text-sm">{c.label}</span>
+                <span className={cn("text-[13px]", i === 1 ? "text-[#dfe4ff]" : "text-(--sw-faint)")}>
+                  min {fmtUsd(c.minWithdrawal).replace(".00", "")} · fee {fmtUsd(c.platformFee)}
+                </span>
+              </div>
             ))}
           </div>
-        </div>
+        </Reveal>
+
+        <Reveal className={cn(card, "bg-white border border-(--sw-line) min-h-[360px]")}>
+          <Kicker>RECURRING</Kicker>
+          <span className="font-extrabold text-[28px] leading-[1.1] tracking-[-0.03em]">Rent, allowance, payroll — on autopilot.</span>
+          <div className="mt-auto border border-(--sw-line) rounded-[18px] overflow-hidden">
+            {RECURRING_SAMPLE.map(([to, amt, when], i) => (
+              <div key={to} className={cn("grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 px-4 py-3", i > 0 && "border-t border-[#f0f2f6]")}>
+                <span className="font-bold text-sm truncate">{to}</span><span className="font-bold text-sm">{amt}</span>
+                <span className="text-xs text-(--sw-muted)">{when}</span><span className="text-xs font-bold text-[#067647] justify-self-end">Active</span>
+              </div>
+            ))}
+          </div>
+        </Reveal>
+
+        <Reveal delay={0.05} className={cn(card, "bg-(--sw-tint) border border-(--sw-tint-line) min-h-[360px] md:col-span-2")}>
+          <div className="grid sm:grid-cols-2 gap-7 items-end h-full">
+            <div className="flex flex-col gap-3.5">
+              <Kicker>SUBSCRIPTIONS & PAYMENTS</Kicker>
+              <span className="font-extrabold text-[32px] leading-[1.08] tracking-[-0.035em]">Get paid like a business.</span>
+              <span className="text-[15px] leading-relaxed text-[#475467] max-w-[380px]">
+                Create weekly, monthly or yearly plans, share one merchant link, and subscribers are billed automatically — with email receipts and a live subscriber list.
+              </span>
+            </div>
+            <div className="flex flex-col gap-2.5" aria-label="Example subscription payments">
+              <div className="bg-(--sw-blue) text-white rounded-2xl px-4 py-3.5 flex justify-between items-center gap-3">
+                <span className="font-bold text-sm truncate">sweep/subscribe/7K2Q-M4XA-9TD3</span>
+                <span className="text-xs font-bold bg-white text-(--sw-blue) px-2.5 py-[5px] rounded-full shrink-0">Copy</span>
+              </div>
+              <div className="bg-white rounded-2xl overflow-hidden">
+                {RECEIVED_SAMPLE.map(([from, note, amt], i) => (
+                  <div key={from} className={cn("flex justify-between px-4 py-3 text-sm", i > 0 && "border-t border-[#f0f2f6]")}>
+                    <span className="flex flex-col"><span className="font-bold">{from}</span><span className="text-xs text-(--sw-muted)">{note}</span></span>
+                    <span className="font-bold text-[#067647]">{amt}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Reveal>
       </div>
     </section>
   );
 }
 
-// ── Use Cases section ─────────────────────────────────────────────────────────
+// ── Use cases ─────────────────────────────────────────────────────────────────
 
 const USE_CASES = [
   {
-    icon: <Users className="w-8 h-8" aria-hidden />,
-    color: "from-violet-500 to-indigo-600",
-    audience: "Freelancers & Remote Workers",
-    headline: "Get Paid in USDC — Anywhere on Earth",
-    points: [
-      "Share your email instead of a wallet address",
-      "Receive payments from global clients instantly",
-      "No exchange accounts or conversion fees",
-      "Withdraw to bank or hold as USDC",
-    ],
+    audience: "FREELANCERS & REMOTE WORKERS",
+    headline: "Get paid in USDC — anywhere on Earth.",
+    points: ["Share your email instead of a wallet address", "Receive payments from global clients instantly", "No exchange accounts or conversion fees", "Withdraw on-chain or hold as USDC"],
   },
   {
-    icon: <CreditCard className="w-8 h-8" aria-hidden />,
-    color: "from-blue-500 to-cyan-500",
-    audience: "Merchants & Creators",
-    headline: "Automate Billing With Subscription Plans",
-    points: [
-      "Create weekly, monthly, or yearly billing plans",
-      "Customers activate with a one-click confirmation code",
-      "Automatic recurring charges with email receipts",
-      "Real-time dashboard of active subscribers",
-    ],
+    audience: "MERCHANTS & CREATORS",
+    headline: "Automate billing with subscription plans.",
+    points: ["Create weekly, monthly, or yearly billing plans", "Customers activate with a one-time confirmation code", "Automatic recurring charges with email receipts", "Real-time dashboard of active subscribers"],
   },
   {
-    icon: <Globe className="w-8 h-8" aria-hidden />,
-    color: "from-teal-500 to-emerald-600",
-    audience: "Businesses & Teams",
-    headline: "Cross-Border Payroll Without the Complexity",
-    points: [
-      "Send to multiple recipients by email",
-      "On-chain records for full auditability",
-      "No correspondent banks or SWIFT delays",
-      "Escrow protection on every transfer",
-    ],
+    audience: "BUSINESSES & TEAMS",
+    headline: "Cross-border payroll without the complexity.",
+    points: ["Send to multiple recipients by email", "On-chain records for full auditability", "No correspondent banks or SWIFT delays", "Recurring transfers for regular payouts"],
   },
 ];
 
 function UseCasesSection() {
-  const ref = useRef<HTMLDivElement>(null);
-  const isInView = useInView(ref, { once: true, margin: "-60px 0px" });
-
   return (
-    <section id="use-cases" aria-labelledby="uc-heading" className="bg-slate-50/80 py-20 lg:py-28">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center max-w-2xl mx-auto mb-14">
-          <motion.p
-            initial={{ opacity: 0, y: 12 }} animate={isInView ? { opacity: 1, y: 0 } : {}} transition={{ duration: 0.5 }}
-            className="text-sm font-bold uppercase tracking-widest text-primary mb-3"
-          >
-            Built for Everyone
-          </motion.p>
-          <motion.h2
-            id="uc-heading"
-            initial={{ opacity: 0, y: 16 }} animate={isInView ? { opacity: 1, y: 0 } : {}} transition={{ duration: 0.5, delay: 0.08 }}
-            className="text-3xl lg:text-4xl font-bold text-foreground text-balance"
-          >
-            Who Uses Sweep?
-          </motion.h2>
-        </div>
-
-        <div ref={ref} className="grid lg:grid-cols-3 gap-6">
-          {USE_CASES.map((uc, i) => (
-            <motion.div
-              key={uc.audience}
-              initial={{ opacity: 0, y: 28 }} animate={isInView ? { opacity: 1, y: 0 } : {}}
-              transition={{ delay: 0.1 + i * 0.12, duration: 0.55 }}
-              className="bg-white rounded-2xl border border-border shadow-sm overflow-hidden hover:shadow-md hover:-translate-y-1 transition-all group"
-            >
-              <div className={cn("h-2 bg-gradient-to-r", uc.color)} aria-hidden />
-              <div className="p-6">
-                <div className={cn("w-14 h-14 rounded-2xl bg-gradient-to-br text-white flex items-center justify-center mb-4 shadow-lg group-hover:scale-105 transition-transform", uc.color)}>
-                  {uc.icon}
-                </div>
-                <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-2">{uc.audience}</p>
-                <h3 className="text-xl font-bold text-foreground mb-4 text-balance leading-snug">{uc.headline}</h3>
-                <ul className="space-y-2.5" role="list">
-                  {uc.points.map((pt) => (
-                    <li key={pt} className="flex items-start gap-2.5 text-sm text-muted-foreground" role="listitem">
-                      <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0 mt-0.5" aria-hidden />
-                      <span>{pt}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </motion.div>
-          ))}
-        </div>
+    <section id="use-cases" aria-labelledby="uc-heading" className="max-w-[1240px] mx-auto px-5 sm:px-7 pt-14 pb-10 scroll-mt-20">
+      <Reveal className="mb-8">
+        <h2 id="uc-heading" className="font-extrabold text-[clamp(30px,3.6vw,44px)] leading-[1.05] tracking-[-0.04em]">Built for everyone who gets paid.</h2>
+      </Reveal>
+      <div className="grid md:grid-cols-3 gap-[18px]">
+        {USE_CASES.map((uc, i) => (
+          <Reveal key={uc.audience} delay={i * 0.06} className="bg-white border border-(--sw-line) rounded-[24px] p-[26px] flex flex-col gap-3.5">
+            <Kicker>{uc.audience}</Kicker>
+            <span className="font-extrabold text-[22px] leading-[1.15] tracking-[-0.02em]">{uc.headline}</span>
+            <ul className="flex flex-col gap-2.5 mt-1">
+              {uc.points.map((pt) => (
+                <li key={pt} className="flex items-start gap-2.5 text-sm text-[#475467]">
+                  <CheckCircle2 className="w-4 h-4 text-[#067647] shrink-0 mt-0.5" aria-hidden /> <span>{pt}</span>
+                </li>
+              ))}
+            </ul>
+          </Reveal>
+        ))}
       </div>
     </section>
   );
 }
 
-// ── Trust section ─────────────────────────────────────────────────────────────
+// ── Networks ──────────────────────────────────────────────────────────────────
+
+function NetworksSection() {
+  return (
+    <section id="networks" aria-labelledby="networks-heading" className="max-w-[1240px] mx-auto px-5 sm:px-7 pt-14 pb-24 scroll-mt-20">
+      <Reveal className="bg-white border border-(--sw-line) rounded-[28px] p-[34px] grid lg:grid-cols-2 gap-9 items-center">
+        <div className="flex flex-col gap-3">
+          <Kicker>8 NETWORKS</Kicker>
+          <h2 id="networks-heading" className="font-extrabold text-[34px] leading-[1.08] tracking-[-0.035em]">Deposit from anywhere. Withdraw anywhere.</h2>
+          <p className="text-[15px] leading-relaxed text-[#475467]">
+            Deposit USDC on seven networks and withdraw to eight. Every fee is shown before you send, and gas is always on us.
+          </p>
+        </div>
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(130px,1fr))] gap-2.5">
+          {WITHDRAWAL_CHAINS.map((c) => (
+            <div key={c.key} className="border border-(--sw-line) rounded-2xl p-3.5 flex flex-col gap-1 bg-[#f8f9fc]">
+              <span className="font-extrabold text-[15px]">{c.label}</span>
+              <span className="text-xs text-(--sw-muted)">Fee {fmtUsd(c.platformFee)} · min {fmtUsd(c.minWithdrawal).replace(".00", "")}</span>
+            </div>
+          ))}
+        </div>
+      </Reveal>
+    </section>
+  );
+}
+
+// ── Security ──────────────────────────────────────────────────────────────────
 
 const TRUST_POINTS = [
-  {
-    icon: <Layers className="w-6 h-6" aria-hidden />,
-    title: "Circle-Verified Infrastructure",
-    desc: "Wallets are powered by Circle's developer-controlled wallet API.",
-  },
-  {
-    icon: <ShieldCheck className="w-6 h-6" aria-hidden />,
-    title: "On-Chain Auditability",
-    desc: "Every transfer creates an immutable on-chain record. Anyone can verify transactions on the ARC testnet explorer.",
-  },
-  {
-    icon: <Lock className="w-6 h-6" aria-hidden />,
-    title: "Email-Hash Privacy",
-    desc: "Recipient emails are stored as cryptographic hashes on-chain — never exposed in plaintext. Privacy-first architecture.",
-  },
-  {
-    icon: <BadgeCheck className="w-6 h-6" aria-hidden />,
-    title: "Non-Custodial by Default",
-    desc: "Your private keys are never held by us. Users wallets are managed by Circle Developer-controlled wallets which means. No private key needed. And you own your funds at all times.",
-  },
+  { title: "Circle-verified infrastructure", desc: "Wallets are powered by Circle's developer-controlled wallet API." },
+  { title: "Smart contract escrow",          desc: "Transfers are locked on-chain and can only be released to the verified recipient — no middlemen." },
+  { title: "On-chain auditability",          desc: "Every transfer creates an immutable on-chain record anyone can verify on the explorer." },
+  { title: "Email-hash privacy",             desc: "Recipient emails are stored as cryptographic hashes on-chain — never exposed in plaintext." },
+  { title: "Non-custodial by default",       desc: "Your private keys are never held by us. Wallets are managed by Circle developer-controlled wallets, so no private key is needed and you own your funds." },
 ];
 
-function TrustSection() {
-  const ref = useRef<HTMLDivElement>(null);
-  const isInView = useInView(ref, { once: true, margin: "-60px 0px" });
-
+function SecuritySection() {
+  const lock = "bg-(--sw-navy-card) border border-(--sw-navy-line) rounded-[24px] p-[26px] flex flex-col gap-3.5";
+  const tile = "w-[34px] h-[42px] rounded-[10px] bg-(--sw-navy-chip) border grid place-items-center";
   return (
-    <section aria-labelledby="trust-heading" className="bg-slate-900 py-20 lg:py-28">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center max-w-2xl mx-auto mb-14">
-          <motion.p
-            initial={{ opacity: 0, y: 12 }} animate={isInView ? { opacity: 1, y: 0 } : {}} transition={{ duration: 0.5 }}
-            className="text-sm font-bold uppercase tracking-widest text-primary/80 mb-3"
-          >
-            Security First
-          </motion.p>
-          <motion.h2
-            id="trust-heading"
-            initial={{ opacity: 0, y: 16 }} animate={isInView ? { opacity: 1, y: 0 } : {}} transition={{ duration: 0.5, delay: 0.08 }}
-            className="text-3xl lg:text-4xl font-bold text-white text-balance"
-          >
-            Built on Enterprise-Grade Security
-          </motion.h2>
-          <motion.p
-            initial={{ opacity: 0, y: 16 }} animate={isInView ? { opacity: 1, y: 0 } : {}} transition={{ duration: 0.5, delay: 0.16 }}
-            className="text-slate-400 text-lg mt-4 text-balance"
-          >
-            Your funds are protected by the same standards used by the world's largest financial institutions.
-          </motion.p>
+    <section id="security" aria-labelledby="security-heading" className="bg-(--sw-navy) text-white scroll-mt-16">
+      <div className="max-w-[1240px] mx-auto px-5 sm:px-7 py-24">
+        <Reveal className="flex flex-wrap items-end gap-5 mb-10">
+          <h2 id="security-heading" className="flex-1 min-w-[300px] font-extrabold text-[clamp(34px,4.4vw,56px)] leading-[1.02] tracking-[-0.045em]">Three locks on every account.</h2>
+          <p className="max-w-[380px] text-base leading-relaxed text-(--sw-on-navy)">No seed phrase to lose. Security you already understand, layered.</p>
+        </Reveal>
+        <div className="grid md:grid-cols-3 gap-[18px]">
+          <Reveal className={lock}>
+            <div className="flex gap-2" aria-hidden>
+              {Array.from({ length: 6 }).map((_, i) => <span key={i} className={cn(tile, "border-(--sw-navy-chip-line) text-xl text-(--sw-sky)")}>•</span>)}
+            </div>
+            <span className="font-extrabold text-xl">Transaction password</span>
+            <span className="text-sm leading-relaxed text-(--sw-faint)">Separate from login, and required to authorize every single send.</span>
+          </Reveal>
+          <Reveal delay={0.05} className={lock}>
+            <div aria-hidden className="h-[42px] rounded-[10px] bg-(--sw-navy-chip) border border-(--sw-navy-chip-line) flex items-center px-3 text-[13px] font-bold tracking-[0.08em] text-(--sw-sky) whitespace-nowrap overflow-hidden">
+              SWP-8K2Q-••••-••••-••••-6WNB
+            </div>
+            <span className="font-extrabold text-xl">Authorization key</span>
+            <span className="text-sm leading-relaxed text-(--sw-faint)">A 40-character personal key that proves it's you when you change your password or recover your account.</span>
+          </Reveal>
+          <Reveal delay={0.1} className={lock}>
+            <div className="flex gap-2" aria-hidden>
+              {["4", "8", "2", "", "", ""].map((d, i) => (
+                <span key={i} className={cn(tile, "font-extrabold text-[17px]", i === 3 ? "border-(--sw-sky)" : "border-(--sw-navy-chip-line)")}>{d}</span>
+              ))}
+            </div>
+            <span className="font-extrabold text-xl">Email OTP</span>
+            <span className="text-sm leading-relaxed text-(--sw-faint)">A one-time code on login and on any change to your security settings.</span>
+          </Reveal>
         </div>
 
-        <div ref={ref} className="grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
-          {TRUST_POINTS.map((tp, i) => (
-            <motion.div
-              key={tp.title}
-              initial={{ opacity: 0, y: 24 }} animate={isInView ? { opacity: 1, y: 0 } : {}}
-              transition={{ delay: 0.1 + i * 0.09, duration: 0.5 }}
-              className="p-6 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-colors group"
-            >
-              <div className="w-11 h-11 rounded-xl bg-primary/20 text-primary flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                {tp.icon}
-              </div>
-              <h3 className="text-sm font-bold text-white mb-2">{tp.title}</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">{tp.desc}</p>
-            </motion.div>
+        <Reveal className="mt-12 grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          {TRUST_POINTS.map((tp) => (
+            <div key={tp.title} className="rounded-2xl border border-white/10 bg-white/[.03] p-5">
+              <h3 className="text-sm font-bold mb-1.5">{tp.title}</h3>
+              <p className="text-xs leading-relaxed text-(--sw-faint)">{tp.desc}</p>
+            </div>
           ))}
-        </div>
+        </Reveal>
       </div>
     </section>
   );
 }
 
-// ── CTA banner ────────────────────────────────────────────────────────────────
+// ── FAQ ───────────────────────────────────────────────────────────────────────
 
-function CTABanner({ isLoggedIn }: { isLoggedIn: boolean }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const isInView = useInView(ref, { once: true, margin: "-60px 0px" });
+const FAQS = [
+  ["Is this real money?", "Not yet. Sweep is running on testnet, so balances are test USDC with no real value. Everything else works the way it will on mainnet."],
+  ["Does the person I pay need a wallet?", "No. Send to any email address. If they already use Sweep it lands in their balance instantly — their email is their payment ID. If they don't, it's held for them and credited the moment they sign up with that email."],
+  ["What does it cost?", "Email transfers are free. Withdrawals to a wallet carry a small flat network fee, from $0.10 on Arc to $0.40 on Solana, taken from the amount. Gas is always sponsored."],
+  ["Which networks can I use?", "Withdraw to Arc, Base, Arbitrum, Optimism, Polygon, Unichain, Avalanche and Solana. Deposit on all of them except Unichain."],
+  ["How do I get help?", "Email sweepusdc@gmail.com with your registered email and a description of the issue — include the transaction ID for anything payment-related. We usually reply within 24 hours on business days."],
+];
 
+function FaqSection() {
+  const [open, setOpen] = useState(0);
   return (
-    <section aria-labelledby="cta-heading" className="bg-white py-20 lg:py-28">
-      <div ref={ref} className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.97 }} animate={isInView ? { opacity: 1, scale: 1 } : {}}
-          transition={{ duration: 0.6 }}
-          className="rounded-3xl bg-gradient-to-br from-primary via-blue-600 to-accent p-10 lg:p-16 relative overflow-hidden shadow-2xl shadow-primary/25"
-        >
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(255,255,255,0.15)_0%,transparent_60%)]" aria-hidden />
-          <div className="relative">
-            <motion.h2
-              id="cta-heading"
-              initial={{ opacity: 0, y: 16 }} animate={isInView ? { opacity: 1, y: 0 } : {}}
-              transition={{ delay: 0.15, duration: 0.5 }}
-              className="text-3xl lg:text-4xl xl:text-5xl font-bold text-white text-balance mb-4"
-            >
-              Start Sending in Minutes
-            </motion.h2>
-            <motion.p
-              initial={{ opacity: 0, y: 16 }} animate={isInView ? { opacity: 1, y: 0 } : {}}
-              transition={{ delay: 0.25, duration: 0.5 }}
-              className="text-white/80 text-lg text-balance mb-8 max-w-xl mx-auto"
-            >
-              Join thousands of users sending USDC globally — no wallet, no complexity, no barriers.
-            </motion.p>
-            <motion.div
-              initial={{ opacity: 0, y: 16 }} animate={isInView ? { opacity: 1, y: 0 } : {}}
-              transition={{ delay: 0.35, duration: 0.5 }}
-              className="flex flex-col sm:flex-row items-center justify-center gap-4"
-            >
-              {isLoggedIn ? (
-                <Link href={`${BASE}/dashboard`}
-                  className="inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-white text-primary font-bold text-sm hover:bg-white/90 hover:shadow-lg hover:-translate-y-0.5 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50">
-                  Go to Dashboard <ArrowRight className="w-5 h-5" aria-hidden />
-                </Link>
-              ) : (
-                <>
-                  <Link href={`${BASE}/register`}
-                    className="inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-white text-primary font-bold text-sm hover:bg-white/90 hover:shadow-lg hover:-translate-y-0.5 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50">
-                    Create Free Account <ArrowRight className="w-5 h-5" aria-hidden />
-                  </Link>
-                  <Link href={`${BASE}/login`}
-                    className="inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-white/10 text-white font-semibold text-sm border border-white/20 hover:bg-white/20 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50">
-                    Sign In
-                  </Link>
-                </>
-              )}
-            </motion.div>
-            <motion.p
-              initial={{ opacity: 0 }} animate={isInView ? { opacity: 1 } : {}}
-              transition={{ delay: 0.5, duration: 0.5 }}
-              className="text-white/50 text-xs mt-6"
-            >
-              Free to join · No credit card required · Cancel subscriptions any time
-            </motion.p>
-          </div>
-        </motion.div>
+    <section id="faq" aria-labelledby="faq-heading" className="max-w-[880px] mx-auto px-5 sm:px-7 py-24 scroll-mt-16">
+      <h2 id="faq-heading" className="mb-7 font-extrabold text-[clamp(32px,4vw,48px)] tracking-[-0.04em]">Questions</h2>
+      <div className="bg-white border border-(--sw-line) rounded-[24px] overflow-hidden">
+        {FAQS.map(([q, a], i) => {
+          const isOpen = open === i;
+          return (
+            <div key={q} className={cn(i > 0 && "border-t border-[#f0f2f6]")}>
+              <button type="button" onClick={() => setOpen(isOpen ? -1 : i)} aria-expanded={isOpen} aria-controls={`faq-${i}`}
+                className="w-full flex items-center gap-4 px-[26px] py-[22px] text-left hover:bg-[#f8f9fc]">
+                <span className="flex-1 font-bold text-[17px]">{q}</span>
+                <span className="text-[22px] font-medium text-(--sw-blue) w-5 text-center" aria-hidden>{isOpen ? "−" : "+"}</span>
+              </button>
+              <AnimatePresence initial={false}>
+                {isOpen && (
+                  <motion.div id={`faq-${i}`} initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden">
+                    <p className="px-[26px] pb-[22px] text-[15px] leading-relaxed text-[#475467] max-w-[680px]">{a}</p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          );
+        })}
       </div>
+    </section>
+  );
+}
+
+// ── Closing CTA ───────────────────────────────────────────────────────────────
+
+function ClosingCta({ isLoggedIn }: { isLoggedIn: boolean }) {
+  return (
+    <section aria-labelledby="cta-heading" className="px-5 sm:px-7 pb-24">
+      <Reveal className="max-w-[1240px] mx-auto bg-(--sw-blue) text-white rounded-[36px] px-8 sm:px-14 py-16 sm:py-[72px] relative overflow-hidden grid lg:grid-cols-2 gap-8 items-end">
+        <img src="/sweep-mark-white.svg" alt="" aria-hidden className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[380px] opacity-[.07] pointer-events-none" />
+        <div className="flex flex-col gap-2.5 relative">
+          <span className="text-[13px] font-bold tracking-[0.06em] opacity-85">YOUR FIRST SEND IS ONE EMAIL AWAY</span>
+          <h2 id="cta-heading" className="font-extrabold text-[clamp(80px,12vw,168px)] leading-[.88] tracking-[-0.06em]">Swept.</h2>
+        </div>
+        <div className="flex flex-col gap-3 relative items-start">
+          <span className="text-[17px] leading-relaxed opacity-90 max-w-[360px]">Open an account in a minute. Your email is your payment ID from day one.</span>
+          <div className="flex gap-2.5 flex-wrap">
+            {isLoggedIn ? (
+              <Link href={`${BASE}/dashboard`} className="h-14 px-[26px] rounded-2xl flex items-center gap-2 text-base font-bold text-(--sw-blue) bg-white hover:bg-(--sw-tint)">
+                Go to dashboard <ArrowRight className="w-4 h-4" aria-hidden />
+              </Link>
+            ) : (
+              <>
+                <Link href={`${BASE}/register`} className="h-14 px-[26px] rounded-2xl flex items-center text-base font-bold text-(--sw-blue) bg-white hover:bg-(--sw-tint)">
+                  Open free account
+                </Link>
+                <Link href={`${BASE}/login`} className="h-14 px-6 rounded-2xl flex items-center text-base font-bold border border-white/40 hover:bg-white/10">
+                  Log in
+                </Link>
+              </>
+            )}
+          </div>
+          <span className="text-xs opacity-60">Free to join · No credit card required · Cancel subscriptions any time</span>
+        </div>
+      </Reveal>
     </section>
   );
 }
@@ -1247,249 +678,85 @@ function CTABanner({ isLoggedIn }: { isLoggedIn: boolean }) {
 // ── Footer ────────────────────────────────────────────────────────────────────
 
 function LandingFooter() {
-  const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
-
+  const link = "text-sm text-(--sw-faint) hover:text-white transition-colors text-left";
   return (
-    <footer className="bg-slate-900 border-t border-white/10" role="contentinfo">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 lg:py-16">
-        <div className="grid grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-8 lg:gap-12">
-
-          {/* Brand */}
-          <div className="col-span-2 lg:col-span-1">
-            <Link href={`${BASE}/landing`} className="inline-block mb-4" aria-label="Sweep home">
-              <img src="/Sweep_logo_exact.svg" alt="Sweep" className="h-14 w-auto object-contain brightness-[4] saturate-0" />
+    <footer className="bg-(--sw-navy) text-(--sw-faint)">
+      <div className="max-w-[1240px] mx-auto px-5 sm:px-7 pt-12 pb-9">
+        <div className="grid grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-8">
+          <div className="col-span-2 lg:col-span-1 flex flex-col gap-2.5">
+            <Link href={`${BASE}/landing`} className="flex items-center gap-2" aria-label="Sweep home">
+              <img src="/sweep-mark-white.svg" alt="" className="w-[18px]" />
+              <span className="font-extrabold text-lg text-white">Sweep</span>
             </Link>
-            <p className="text-sm text-slate-400 leading-relaxed max-w-xs text-balance">
-              Disclaimer: Sending and receiving USDC/USD on Sweep involve no real funds ── as all assets involved at this testing phase are Testnet funds. Sweep is built on Arc and Circle
-              stacks.
+            <p className="text-sm leading-relaxed max-w-[320px]">
+              Testnet preview. Sending and receiving USDC/USD on Sweep involves no real funds — all assets in this testing phase are testnet funds. Sweep is built on Arc and Circle.
             </p>
           </div>
-
-          {/* Product */}
-          <nav aria-label="Product links">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-4">Product</p>
-            <ul className="space-y-2.5" role="list">
-              {[
-                { label: "Sweep",            action: () => scrollTo("features")     },
-                { label: "Subscriptions",   action: () => scrollTo("use-cases")    },
-                { label: "How It Works",    action: () => scrollTo("how-it-works") },
-                { label: "Security",        action: () => document.getElementById("trust-heading")?.scrollIntoView({ behavior: "smooth" }) },
-              ].map((l) => (
-                <li key={l.label} role="listitem">
-                  <button
-                    onClick={l.action}
-                    className="text-sm text-slate-400 hover:text-white transition-colors focus-visible:outline-none focus-visible:underline"
-                  >
-                    {l.label}
-                  </button>
-                </li>
-              ))}
-            </ul>
+          <nav aria-label="Product links" className="flex flex-col gap-2.5">
+            <span className="text-sm font-bold text-white">Product</span>
+            <button type="button" onClick={() => scrollToId("send")} className={link}>Pay by email</button>
+            <button type="button" onClick={() => scrollToId("product")} className={link}>How it works</button>
+            <button type="button" onClick={() => scrollToId("use-cases")} className={link}>Use cases</button>
+            <button type="button" onClick={() => scrollToId("networks")} className={link}>Networks</button>
+            <button type="button" onClick={() => scrollToId("security")} className={link}>Security</button>
           </nav>
-
-          {/* Account */}
-          <nav aria-label="Account links">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-4">Account</p>
-            <ul className="space-y-2.5" role="list">
-              {[
-                { label: "Sign Up",    href: `${BASE}/register`  },
-                { label: "Log In",     href: `${BASE}/login`     },
-                { label: "Dashboard",  href: `${BASE}/dashboard` },
-              ].map((l) => (
-                <li key={l.label} role="listitem">
-                  <Link href={l.href} className="text-sm text-slate-400 hover:text-white transition-colors focus-visible:outline-none focus-visible:underline">
-                    {l.label}
-                  </Link>
-                </li>
-              ))}
-            </ul>
+          <nav aria-label="Account links" className="flex flex-col gap-2.5">
+            <span className="text-sm font-bold text-white">Account</span>
+            <Link href={`${BASE}/register`} className={link}>Sign up</Link>
+            <Link href={`${BASE}/login`} className={link}>Log in</Link>
+            <Link href={`${BASE}/dashboard`} className={link}>Dashboard</Link>
           </nav>
-
-          {/* Support */}
-          <nav aria-label="Support links">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-4">Support</p>
-            <ul className="space-y-2.5" role="list">
-              <li role="listitem">
-                <a
-                  href="mailto:sweepusdc@gmail.com"
-                  className="text-sm text-slate-400 hover:text-white transition-colors focus-visible:outline-none focus-visible:underline"
-                >
-                  sweepusdc@gmail.com
-                </a>
-              </li>
-              <li role="listitem">
-                <Link href={`${BASE}/docs`} className="text-sm text-slate-400 hover:text-white transition-colors focus-visible:outline-none focus-visible:underline">
-                  Documentation
-                </Link>
-              </li>
-            </ul>
+          <nav aria-label="Support links" className="flex flex-col gap-2.5">
+            <span className="text-sm font-bold text-white">Support</span>
+            <a href="mailto:sweepusdc@gmail.com" className={link}>sweepusdc@gmail.com</a>
+            <Link href={`${BASE}/docs`} className={link}>Documentation</Link>
+            <button type="button" onClick={() => scrollToId("faq")} className={link}>FAQ</button>
           </nav>
-
-          {/* Legal */}
-          <nav aria-label="Legal links">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-4">Legal</p>
-            <ul className="space-y-2.5" role="list">
-              {["Privacy Policy", "Terms of Service", "Cookie Policy"].map((l) => (
-                <li key={l} role="listitem">
-                  <span className="text-sm text-slate-500 cursor-default">{l}</span>
-                </li>
-              ))}
-            </ul>
+          <nav aria-label="Legal links" className="flex flex-col gap-2.5">
+            <span className="text-sm font-bold text-white">Legal</span>
+            {["Privacy Policy", "Terms of Service", "Cookie Policy"].map((l) => (
+              <span key={l} className="text-sm text-[#667085] cursor-default">{l}</span>
+            ))}
           </nav>
         </div>
-
-        <div className="mt-10 pt-6 border-t border-white/10 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <p className="text-xs text-slate-500">
-            © {new Date().getFullYear()} <span translate="no">Sweep</span>. All rights reserved.
-          </p>
-          <p className="text-xs text-slate-500">
-            Powered by <span translate="no">Circle</span> Developer-Controlled Wallets
-          </p>
+        <div className="mt-10 pt-6 border-t border-white/10 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-[#667085]">
+          <p>© {new Date().getFullYear()} <span translate="no">Sweep</span>. All rights reserved.</p>
+          <p>Powered by <span translate="no">Circle</span> Developer-Controlled Wallets</p>
         </div>
       </div>
     </footer>
   );
 }
 
-// ── Main export ───────────────────────────────────────────────────────────────
-
-type LandingRecipientPreview = { registered: boolean; name: string | null; email: string };
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function Landing() {
-  const [isLoggedIn,            setIsLoggedIn]            = useState(false);
-  const [hasTransactionPassword, setHasTransactionPassword] = useState(false);
-  const [txnPwd,                setTxnPwd]                = useState("");
-  const [isSending,             setIsSending]             = useState(false);
-  const [isLooking,             setIsLooking]             = useState(false);
-  const [formError,             setFormError]             = useState<string | null>(null);
-  const [successEmail,          setSuccessEmail]          = useState("");
-  const [successAmount,         setSuccessAmount]         = useState("");
-  const [successName,           setSuccessName]           = useState("");
-  const [didSucceed,            setDidSucceed]            = useState(false);
-  const [preview,               setPreview]               = useState<LandingRecipientPreview | null>(null);
-  const [pendingData,           setPendingData]           = useState<SendFormValues | null>(null);
+  const [hasToken] = useState(() => !!localStorage.getItem("token"));
+  const { data: user } = useGetCurrentUser({ query: { enabled: hasToken, retry: false } as any });
+  const { data: balance, refetch: refetchBalance } = useGetUserBalance({ query: { enabled: !!user } as any });
+  const isLoggedIn = hasToken;
 
-  useEffect(() => {
-    const token = localStorage.getItem("token");
-    setIsLoggedIn(!!token);
-    if (token) {
-      fetch(`${API_BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
-        .then((r) => r.json())
-        .then((u) => { if (u?.hasTransactionPassword) setHasTransactionPassword(true); })
-        .catch(() => {});
-    }
-  }, []);
-
-  const { register, handleSubmit, reset, formState: { errors } } = useForm<SendFormValues>({
-    resolver: zodResolver(sendSchema),
-  });
-
-  // Step 1 — redirect to login if not logged in; otherwise look up recipient
-  const onReview = async (data: SendFormValues) => {
-    if (!isLoggedIn) {
-      window.location.href = `${BASE}/login`;
-      return;
-    }
-    setFormError(null);
-    setIsLooking(true);
-    try {
-      const jwt = localStorage.getItem("token");
-      const headers: Record<string, string> = {};
-      if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
-      const email = data.recipientEmail.toLowerCase().trim();
-      const res = await fetch(`${API_BASE}/api/escrow/lookup-recipient?email=${encodeURIComponent(email)}`, { headers });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.message ?? "Could not look up recipient");
-      setPendingData(data);
-      setPreview(json as LandingRecipientPreview);
-    } catch (err: any) {
-      setFormError(err?.message ?? "Could not look up recipient. Please try again.");
-    } finally {
-      setIsLooking(false);
-    }
-  };
-
-  // Step 2 — confirmed; execute the transfer
-  const onConfirm = async () => {
-    if (!pendingData || !preview) return;
-    setFormError(null);
-    setIsSending(true);
-    try {
-      const jwt = localStorage.getItem("token");
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
-      const payload: Record<string, string> = {
-        recipientEmail: pendingData.recipientEmail.toLowerCase().trim(),
-        amount: pendingData.amount,
-      };
-      if (hasTransactionPassword && txnPwd) payload["transactionPassword"] = txnPwd;
-      const res = await fetch(`${API_BASE}/api/escrow/send/platform`, {
-        method: "POST", headers, body: JSON.stringify(payload),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.message ?? "Failed to send payment");
-      setSuccessEmail(pendingData.recipientEmail.toLowerCase().trim());
-      setSuccessAmount(pendingData.amount);
-      setSuccessName(preview.name ?? "");
-      setTxnPwd("");
-      setPreview(null);
-      setPendingData(null);
-      setDidSucceed(true);
-    } catch (err: any) {
-      setFormError(err?.message ?? "Failed to send. Please try again.");
-      setPreview(null);
-    } finally {
-      setIsSending(false);
-    }
-  };
-
-  const handleSendAnother = () => {
-    setDidSucceed(false);
-    setFormError(null);
-    setSuccessEmail("");
-    setSuccessAmount("");
-    setSuccessName("");
-    setPreview(null);
-    setPendingData(null);
-    reset();
-  };
+  const sender: LandingSender | null = user
+    ? {
+        email: user.email,
+        hasTransactionPassword: !!(user as any).hasTransactionPassword,
+        available: parseFloat(balance?.claimedBalance ?? "0") || 0,
+      }
+    : null;
 
   return (
-    <div className="min-h-screen flex flex-col bg-background" lang="en">
-      <LandingNav />
-
+    <div className="sweep-ui min-h-screen flex flex-col overflow-x-hidden" lang="en">
+      <LandingNav isLoggedIn={isLoggedIn} />
       <main id="main-content" className="flex-1">
-        <HeroSection
-          isLoggedIn={isLoggedIn}
-          hasTransactionPassword={hasTransactionPassword}
-          txnPwd={txnPwd}
-          setTxnPwd={setTxnPwd}
-          isSending={isSending}
-          isLooking={isLooking}
-          formError={formError}
-          didSucceed={didSucceed}
-          successEmail={successEmail}
-          successAmount={successAmount}
-          successName={successName}
-          preview={preview}
-          pendingData={pendingData}
-          setPreview={setPreview}
-          setFormError={setFormError}
-          handleSubmit={handleSubmit}
-          onReview={onReview}
-          onConfirm={onConfirm}
-          register={register}
-          errors={errors}
-          handleSendAnother={handleSendAnother}
-        />
-        <StatsSection />
-        <FeaturesSection />
-        <HowItWorksSection />
+        <Hero isLoggedIn={isLoggedIn} />
+        <PromiseStrip />
+        <ProductSection isLoggedIn={isLoggedIn} sender={sender} onSent={() => refetchBalance()} />
         <UseCasesSection />
-        <TrustSection />
-        <CTABanner isLoggedIn={isLoggedIn} />
+        <NetworksSection />
+        <SecuritySection />
+        <FaqSection />
+        <ClosingCta isLoggedIn={isLoggedIn} />
       </main>
-
       <LandingFooter />
     </div>
   );
