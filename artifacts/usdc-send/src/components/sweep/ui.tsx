@@ -1,7 +1,7 @@
-import { useState, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useRef, useState, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes } from "react";
+import { AnimatePresence, animate, motion } from "framer-motion";
 import { format, isToday, isYesterday } from "date-fns";
-import { Check, ChevronLeft, ChevronRight, Copy, ExternalLink } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getExplorerUrl, isOnChainHash, type UnifiedTx } from "@/lib/wallet";
 
@@ -24,6 +24,37 @@ export const whenLabel = (iso: string) => {
 /** Message from an ApiError body when present, otherwise the raw error message. */
 export const errorMessage = (e: any, fallback: string) =>
   e?.data?.message ?? e?.message ?? fallback;
+
+const HIDE_KEY = "sweep.hideBalance";
+
+/** Hide/show preference for the balance, remembered per browser. */
+export function useHiddenBalance() {
+  const [hidden, setHidden] = useState(() => {
+    try { return localStorage.getItem(HIDE_KEY) === "1"; } catch { return false; }
+  });
+  const toggle = () => setHidden((h) => {
+    try { localStorage.setItem(HIDE_KEY, h ? "0" : "1"); } catch { /* storage unavailable */ }
+    return !h;
+  });
+  return { hidden, toggle };
+}
+
+/** Counts up to `value` whenever it changes. */
+export function AnimatedUsd({ value }: { value: number | string }) {
+  const n    = typeof value === "string" ? parseFloat(value) || 0 : value;
+  const ref  = useRef<HTMLSpanElement>(null);
+  const prev = useRef(0);
+  useEffect(() => {
+    const controls = animate(prev.current, n, {
+      duration: 1.1,
+      ease: [0.16, 1, 0.3, 1],
+      onUpdate: (v) => { if (ref.current) ref.current.textContent = fmtUsd(v); },
+    });
+    prev.current = n;
+    return controls.stop;
+  }, [n]);
+  return <span ref={ref}>{fmtUsd(0)}</span>;
+}
 
 // ── Status pill ───────────────────────────────────────────────────────────────
 
@@ -58,10 +89,10 @@ export function StatusPill({ label, tone }: { label: string; tone: Tone }) {
 // ── Transaction row ───────────────────────────────────────────────────────────
 
 const AVATARS = [
-  "bg-(--m-blue) text-white",
-  "bg-[#dfe4ff] text-(--m-blue)",
-  "bg-(--m-ink) text-white",
-  "bg-[#e8ecf3] text-(--m-ink)",
+  "bg-(--sw-blue) text-white",
+  "bg-[#dfe4ff] text-(--sw-blue)",
+  "bg-(--sw-ink) text-white",
+  "bg-[#e8ecf3] text-(--sw-ink)",
 ];
 
 const CHAIN_ABBR: Array<[string, string]> = [
@@ -96,7 +127,7 @@ export function txView(tx: UnifiedTx) {
     bankOut ? "BANK" : chainAbbr(tx.network) ?? "OUT";
   const avatar =
     isEmail ? AVATARS[hashIndex(party)] :
-    tx.category === "deposit" ? "bg-[#ecfdf3] text-[#067647]" : "bg-(--m-tint) text-(--m-blue)";
+    tx.category === "deposit" ? "bg-[#ecfdf3] text-[#067647]" : "bg-(--sw-tint) text-(--sw-blue)";
   const amount = (tx.direction === "in" ? "+" : "−") + fmtUsd(tx.amount);
   return { title, sub, mono, avatar, isEmail, amount, status: txStatus(tx) };
 }
@@ -104,7 +135,6 @@ export function txView(tx: UnifiedTx) {
 export function TxRow({ tx, expandable = false }: { tx: UnifiedTx; expandable?: boolean }) {
   const [open, setOpen] = useState(false);
   const v = txView(tx);
-  const explorerUrl = getExplorerUrl(tx.network, tx.txHash ?? "");
 
   const row = (
     <div className="grid grid-cols-[42px_minmax(0,1fr)_auto] gap-3 items-center px-[18px] py-2.5">
@@ -113,10 +143,10 @@ export function TxRow({ tx, expandable = false }: { tx: UnifiedTx; expandable?: 
       </span>
       <span className="flex flex-col min-w-0">
         <span className="font-bold text-[15px] truncate">{v.title}</span>
-        <span className="text-[13px] text-(--m-muted) truncate">{v.sub} · {whenLabel(tx.createdAt)}</span>
+        <span className="text-[13px] text-(--sw-muted) truncate">{v.sub} · {whenLabel(tx.createdAt)}</span>
       </span>
       <span className="flex flex-col items-end gap-1">
-        <span className={cn("font-bold text-[15px] tabular-nums", tx.direction === "in" ? "text-[#067647]" : "text-(--m-ink)")}>{v.amount}</span>
+        <span className={cn("font-bold text-[15px] tabular-nums", tx.direction === "in" ? "text-[#067647]" : "text-(--sw-ink)")}>{v.amount}</span>
         <StatusPill {...v.status} />
       </span>
     </div>
@@ -134,25 +164,7 @@ export function TxRow({ tx, expandable = false }: { tx: UnifiedTx; expandable?: 
         {open && (
           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
             className="overflow-hidden">
-            <div className="mx-[18px] mb-3 rounded-2xl bg-(--m-bg) px-4 py-3 space-y-2 text-[13px]">
-              <DetailRow k="Date" v={format(new Date(tx.createdAt), "MMM d, yyyy · h:mm a")} />
-              {tx.fromAddress && <DetailRow k="From" v={tx.fromAddress} mono={!tx.fromAddress.includes("@")} />}
-              {tx.toAddress && <DetailRow k="To" v={tx.toAddress} mono={!tx.toAddress.includes("@")} />}
-              {tx.txHash && isOnChainHash(tx.txHash) && (
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-(--m-muted)">Tx hash</span>
-                  <span className="flex items-center gap-1 font-semibold font-mono text-xs">
-                    {tx.txHash.slice(0, 10)}…{tx.txHash.slice(-6)} <CopyIcon text={tx.txHash} />
-                  </span>
-                </div>
-              )}
-              {explorerUrl && (
-                <a href={explorerUrl} target="_blank" rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 font-bold text-(--m-blue)">
-                  View on explorer <ExternalLink className="w-3.5 h-3.5" />
-                </a>
-              )}
-            </div>
+            <TxDetails tx={tx} className="mx-[18px] mb-3" />
           </motion.div>
         )}
       </AnimatePresence>
@@ -160,10 +172,65 @@ export function TxRow({ tx, expandable = false }: { tx: UnifiedTx; expandable?: 
   );
 }
 
+// ── Activity lists ────────────────────────────────────────────────────────────
+
+export type HistoryFilter = "all" | "email" | "in" | "out";
+
+export const historyFilter = (f: HistoryFilter) => (t: UnifiedTx) =>
+  f === "all" ? true : f === "email" ? t.category === "escrow" : t.direction === f;
+
+export function ActivityList({ txs, state, expandable }: {
+  txs: UnifiedTx[];
+  state: { isLoading: boolean; isError: boolean; error: unknown };
+  expandable?: boolean;
+}) {
+  if (state.isError) {
+    return <p className="px-[18px] py-8 text-center text-sm text-[#b42318]">{(state.error as Error)?.message ?? "Could not load activity"}</p>;
+  }
+  if (state.isLoading) {
+    return <div className="py-10 grid place-items-center text-(--sw-muted)"><Loader2 className="w-6 h-6 animate-spin" /></div>;
+  }
+  if (!txs.length) {
+    return (
+      <div className="px-[18px] py-10 text-center">
+        <p className="font-bold text-[15px]">No activity yet</p>
+        <p className="text-[13px] text-(--sw-muted) mt-1">Add money or sweep to someone and it will show up here.</p>
+      </div>
+    );
+  }
+  return <>{txs.map((t) => <TxRow key={t.id} tx={t} expandable={expandable} />)}</>;
+}
+
+/** Expanded detail block for a transaction: date, parties, tx hash, explorer link. */
+export function TxDetails({ tx, className }: { tx: UnifiedTx; className?: string }) {
+  const explorerUrl = getExplorerUrl(tx.network, tx.txHash ?? "");
+  return (
+    <div className={cn("rounded-2xl bg-(--sw-bg) px-4 py-3 space-y-2 text-[13px]", className)}>
+      <DetailRow k="Date" v={format(new Date(tx.createdAt), "MMM d, yyyy · h:mm a")} />
+      {tx.fromAddress && <DetailRow k="From" v={tx.fromAddress} mono={!tx.fromAddress.includes("@")} />}
+      {tx.toAddress && <DetailRow k="To" v={tx.toAddress} mono={!tx.toAddress.includes("@")} />}
+      {tx.txHash && isOnChainHash(tx.txHash) && (
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-(--sw-muted)">Tx hash</span>
+          <span className="flex items-center gap-1 font-semibold font-mono text-xs">
+            {tx.txHash.slice(0, 10)}…{tx.txHash.slice(-6)} <CopyIcon text={tx.txHash} />
+          </span>
+        </div>
+      )}
+      {explorerUrl && (
+        <a href={explorerUrl} target="_blank" rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 font-bold text-(--sw-blue)">
+          View on explorer <ExternalLink className="w-3.5 h-3.5" />
+        </a>
+      )}
+    </div>
+  );
+}
+
 function DetailRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
     <div className="flex items-start justify-between gap-3">
-      <span className="text-(--m-muted) shrink-0">{k}</span>
+      <span className="text-(--sw-muted) shrink-0">{k}</span>
       <span className={cn("font-semibold text-right break-all", mono && "font-mono text-xs")}>{v}</span>
     </div>
   );
@@ -185,8 +252,8 @@ export function CopyIcon({ text, label = "Copy" }: { text: string; label?: strin
   const { copied, copy } = useCopy();
   return (
     <button type="button" onClick={(e) => { e.stopPropagation(); copy(text); }} aria-label={label}
-      className={cn("w-8 h-8 rounded-[10px] grid place-items-center transition-colors hover:bg-(--m-tint)",
-        copied ? "text-[#067647] bg-[#ecfdf3]" : "text-(--m-blue)")}>
+      className={cn("w-8 h-8 rounded-[10px] grid place-items-center transition-colors hover:bg-(--sw-tint)",
+        copied ? "text-[#067647] bg-[#ecfdf3]" : "text-(--sw-blue)")}>
       {copied ? <Check className="w-4 h-4" strokeWidth={2.5} /> : <Copy className="w-4 h-4" />}
     </button>
   );
@@ -197,7 +264,7 @@ export function ScreenHeader({ title, onBack, right }: { title: string; onBack?:
     <div className="flex items-center gap-2 px-4 pt-1.5 pb-2.5">
       {onBack && (
         <button type="button" onClick={onBack} aria-label="Back"
-          className="w-10 h-10 rounded-xl border border-(--m-line) bg-white grid place-items-center shrink-0">
+          className="w-10 h-10 rounded-xl border border-(--sw-line) bg-white grid place-items-center shrink-0">
           <ChevronLeft className="w-5 h-5" />
         </button>
       )}
@@ -208,7 +275,7 @@ export function ScreenHeader({ title, onBack, right }: { title: string; onBack?:
 }
 
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cn("bg-white border border-(--m-line) rounded-[22px]", className)}>{children}</div>;
+  return <div className={cn("bg-white border border-(--sw-line) rounded-[22px]", className)}>{children}</div>;
 }
 
 export function Segmented<T extends string>({ options, value, onChange }: {
@@ -217,11 +284,11 @@ export function Segmented<T extends string>({ options, value, onChange }: {
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="flex bg-(--m-line) rounded-xl p-[3px] gap-[3px]" role="tablist">
+    <div className="flex bg-(--sw-line) rounded-xl p-[3px] gap-[3px]" role="tablist">
       {options.map((o) => (
         <button key={o.value} type="button" role="tab" aria-selected={value === o.value} onClick={() => onChange(o.value)}
           className={cn("flex-1 py-2 rounded-[9px] text-[13px] font-bold transition-colors",
-            value === o.value ? "bg-white text-(--m-ink) shadow-sm" : "text-(--m-muted)")}>
+            value === o.value ? "bg-white text-(--sw-ink) shadow-sm" : "text-(--sw-muted)")}>
           {o.label}
         </button>
       ))}
@@ -233,7 +300,7 @@ export function Chip({ active, onClick, children }: { active: boolean; onClick: 
   return (
     <button type="button" onClick={onClick}
       className={cn("px-3 py-[7px] rounded-full text-[13px] font-bold border transition-colors",
-        active ? "bg-(--m-blue) text-white border-(--m-blue)" : "bg-white text-(--m-label) border-(--m-field-line)")}>
+        active ? "bg-(--sw-blue) text-white border-(--sw-blue)" : "bg-white text-(--sw-label) border-(--sw-field-line)")}>
       {children}
     </button>
   );
@@ -243,7 +310,7 @@ export function Field(props: InputHTMLAttributes<HTMLInputElement>) {
   const { className, ...rest } = props;
   return (
     <input {...rest}
-      className={cn("h-[52px] w-full min-w-0 rounded-xl border border-(--m-field-line) bg-(--m-bg) px-3.5 text-[15px] font-medium text-(--m-ink) outline-none placeholder:text-[#9aa4b5] focus:border-(--m-blue) focus:bg-white transition-colors disabled:opacity-60",
+      className={cn("h-[52px] w-full min-w-0 rounded-xl border border-(--sw-field-line) bg-(--sw-bg) px-3.5 text-[15px] font-medium text-(--sw-ink) outline-none placeholder:text-[#9aa4b5] focus:border-(--sw-blue) focus:bg-white transition-colors disabled:opacity-60",
         className)} />
   );
 }
@@ -251,7 +318,7 @@ export function Field(props: InputHTMLAttributes<HTMLInputElement>) {
 export function PrimaryButton({ className, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button {...props}
-      className={cn("h-14 w-full rounded-2xl bg-(--m-blue) text-white text-base font-bold transition active:scale-[.98] hover:bg-(--m-blue-hover) disabled:bg-[#c5ccd8] disabled:active:scale-100 disabled:cursor-not-allowed flex items-center justify-center gap-2",
+      className={cn("h-14 w-full rounded-2xl bg-(--sw-blue) text-white text-base font-bold transition active:scale-[.98] hover:bg-(--sw-blue-hover) disabled:bg-[#c5ccd8] disabled:active:scale-100 disabled:cursor-not-allowed flex items-center justify-center gap-2",
         className)} />
   );
 }
@@ -259,7 +326,7 @@ export function PrimaryButton({ className, ...props }: ButtonHTMLAttributes<HTML
 export function OutlineButton({ className, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button {...props}
-      className={cn("h-[52px] w-full rounded-2xl border border-[#c9d0fd] bg-white text-(--m-blue) text-[15px] font-bold hover:bg-(--m-tint) transition-colors",
+      className={cn("h-[52px] w-full rounded-2xl border border-[#c9d0fd] bg-white text-(--sw-blue) text-[15px] font-bold hover:bg-(--sw-tint) transition-colors",
         className)} />
   );
 }
@@ -269,7 +336,7 @@ export function SummaryRows({ rows, className }: { rows: Array<{ k: string; v: R
     <div className={className}>
       {rows.map((r) => (
         <div key={r.k} className="flex justify-between gap-3 py-2 text-[13px]">
-          <span className="text-(--m-muted)">{r.k}</span>
+          <span className="text-(--sw-muted)">{r.k}</span>
           <span className={cn("font-bold tabular-nums text-right", r.tone === "ok" && "text-[#067647]")}>{r.v}</span>
         </div>
       ))}
@@ -285,8 +352,8 @@ export function MenuGroup({ rows }: { rows: Array<{ k: string; v?: string; onCli
           className={cn("w-full flex items-center gap-2.5 px-[18px] py-[17px] text-left hover:bg-[#f8f9fc] transition-colors",
             i > 0 && "border-t border-[#f0f2f6]")}>
           <span className="flex-1 font-semibold text-base">{r.k}</span>
-          {r.v && <span className="text-[13px] font-medium text-(--m-muted)">{r.v}</span>}
-          <ChevronRight className="w-4 h-4 text-(--m-faint)" />
+          {r.v && <span className="text-[13px] font-medium text-(--sw-muted)">{r.v}</span>}
+          <ChevronRight className="w-4 h-4 text-(--sw-faint)" />
         </button>
       ))}
     </Card>

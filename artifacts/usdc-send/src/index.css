@@ -60,29 +60,29 @@
   }
 }
 
-/* ── Mobile shell (v4) ─────────────────────────────────────────────────────────
-   Scoped to the < lg dashboard. Re-points --primary at the brand blue so the
-   desktop tabs reused inside the shell pick it up too. */
-.sweep-m {
-  --m-blue: #1128f5;
-  --m-blue-hover: #0d20c9;
-  --m-tint: #eef1ff;
-  --m-tint-line: #d6dbfd;
-  --m-ink: #0b1220;
-  --m-muted: #667085;
-  --m-label: #344054;
-  --m-faint: #98a2b3;
-  --m-line: #eceff4;
-  --m-field-line: #e3e7ee;
-  --m-bg: #f6f7fa;
+/* ── Sweep UI (v4 mobile + web dashboard) ──────────────────────────────────────
+   Scoped to the dashboard shells. Re-points --primary at the brand blue so the
+   existing tabs reused inside them pick it up too. */
+.sweep-ui {
+  --sw-blue: #1128f5;
+  --sw-blue-hover: #0d20c9;
+  --sw-tint: #eef1ff;
+  --sw-tint-line: #d6dbfd;
+  --sw-ink: #0b1220;
+  --sw-muted: #667085;
+  --sw-label: #344054;
+  --sw-faint: #98a2b3;
+  --sw-line: #eceff4;
+  --sw-field-line: #e3e7ee;
+  --sw-bg: #f6f7fa;
   --primary: 234 92% 51%;
   --ring: 234 92% 51%;
   font-family: "Plus Jakarta Sans", system-ui, sans-serif;
-  color: var(--m-ink);
-  background: var(--m-bg);
+  color: var(--sw-ink);
+  background: var(--sw-bg);
 }
-.sweep-m :is(h1, h2, h3, h4, h5, h6) { font-family: inherit; }
-.sweep-m ::selection { background: rgb(17 40 245 / 0.18); color: inherit; }
+.sweep-ui :is(h1, h2, h3, h4, h5, h6) { font-family: inherit; }
+.sweep-ui ::selection { background: rgb(17 40 245 / 0.18); color: inherit; }
 
 /* ── Keyframes ──────────────────────────────────────────────────────────────── */
 
