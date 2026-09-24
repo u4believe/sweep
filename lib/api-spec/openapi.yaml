@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Api
   version: 0.1.0
-  description: USDC Send API - Web3 + Web2 hybrid escrow system
+  description: USDC Send API — email-addressed transfers between Sweep balances, backed by USDC
 servers:
   - url: /api
     description: Base API path
@@ -116,7 +116,7 @@ paths:
       operationId: sendUSDC
       tags: [escrow]
       summary: Send USDC to an email address
-      description: Initiates escrow deposit for a recipient email. Returns transaction data to sign on the frontend.
+      description: Sends from the caller's balance to a recipient email. Recorded in the transfer ledger; held as pending until the recipient signs up.
       requestBody:
         required: true
         content:

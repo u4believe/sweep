@@ -76,7 +76,7 @@ const SECTIONS = [
     children: [
       { id: "ref-auth",               label: "Auth Endpoints" },
       { id: "ref-user",               label: "User Endpoints" },
-      { id: "ref-escrow",             label: "Escrow / Send" },
+      { id: "ref-escrow",             label: "Send by Email" },
       { id: "ref-deposit",            label: "Deposit" },
       { id: "ref-withdraw",           label: "Withdraw" },
       { id: "ref-recurring",          label: "Recurring" },
@@ -359,7 +359,7 @@ export default function Docs() {
               <div className="grid sm:grid-cols-2 gap-4 my-6">
                 {[
                   { label: "User Platform",  desc: "Send, receive, and manage USDC from a dashboard" },
-                  { label: "Subscriptions",  desc: "Create and bill recurring plans on-chain" },
+                  { label: "Subscriptions",  desc: "Create plans and bill subscribers automatically" },
                 ].map((card) => (
                   <div key={card.label} className="p-4 rounded-xl border border-border bg-secondary/30">
                     <p className="font-semibold text-foreground text-sm mb-1">{card.label}</p>
@@ -624,7 +624,7 @@ Authorization: Bearer <passport_token>
                   <li>Opens a database transaction with row-level locks on both subscriber and merchant</li>
                   <li>Checks the subscriber has sufficient balance</li>
                   <li>Debits the subscriber and credits the merchant atomically</li>
-                  <li>Inserts an escrow record for auditing</li>
+                  <li>Records the payment in the transfer ledger for auditing</li>
                   <li>Advances <code className="text-xs">nextBillingDate</code> by one interval</li>
                   <li>Fires a webhook event to the merchant's endpoint</li>
                 </ol>
@@ -827,9 +827,9 @@ await resend.emails.send({
                 <Endpoint method="GET"  path="/api/user/balance"  description="Fetch current USDC balance" />
               </SubSection>
 
-              <SubSection id="ref-escrow" title="Escrow / Send">
+              <SubSection id="ref-escrow" title="Send by Email">
                 <Endpoint method="GET"  path="/api/escrow/lookup-recipient" description="Look up a Sweep user by email" />
-                <Endpoint method="POST" path="/api/escrow/send/platform"    description="Send USDC to another Sweep user (off-chain)" />
+                <Endpoint method="POST" path="/api/escrow/send/platform"    description="Send USD to any email — a ledger transfer between Sweep balances, not an on-chain transaction" />
               </SubSection>
 
               <SubSection id="ref-deposit" title="Deposit">

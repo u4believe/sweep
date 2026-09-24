@@ -30,6 +30,15 @@ function Reveal({ children, className, delay = 0, id }: { children: ReactNode; c
   );
 }
 
+/** Small pill that names a page section ("PRODUCT", "WHO IT'S FOR"). */
+function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <span className="self-start text-[11px] font-extrabold tracking-[0.08em] text-(--sw-blue) bg-(--sw-tint) border border-(--sw-tint-line) px-3 py-1.5 rounded-full">
+      {children}
+    </span>
+  );
+}
+
 function Kicker({ children, className }: { children: ReactNode; className?: string }) {
   return <span className={cn("text-xs font-bold tracking-[0.06em] text-(--sw-blue)", className)}>{children}</span>;
 }
@@ -369,100 +378,105 @@ const RECEIVED_SAMPLE = [
 ];
 
 function ProductSection({ isLoggedIn, sender, onSent }: { isLoggedIn: boolean; sender: LandingSender | null; onSent: () => void }) {
-  const card = "rounded-[28px] p-[30px] flex flex-col gap-[18px]";
+  const card = "rounded-[28px] p-7 sm:p-9 lg:p-10 flex flex-col gap-6";
   return (
-    <section id="product" aria-labelledby="product-heading" className="max-w-[1240px] mx-auto px-5 sm:px-7 pt-24 pb-10 scroll-mt-20">
-      <Reveal className="flex flex-wrap items-end gap-5 mb-10">
-        <h2 id="product-heading" className="flex-1 min-w-[300px] font-extrabold text-[clamp(34px,4.4vw,56px)] leading-[1.02] tracking-[-0.045em] text-balance">
-          One balance.<br />Every way to pay.
-        </h2>
-        <p className="max-w-[380px] text-base leading-relaxed text-[#475467]">
-          Everything the dashboard does, on the web or in your pocket — and nothing asks for a seed phrase.
-        </p>
-      </Reveal>
-
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-[18px]">
-        <Reveal id="send" className={cn(card, "bg-(--sw-blue) text-white min-h-[420px] scroll-mt-24")}>
-          <span className="text-xs font-bold tracking-[0.06em] opacity-80">EMAIL · USD</span>
-          <span className="font-extrabold text-[28px] leading-[1.1] tracking-[-0.03em]">Pay anyone by email. They don't need a wallet.</span>
-          <div className="mt-auto"><LandingSend sender={sender} onSent={onSent} /></div>
-        </Reveal>
-
-        <Reveal delay={0.05} className={cn(card, "bg-white border border-(--sw-line) min-h-[420px]")}>
-          <Kicker>HOW IT WORKS</Kicker>
-          <span className="font-extrabold text-[28px] leading-[1.1] tracking-[-0.03em]">Three steps. They only need an email.</span>
-          <ol className="mt-auto flex flex-col gap-4">
-            {STEPS.map((s, i) => (
-              <li key={s.title} className="grid grid-cols-[32px_1fr] gap-3">
-                <span className="w-8 h-8 rounded-full bg-(--sw-tint) text-(--sw-blue) grid place-items-center font-extrabold text-sm">{i + 1}</span>
-                <span className="flex flex-col gap-0.5">
-                  <span className="font-bold text-[15px]">{s.title}</span>
-                  <span className="text-sm leading-relaxed text-(--sw-muted)">{s.desc}</span>
-                </span>
-              </li>
-            ))}
-          </ol>
-          {!isLoggedIn && (
-            <Link href={`${BASE}/register`} className="inline-flex items-center gap-1.5 text-sm font-bold text-(--sw-blue)">
-              Create free account <ArrowRight className="w-4 h-4" aria-hidden />
-            </Link>
-          )}
-        </Reveal>
-
-        <Reveal delay={0.1} className={cn(card, "bg-(--sw-navy) text-white min-h-[420px]")}>
-          <span className="text-xs font-bold tracking-[0.06em] text-(--sw-sky)">WALLET · USDC</span>
-          <span className="font-extrabold text-[28px] leading-[1.1] tracking-[-0.03em]">Withdraw on-chain, fee shown up front.</span>
-          <div className="mt-auto flex flex-col gap-2">
-            {WITHDRAWAL_CHAINS.slice(0, 4).map((c, i) => (
-              <div key={c.key} className={cn("flex justify-between items-center px-3.5 py-3 rounded-[14px] border",
-                i === 1 ? "bg-(--sw-blue) border-(--sw-blue)" : "bg-(--sw-navy-card) border-(--sw-navy-line)")}>
-                <span className="font-bold text-sm">{c.label}</span>
-                <span className={cn("text-[13px]", i === 1 ? "text-[#dfe4ff]" : "text-(--sw-faint)")}>
-                  min {fmtUsd(c.minWithdrawal).replace(".00", "")} · fee {fmtUsd(c.platformFee)}
-                </span>
-              </div>
-            ))}
+    <section id="product" aria-labelledby="product-heading" className="bg-white border-b border-(--sw-line) scroll-mt-16">
+      <div className="max-w-[1240px] mx-auto px-5 sm:px-7 pt-24 pb-28">
+        <Reveal className="flex flex-wrap items-end gap-x-10 gap-y-5 mb-14">
+          <div className="flex-1 min-w-[300px] flex flex-col gap-5">
+            <SectionLabel>PRODUCT</SectionLabel>
+            <h2 id="product-heading" className="font-extrabold text-[clamp(34px,4.4vw,56px)] leading-[1.02] tracking-[-0.045em] text-balance">
+              One balance.<br />Every way to pay.
+            </h2>
           </div>
+          <p className="max-w-[380px] text-base leading-relaxed text-[#475467]">
+            Everything the dashboard does, on the web or in your pocket — and nothing asks for a seed phrase.
+          </p>
         </Reveal>
 
-        <Reveal className={cn(card, "bg-white border border-(--sw-line) min-h-[360px]")}>
-          <Kicker>RECURRING</Kicker>
-          <span className="font-extrabold text-[28px] leading-[1.1] tracking-[-0.03em]">Rent, allowance, payroll — on autopilot.</span>
-          <div className="mt-auto border border-(--sw-line) rounded-[18px] overflow-hidden">
-            {RECURRING_SAMPLE.map(([to, amt, when], i) => (
-              <div key={to} className={cn("grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 px-4 py-3", i > 0 && "border-t border-[#f0f2f6]")}>
-                <span className="font-bold text-sm truncate">{to}</span><span className="font-bold text-sm">{amt}</span>
-                <span className="text-xs text-(--sw-muted)">{when}</span><span className="text-xs font-bold text-[#067647] justify-self-end">Active</span>
-              </div>
-            ))}
-          </div>
-        </Reveal>
+        <div className="grid md:grid-cols-2 gap-6">
+          <Reveal id="send" className={cn(card, "bg-(--sw-blue) text-white scroll-mt-24")}>
+            <span className="text-xs font-bold tracking-[0.06em] opacity-80">EMAIL · USD</span>
+            <span className="font-extrabold text-[28px] leading-[1.1] tracking-[-0.03em]">Pay anyone by email. They don't need a wallet.</span>
+            <div className="mt-auto"><LandingSend sender={sender} onSent={onSent} /></div>
+          </Reveal>
 
-        <Reveal delay={0.05} className={cn(card, "bg-(--sw-tint) border border-(--sw-tint-line) min-h-[360px] md:col-span-2")}>
-          <div className="grid sm:grid-cols-2 gap-7 items-end h-full">
-            <div className="flex flex-col gap-3.5">
-              <Kicker>SUBSCRIPTIONS & PAYMENTS</Kicker>
-              <span className="font-extrabold text-[32px] leading-[1.08] tracking-[-0.035em]">Get paid like a business.</span>
-              <span className="text-[15px] leading-relaxed text-[#475467] max-w-[380px]">
-                Create weekly, monthly or yearly plans, share one merchant link, and subscribers are billed automatically — with email receipts and a live subscriber list.
-              </span>
+          <Reveal delay={0.05} className={cn(card, "bg-(--sw-bg)")}>
+            <Kicker>HOW IT WORKS</Kicker>
+            <span className="font-extrabold text-[28px] leading-[1.1] tracking-[-0.03em]">Three steps. They only need an email.</span>
+            <ol className="mt-auto flex flex-col gap-5">
+              {STEPS.map((s, i) => (
+                <li key={s.title} className="grid grid-cols-[32px_1fr] gap-3">
+                  <span className="w-8 h-8 rounded-full bg-(--sw-tint) text-(--sw-blue) grid place-items-center font-extrabold text-sm">{i + 1}</span>
+                  <span className="flex flex-col gap-0.5">
+                    <span className="font-bold text-[15px]">{s.title}</span>
+                    <span className="text-sm leading-relaxed text-(--sw-muted)">{s.desc}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+            {!isLoggedIn && (
+              <Link href={`${BASE}/register`} className="inline-flex items-center gap-1.5 text-sm font-bold text-(--sw-blue)">
+                Create free account <ArrowRight className="w-4 h-4" aria-hidden />
+              </Link>
+            )}
+          </Reveal>
+
+          <Reveal className={cn(card, "bg-(--sw-navy) text-white")}>
+            <span className="text-xs font-bold tracking-[0.06em] text-(--sw-sky)">WALLET · USDC</span>
+            <span className="font-extrabold text-[28px] leading-[1.1] tracking-[-0.03em]">Withdraw on-chain, fee shown up front.</span>
+            <div className="mt-auto flex flex-col gap-2.5">
+              {WITHDRAWAL_CHAINS.slice(0, 4).map((c, i) => (
+                <div key={c.key} className={cn("flex justify-between items-center px-3.5 py-3 rounded-[14px] border",
+                  i === 1 ? "bg-(--sw-blue) border-(--sw-blue)" : "bg-(--sw-navy-card) border-(--sw-navy-line)")}>
+                  <span className="font-bold text-sm">{c.label}</span>
+                  <span className={cn("text-[13px]", i === 1 ? "text-[#dfe4ff]" : "text-(--sw-faint)")}>
+                    min {fmtUsd(c.minWithdrawal).replace(".00", "")} · fee {fmtUsd(c.platformFee)}
+                  </span>
+                </div>
+              ))}
             </div>
-            <div className="flex flex-col gap-2.5" aria-label="Example subscription payments">
-              <div className="bg-(--sw-blue) text-white rounded-2xl px-4 py-3.5 flex justify-between items-center gap-3">
-                <span className="font-bold text-sm truncate">sweep/subscribe/7K2Q-M4XA-9TD3</span>
-                <span className="text-xs font-bold bg-white text-(--sw-blue) px-2.5 py-[5px] rounded-full shrink-0">Copy</span>
+          </Reveal>
+
+          <Reveal delay={0.05} className={cn(card, "bg-(--sw-bg)")}>
+            <Kicker>RECURRING</Kicker>
+            <span className="font-extrabold text-[28px] leading-[1.1] tracking-[-0.03em]">Rent, allowance, payroll — on autopilot.</span>
+            <div className="mt-auto bg-white border border-(--sw-line) rounded-[18px] overflow-hidden">
+              {RECURRING_SAMPLE.map(([to, amt, when], i) => (
+                <div key={to} className={cn("grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 px-5 py-3.5", i > 0 && "border-t border-[#f0f2f6]")}>
+                  <span className="font-bold text-sm truncate">{to}</span><span className="font-bold text-sm">{amt}</span>
+                  <span className="text-xs text-(--sw-muted)">{when}</span><span className="text-xs font-bold text-[#067647] justify-self-end">Active</span>
+                </div>
+              ))}
+            </div>
+          </Reveal>
+
+          <Reveal className={cn(card, "bg-(--sw-tint) border border-(--sw-tint-line) md:col-span-2")}>
+            <div className="grid lg:grid-cols-2 gap-8 lg:gap-12 items-end h-full">
+              <div className="flex flex-col gap-3.5 min-w-0">
+                <Kicker>SUBSCRIPTIONS & PAYMENTS</Kicker>
+                <span className="font-extrabold text-[32px] leading-[1.08] tracking-[-0.035em]">Get paid like a business.</span>
+                <span className="text-[15px] leading-relaxed text-[#475467] max-w-[380px]">
+                  Create weekly, monthly or yearly plans, share one merchant link, and subscribers are billed automatically — with email receipts and a live subscriber list.
+                </span>
               </div>
-              <div className="bg-white rounded-2xl overflow-hidden">
-                {RECEIVED_SAMPLE.map(([from, note, amt], i) => (
-                  <div key={from} className={cn("flex justify-between px-4 py-3 text-sm", i > 0 && "border-t border-[#f0f2f6]")}>
-                    <span className="flex flex-col"><span className="font-bold">{from}</span><span className="text-xs text-(--sw-muted)">{note}</span></span>
-                    <span className="font-bold text-[#067647]">{amt}</span>
-                  </div>
-                ))}
+              <div className="flex flex-col gap-2.5 min-w-0" aria-label="Example subscription payments">
+                <div className="bg-(--sw-blue) text-white rounded-2xl px-4 py-3.5 flex justify-between items-center gap-3">
+                  <span className="font-bold text-sm truncate">sweep/subscribe/7K2Q-M4XA-9TD3</span>
+                  <span className="text-xs font-bold bg-white text-(--sw-blue) px-2.5 py-[5px] rounded-full shrink-0">Copy</span>
+                </div>
+                <div className="bg-white rounded-2xl overflow-hidden">
+                  {RECEIVED_SAMPLE.map(([from, note, amt], i) => (
+                    <div key={from} className={cn("flex justify-between px-5 py-3.5 text-sm", i > 0 && "border-t border-[#f0f2f6]")}>
+                      <span className="flex flex-col"><span className="font-bold">{from}</span><span className="text-xs text-(--sw-muted)">{note}</span></span>
+                      <span className="font-bold text-[#067647]">{amt}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
-        </Reveal>
+          </Reveal>
+        </div>
       </div>
     </section>
   );
@@ -484,22 +498,24 @@ const USE_CASES = [
   {
     audience: "BUSINESSES & TEAMS",
     headline: "Cross-border payroll without the complexity.",
-    points: ["Send to multiple recipients by email", "On-chain records for full auditability", "No correspondent banks or SWIFT delays", "Recurring transfers for regular payouts"],
+    points: ["Send to multiple recipients by email", "A full history of every payment in one place", "No correspondent banks or SWIFT delays", "Recurring transfers for regular payouts"],
   },
 ];
 
 function UseCasesSection() {
   return (
-    <section id="use-cases" aria-labelledby="uc-heading" className="max-w-[1240px] mx-auto px-5 sm:px-7 pt-14 pb-10 scroll-mt-20">
-      <Reveal className="mb-8">
+    <section id="use-cases" aria-labelledby="uc-heading" className="max-w-[1240px] mx-auto px-5 sm:px-7 pt-24 pb-10 scroll-mt-20">
+      <Reveal className="flex flex-col gap-5 mb-12">
+        <SectionLabel>WHO IT'S FOR</SectionLabel>
         <h2 id="uc-heading" className="font-extrabold text-[clamp(30px,3.6vw,44px)] leading-[1.05] tracking-[-0.04em]">Built for everyone who gets paid.</h2>
+        <p className="max-w-[520px] text-base leading-relaxed text-[#475467]">The same balance, used three ways — pick the one that sounds like you.</p>
       </Reveal>
-      <div className="grid md:grid-cols-3 gap-[18px]">
+      <div className="grid md:grid-cols-3 gap-6">
         {USE_CASES.map((uc, i) => (
-          <Reveal key={uc.audience} delay={i * 0.06} className="bg-white border border-(--sw-line) rounded-[24px] p-[26px] flex flex-col gap-3.5">
+          <Reveal key={uc.audience} delay={i * 0.06} className="bg-white border border-(--sw-line) rounded-[24px] p-7 lg:p-8 flex flex-col gap-4">
             <Kicker>{uc.audience}</Kicker>
             <span className="font-extrabold text-[22px] leading-[1.15] tracking-[-0.02em]">{uc.headline}</span>
-            <ul className="flex flex-col gap-2.5 mt-1">
+            <ul className="flex flex-col gap-3 mt-1">
               {uc.points.map((pt) => (
                 <li key={pt} className="flex items-start gap-2.5 text-sm text-[#475467]">
                   <CheckCircle2 className="w-4 h-4 text-[#067647] shrink-0 mt-0.5" aria-hidden /> <span>{pt}</span>
@@ -543,10 +559,8 @@ function NetworksSection() {
 
 const TRUST_POINTS = [
   { title: "Circle-verified infrastructure", desc: "Wallets are powered by Circle's developer-controlled wallet API." },
-  { title: "Smart contract escrow",          desc: "Transfers are locked on-chain and can only be released to the verified recipient — no middlemen." },
-  { title: "On-chain auditability",          desc: "Every transfer creates an immutable on-chain record anyone can verify on the explorer." },
-  { title: "Email-hash privacy",             desc: "Recipient emails are stored as cryptographic hashes on-chain — never exposed in plaintext." },
-  { title: "Non-custodial by default",       desc: "Your private keys are never held by us. Wallets are managed by Circle developer-controlled wallets, so no private key is needed and you own your funds." },
+  { title: "Verifiable deposits & withdrawals", desc: "Every deposit and withdrawal is a real USDC transaction you can check on the network's block explorer." },
+  { title: "Keys secured by Circle",        desc: "Sweep never stores private keys — wallets and signing run on Circle's developer-controlled wallet infrastructure, and every balance is backed 1:1 by USDC in the Sweep treasury." },
 ];
 
 function SecuritySection() {
@@ -585,7 +599,7 @@ function SecuritySection() {
           </Reveal>
         </div>
 
-        <Reveal className="mt-12 grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <Reveal className="mt-12 grid sm:grid-cols-3 gap-4">
           {TRUST_POINTS.map((tp) => (
             <div key={tp.title} className="rounded-2xl border border-white/10 bg-white/[.03] p-5">
               <h3 className="text-sm font-bold mb-1.5">{tp.title}</h3>

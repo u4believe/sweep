@@ -1,6 +1,6 @@
 # Sweep — Web3‑Fiat Stablecoin Payments
 
-> Send USDC is a web3-fiat stablecoin payment that allows it's users to send USD to each other by a **email address** — no wallet, no seed phrase, no gas for the sender, backed by the stablecoin reserve in the Sweep treasury, while still allowing users to send USDC to other External Own Wallets.
+> Sweep is a Web3-fiat payments app that lets people send USD to each other by **email address** — no wallet, no seed phrase, no gas for the sender. Every balance is backed 1:1 by USDC held in the Sweep treasury, and users can also withdraw USDC to any external wallet on a supported chain.
 > Built on **Circle's Developer‑Controlled Wallets**, **Gateway**, and **Gas Station**.
 
 This repository is a **pnpm monorepo** containing the full Sweep platform: an Express API server, a React single‑page app, and shared TypeScript libraries (database, validation, generated API client).
@@ -81,9 +81,9 @@ Web3-Fiat-Arc/
 | Backend | **Express 5**, TypeScript, esbuild bundle, Pino logging |
 | Frontend | **React 19**, **Vite 7**, Tailwind CSS 4, Radix UI, TanStack Query, Wouter, Framer Motion |
 | Database | **PostgreSQL** (Supabase) via **Drizzle ORM** (`node-postgres`) |
-| Auth & security | JWT, bcrypt, Helmet, express‑rate‑limit, custom threat monitor, email OTP 2FA |
+| Auth & security | JWT sessions, bcrypt, email OTP on login, optional authenticator‑app 2FA (TOTP), Google Sign‑In, Cloudflare Turnstile, Helmet, custom threat monitor |
 | Web3 / payments | **Circle DCW SDK**, **Circle App Kit**, **Gateway**, **Gas Station**, viem, ethers, @solana/web3.js |
-| Email | Resend and/or SMTP (Brevo/Gmail) |
+| Email | Resend, Brevo or SMTP, tried in that order (falls back to logging emails to the console when none is set) |
 | Hosting | Railway (API + static frontend), Vercel (frontend), Supabase (DB) |
 
 ---
@@ -141,20 +141,21 @@ Create **`artifacts/api-server/.env`**. **Never commit this file** — `.env` an
 | `PASSPORT_SECRET` | Random string, **min 32 chars**. Signs Sweep Passport tokens |
 | `CIRCLE_API_KEY` | Circle Developer API key (sandbox or production) |
 | `CIRCLE_WEBHOOK_SECRET` | Secret used to verify Circle webhook signatures |
-| `ADMIN_SECRET` | Random string, **min 20 chars**. Guards `/api/admin/*` routes |
+| `ADMIN_SECRET` | Random string, **min 20 chars**. Guards `/api/admin/*` routes (sent as `Authorization: Bearer …`) |
+| `PORT` | Port the API listens on (e.g. `3001`). There is no default — the server exits if it's missing |
 
 ### Circle — wallets, gateway & gas
 
 | Variable | Notes |
 |----------|-------|
 | `CIRCLE_API_BASE_URL` | `https://api-sandbox.circle.com` (sandbox) or production base |
-| `CIRCLE_ENTITY_SECRET` | Your Circle entity secret (raw) — used to sign DCW operations |
-| `CIRCLE_ENTITY_SECRET_CIPHERTEXT` | Encrypted entity secret registered with Circle |
+| `CIRCLE_ENTITY_SECRET` | Your Circle entity secret — used to sign DCW operations |
 | `CIRCLE_WALLET_SET_ID` | The DCW wallet set new user wallets are created under |
 | `CIRCLE_PLATFORM_WALLET_ID` / `CIRCLE_PLATFORM_WALLET_ADDRESS` | Default treasury wallet id/address |
-| `CIRCLE_PLATFORM_WALLET_ID_ARC_TESTNET` … `_BASE_SEPOLIA`, `_ARB_SEPOLIA`, `_OP_SEPOLIA`, `_MATIC_AMOY`, `_AVAX_FUJI`, `_ETH_SEPOLIA`, `_SOL` | Per‑chain treasury wallet ids |
+| `CIRCLE_PLATFORM_WALLET_ID_ARC_TESTNET` … `_BASE_SEPOLIA`, `_ARB_SEPOLIA`, `_OP_SEPOLIA`, `_MATIC_AMOY`, `_AVAX_FUJI`, `_SOL` | Per‑chain treasury wallet ids (or set them all at once as JSON in `CIRCLE_PLATFORM_WALLET_IDS_JSON`) |
 | `CIRCLE_PLATFORM_WALLET_ADDRESS_ARC_TESTNET` / `_SOL` | Per‑chain treasury addresses |
-| `CIRCLE_ARC_TESTNET_USDC_TOKEN_ID` | Circle token id for USDC on Arc |
+| `CIRCLE_ARC_TESTNET_USDC_TOKEN_ID`, `CIRCLE_BASE_SEPOLIA_USDC_TOKEN_ID` | Circle token ids for USDC on Arc / Base |
+| `CIRCLE_MASTER_WALLET_ID` | Circle wallet used as the source for bank (wire) withdrawals |
 | `CIRCLE_GATEWAY_SIGNER_WALLET_ID` / `CIRCLE_GATEWAY_SIGNER_ADDRESS` | EOA delegate that signs Gateway burn intents (see Circle section) |
 | `CIRCLE_GAS_STATION_ENABLED` | `true` to let Gas Station sponsor sweep/withdrawal gas |
 
@@ -162,35 +163,43 @@ Create **`artifacts/api-server/.env`**. **Never commit this file** — `.env` an
 
 | Variable | Notes |
 |----------|-------|
-| `ARC_RPC_URL`, `BASE_SEPOLIA_RPC_URL` | RPC endpoints |
-| `ARC_USDC_ADDRESS`, `BASE_USDC_ADDRESS`, `HYPEREVM_USDC_ADDRESS` | USDC contract addresses |
-| `ARC_TESTNET_CHAIN_ID` | Arc testnet chain id |
-| `ESCROW_CONTRACT_ADDRESS` | Email‑hash escrow contract address |
+| `ARC_RPC_URL`, `BASE_SEPOLIA_RPC_URL`, `SOLANA_RPC_URL` | RPC endpoints (sensible testnet defaults are built in) |
+| `ARC_USDC_ADDRESS`, `BASE_USDC_ADDRESS`, `HYPEREVM_USDC_ADDRESS` | USDC contract addresses (defaults built in) |
 
 ### Auth, email & app
 
 | Variable | Notes |
 |----------|-------|
-| `SESSION_SECRET` | Session signing secret |
-| `DEVELOPER_JWT_SECRET`, `DEV_JWT_SECRET` | Sign developer/API‑key tokens for the `/v1` platform |
+| `GOOGLE_CLIENT_ID` | Optional. OAuth "Web application" client ID — enables **Sign in with Google** (the button stays hidden until set) |
+| `TOTP_ENCRYPTION_KEY` | Random string, **min 32 chars**. Encrypts users' authenticator‑app secrets — authenticator 2FA is unavailable until set. Never change it once users have enabled 2FA |
+| `TURNSTILE_SECRET_KEY` | Optional. Cloudflare Turnstile secret — bot check on sign‑up and password reset (skipped when unset) |
 | `RESEND_API_KEY`, `RESEND_FROM` | Resend transactional email |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | SMTP fallback (use port **587** on WSL2/most hosts) |
 | `BREVO_API_KEY`, `BREVO_FROM` | Optional Brevo email |
 | `APP_URL`, `FRONTEND_URL` | Public URLs (used in emails, links, CORS) |
-| `PORT` | API port (default `3001`) |
 | `ALLOWED_ORIGINS` | Comma‑separated CORS allow‑list in production |
+| `LOG_LEVEL` | Optional Pino log level (default `info`) |
 
-> Generate strong secrets with: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+**Frontend** (`artifacts/usdc-send`, build‑time — these end up in the browser, so they must never be secrets):
+
+| Variable | Notes |
+|----------|-------|
+| `VITE_API_URL` | API base URL when the frontend is hosted separately (leave empty when the API serves the frontend) |
+| `VITE_TURNSTILE_SITE_KEY` | Cloudflare Turnstile site key (pairs with `TURNSTILE_SECRET_KEY`) |
+| `VITE_UMAMI_SRC`, `VITE_UMAMI_WEBSITE_ID`, `VITE_UMAMI_HOST_URL` | Optional Umami analytics |
+
+> Generate strong secrets with: `openssl rand -hex 32` or `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
 
 ---
 
 ## Database setup
 
-The schema lives in [`schema.sql`](./schema.sql). It defines: `users`, `otp_codes`, `escrows`, `escrow_balances`, `deposits`, `withdrawals`, `virtual_accounts`, `chain_transactions`, `claim_nonces`, `indexer_state`, `recurring_transfers`, and subscription tables.
+The source of truth for the schema is the Drizzle definitions in [`lib/db/src/schema`](./lib/db/src/schema) (22 tables).
 
-1. Open your Supabase project → **SQL Editor**.
-2. Paste the contents of `schema.sql` and **Run**. It is idempotent (`CREATE TABLE IF NOT EXISTS`, partial unique indexes, safe `ALTER`s), so it is safe to re‑run.
-3. On every server start, `runStartupMigrations()` (from `@workspace/db`) re‑applies idempotent indexes (e.g. the double‑deposit guard) before any worker runs.
+[`schema.sql`](./schema.sql) covers only the **core** tables — `users`, `otp_codes`, `escrows` (the email‑transfer ledger), `escrow_balances`, `deposits`, `withdrawals`, `virtual_accounts`, `chain_transactions`, `claim_nonces`, `indexer_state` and `recurring_transfers`. It does **not** include the subscription, developer‑API (`developers`, `developer_api_keys`, `webhook_endpoints`, `webhook_events`) or `subscription_payments` tables.
+
+1. Create the full schema from the Drizzle definitions: `pnpm --filter @workspace/db push` (reads `DATABASE_URL` from the repo‑root `.env`). Alternatively run `schema.sql` in the Supabase SQL editor for the core tables and create the rest from the Drizzle schema.
+2. On every server start, `runStartupMigrations()` (from `@workspace/db`) adds newer `users` columns (login lockout, Google sign‑in, authenticator 2FA) and re‑applies the idempotent unique indexes that guard against double deposits, before any worker runs.
 
 The DB is accessed through Drizzle ORM over a `node-postgres` pool (`lib/db/src/index.ts`, `max: 8` connections).
 
@@ -233,20 +242,19 @@ Sweep uses Circle's stack so that **no private keys ever live on the server** �
 
 | Product | Purpose in Sweep |
 |---------|------------------|
-| **Developer‑Controlled Wallets (DCW)** | One SCA wallet per user (shared address across EVM chains) + a Solana wallet. Server signs via entity secret. |
+| **Developer‑Controlled Wallets (DCW)** | One SCA wallet per user across the EVM chains (shared address) plus a separate Solana EOA wallet. Transactions are signed through Circle using the entity secret. |
 | **Gateway** | Unified USDC balance across chains; cross‑chain withdrawals via signed burn intents. |
 | **Gas Station** | Sponsors gas for sweep/withdrawal transactions so users (and senders) pay no gas. |
-| **Circle Wire / Mint** | Fiat on‑ramp: per‑user wire bank accounts and deposit instructions. |
+| **Circle Wire / Mint** | Bank **withdrawals** via Circle wire payouts (`/api/withdraw/fiat`). Wire **deposits** are implemented in the API (per‑user wire accounts and instructions) but not yet exposed in the app, which shows bank deposits as *coming soon*. |
 | **Webhooks** | Notify the server of deposits/transfers so balances are credited. |
 
 ### One‑time setup
 
-**1. Create an API key and entity secret.** In the [Circle console](https://console.circle.com) create a (sandbox) API key. Generate an entity secret and register its ciphertext with Circle. Set:
+**1. Create an API key and entity secret.** In the [Circle console](https://console.circle.com) create a (sandbox) API key, then generate an entity secret and register it with Circle. Set:
 
 ```
 CIRCLE_API_KEY=...
 CIRCLE_ENTITY_SECRET=...
-CIRCLE_ENTITY_SECRET_CIPHERTEXT=...
 CIRCLE_API_BASE_URL=https://api-sandbox.circle.com
 ```
 
@@ -261,26 +269,28 @@ CIRCLE_API_BASE_URL=https://api-sandbox.circle.com
 ```bash
 # One-time, after the server is running and admin secret is set:
 curl -X POST https://<your-host>/api/admin/setup-gateway-delegate \
-  -H "x-admin-secret: $ADMIN_SECRET"
+  -H "Authorization: Bearer $ADMIN_SECRET"
 ```
 
 This creates the EOA signer and submits `addDelegate` on all Gateway‑supported chains. Save the returned wallet id/address into `CIRCLE_GATEWAY_SIGNER_WALLET_ID` / `CIRCLE_GATEWAY_SIGNER_ADDRESS` and restart. The server also calls `provisionGatewayDelegate()` at startup (idempotent, non‑fatal).
 
 **5. Enable Gas Station.** Set `CIRCLE_GAS_STATION_ENABLED=true`. At startup `probeGasStationStatus()` checks that sponsorship is active.
 
-**6. Register the webhook.** Point Circle webhooks at `POST /api/deposit/circle/webhook` and set `CIRCLE_WEBHOOK_SECRET`. The raw request body is captured in `app.ts` so the HMAC signature can be verified before the JSON is trusted. `ensureCircleWebhookSubscription()` can register the subscription for you.
+**6. Register the webhook.** In the Circle console, point webhooks at `https://<your-host>/api/deposit/circle/webhook?token=<CIRCLE_WEBHOOK_SECRET>`. The server rejects notifications whose `token` doesn't match `CIRCLE_WEBHOOK_SECRET`. (`circle.ts` also exports `ensureCircleWebhookSubscription()`, but it isn't called automatically.)
 
 ### How the money flows
 
-**User onboarding →** on registration the server calls `createUserCircleWallet()` → `client.createWallets({ accountType: "SCA", … })`. EVM chains share a single on‑chain address; a separate Solana wallet is provisioned. Wallet ids/addresses are stored on the `users` row. `ensureAllChainWallets()` backfills any missing chains.
+**User onboarding →** on registration (email or Google) the server calls `createUserCircleWallet()`, which creates an SCA wallet across the EVM chains (one shared address) and a separate Solana EOA wallet. Wallet ids/addresses are stored on the `users` row. `ensureAllChainWallets()` backfills any missing chains.
 
 **Deposit (crypto) →** the user sends USDC to their wallet on any supported chain. The **deposit indexer** detects it, records a `deposits` row (with unique indexes preventing double‑credits), then **sweeps** it to the treasury with `sweepUsdcToPlatformWallet()`. Deposits consolidate into the Arc treasury, where the user's spendable balance lives.
 
-**Deposit (fiat / wire) →** `createCircleWireBankAccount()` + `getCircleWireDepositInstructions()` give the user bank details; Circle mints USDC on receipt and fires a webhook that credits the balance.
+**Deposit (fiat / wire) →** *implemented in the API, not yet enabled in the app.* `createCircleWireBankAccount()` + `getCircleWireDepositInstructions()` produce bank details; Circle mints USDC on receipt and a `payments` webhook credits the balance.
 
-**Send by email →** the sender's balance is debited and funds are locked in the email‑hash escrow (`escrows`); only the verified owner of that email can claim them.
+**Send by email →** a ledger transfer between Sweep balances (no on-chain transaction): the sender's balance is debited and a transfer record is written to `escrows`. If the recipient already has an account they're credited immediately; otherwise the transfer stays pending and is credited when they sign up with that email.
 
-**Withdrawal →** `directWalletTransfer()` / `circleTransferUsdc()` pays from the Arc treasury when it holds balance on the destination; otherwise a **Gateway** cross‑chain withdrawal is performed via a signed burn intent (`gatewaySweep.ts`). A flat per‑chain platform fee (see `gatewayConfig.ts`) is deducted.
+**Withdrawal (crypto) →** `directWalletTransfer()` / `circleTransferUsdc()` pays from the treasury when it holds balance on the destination chain; otherwise a **Gateway** cross‑chain withdrawal is performed via a signed burn intent (`gatewaySweep.ts`). A flat per‑chain platform fee (see `gatewayConfig.ts`) is deducted, and the balance is refunded if the transfer fails.
+
+**Withdrawal (bank) →** a Circle wire payout to the user's bank account; the balance is refunded if the payout can't be initiated.
 
 All chain identifiers, USDC addresses, Gateway contract addresses, fees, and min‑withdrawal rules are centralized in **`gatewayConfig.ts`** — add or toggle a chain there.
 
@@ -293,13 +303,13 @@ Started in `src/index.ts` after migrations, stopped on graceful shutdown:
 | Worker | Responsibility |
 |--------|----------------|
 | `depositIndexer` | Scan chains for incoming USDC deposits and credit/sweep them |
-| `arcDepositWorker` | Handle Arc‑specific deposit/bridge settlement |
+| `arcDepositWorker` | Poll each user's Arc wallet for USDC deposits the global indexer can miss, credit them, and sweep them to the treasury |
 | `sweepReconciliationWorker` | Reconcile in‑flight sweeps to the treasury |
 | `withdrawalReconciliationWorker` | Reconcile pending withdrawals |
 | `recurringWorker` | Execute scheduled recurring transfers |
 | `subscriptionBillingWorker` | Charge active subscriptions on their billing cycle |
 | `webhookDelivery` | Deliver HMAC‑signed webhooks to developer endpoints with retries |
-| `otpCleanupWorker` | Expire/clean up used OTP codes |
+| `otpCleanupWorker` | Delete expired and used OTP codes |
 
 ---
 
@@ -360,12 +370,12 @@ Provision Postgres, run `schema.sql`, and use the connection string as `DATABASE
 
 ## Security notes
 
-- **No private keys on the server** — all on‑chain signing goes through Circle DCW (entity secret).
-- **Secrets stay server‑side.** Anything exposed to the browser must be a `VITE_*` variable and is therefore public — never put Circle keys, JWT secrets, or `DATABASE_URL` there.
-- **`.env` is git‑ignored.** Commit only `.env.example` with placeholder keys.
-- Layered account security: email‑OTP 2FA, a separate transaction password, bcrypt password hashing, email‑hash privacy (recipient emails stored on‑chain only as hashes).
-- Transport & abuse protection: forced HTTPS + HSTS, Helmet headers, strict CORS, rate limiting, and a progressive IP threat monitor.
-- Webhook integrity: Circle and outbound developer webhooks are HMAC‑verified against the raw request body.
+- **No private keys on the server** — on‑chain signing goes through Circle Developer‑Controlled Wallets using the entity secret. Sweep is custodial: user balances are held in the Sweep treasury and backed 1:1 by USDC.
+- **Secrets stay server‑side.** Anything exposed to the browser must be a `VITE_*` variable and is therefore public — never put Circle keys, JWT secrets, `TOTP_ENCRYPTION_KEY` or `DATABASE_URL` there. `.env` is git‑ignored; commit only `.env.example`.
+- **Account security** — bcrypt‑hashed passwords, an email code on every password login, optional authenticator‑app 2FA (secrets encrypted at rest), Google Sign‑In, lockout after repeated failed logins, a separate transaction password for every send, and a Personal Authorization Key for sensitive account changes.
+- **Money movement** — balance changes are atomic database updates, and unique constraints plus reconciliation workers guard against double credits and double spends.
+- **Transport & abuse protection** — HTTPS redirect and HSTS in production, Helmet headers, a CORS allow‑list, rate limiting on withdrawals, a progressive IP threat monitor, and an optional Cloudflare Turnstile check on sign‑up and password reset.
+- **Webhooks** — incoming Circle webhooks must carry the shared secret token; outbound developer webhooks are HMAC‑SHA256 signed. Developer API keys are stored only as SHA‑256 hashes.
 
 ---
 

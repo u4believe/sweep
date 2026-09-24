@@ -261,7 +261,9 @@ function BalanceCard({ balance, onSweep, onAddMoney }: {
             className="relative overflow-hidden">
             <div className="mb-5 border-t border-white/20 pt-3 space-y-1.5 text-sm">
               <div className="flex justify-between"><span className="opacity-75">Credited balance · available</span><span className="font-bold tabular-nums">{hidden ? "••••" : fmtUsd(balance?.claimedBalance ?? 0)}</span></div>
-              <div className="flex justify-between"><span className="opacity-75">On-chain escrow</span><span className="font-bold tabular-nums">{hidden ? "••••" : fmtUsd(balance?.onChainUsdcBalance ?? 0)}</span></div>
+              {parseFloat(balance?.onChainUsdcBalance ?? "0") > 0 && (
+                <div className="flex justify-between"><span className="opacity-75">Other balance</span><span className="font-bold tabular-nums">{hidden ? "••••" : fmtUsd(balance?.onChainUsdcBalance ?? 0)}</span></div>
+              )}
             </div>
           </motion.div>
         )}
