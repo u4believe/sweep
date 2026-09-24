@@ -153,6 +153,7 @@ Create **`artifacts/api-server/.env`**. **Never commit this file** — `.env` an
 | `CIRCLE_WALLET_SET_ID` | The DCW wallet set new user wallets are created under |
 | `CIRCLE_PLATFORM_WALLET_ID` / `CIRCLE_PLATFORM_WALLET_ADDRESS` | Default treasury wallet id/address |
 | `CIRCLE_PLATFORM_WALLET_ID_ARC_TESTNET` … `_BASE_SEPOLIA`, `_ARB_SEPOLIA`, `_OP_SEPOLIA`, `_MATIC_AMOY`, `_AVAX_FUJI`, `_SOL` | Per‑chain treasury wallet ids (or set them all at once as JSON in `CIRCLE_PLATFORM_WALLET_IDS_JSON`) |
+| `CIRCLE_PLATFORM_WALLET_ID_ETH_SEPOLIA`, `_UNICHAIN_SEPOLIA`, `_MONAD_TESTNET` | Read by `scripts/provision-treasury-wallets.mjs`, which creates any missing treasury wallets and skips chains that already have an id set |
 | `CIRCLE_PLATFORM_WALLET_ADDRESS_ARC_TESTNET` / `_SOL` | Per‑chain treasury addresses |
 | `CIRCLE_ARC_TESTNET_USDC_TOKEN_ID`, `CIRCLE_BASE_SEPOLIA_USDC_TOKEN_ID` | Circle token ids for USDC on Arc / Base |
 | `CIRCLE_MASTER_WALLET_ID` | Circle wallet used as the source for bank (wire) withdrawals |
