@@ -496,14 +496,17 @@ Authorization: Bearer <token>
 
               <SubSection id="send-usdc" title="Send USDC On-Chain">
                 <p className="text-muted-foreground text-sm leading-relaxed mb-3">
-                  For on-chain transfers, Sweep initiates a Circle DCW transfer from the platform treasury
-                  to the recipient's specified wallet address. This creates an on-chain transaction on Arc Testnet.
+                  Sending USDC to an external wallet is an on-chain withdrawal on whichever supported chain the
+                  recipient chooses — there is no single home chain. Every chain has its own Sweep treasury wallet, and
+                  on-chain funds are pooled in Circle Gateway's <strong className="text-foreground">unified balance</strong>,
+                  so a user can deposit on one chain and withdraw on another. See <strong className="text-foreground">Withdraw</strong> below.
                 </p>
-                <CodeBlock language="json">{`POST /api/escrow/send/platform
+                <CodeBlock language="json">{`POST /api/withdraw/crypto
+Authorization: Bearer <token>
 {
-  "recipientWallet": "0xAbc123...",
+  "walletAddress": "0xRecipientWallet...",
   "amount": "10.00",
-  "network": "arc-testnet"
+  "chainKey": "BASE-SEPOLIA"
 }`}</CodeBlock>
               </SubSection>
 

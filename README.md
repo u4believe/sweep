@@ -263,7 +263,7 @@ CIRCLE_API_BASE_URL=https://api-sandbox.circle.com
 
 **2. Create a wallet set.** All user wallets are created under one wallet set. Set `CIRCLE_WALLET_SET_ID`. (`ensureWalletSet()` will create/resolve it.)
 
-**3. Provision the platform treasury wallets.** Create an SCA treasury wallet per supported chain and record their ids/addresses in the `CIRCLE_PLATFORM_WALLET_ID_*` / `CIRCLE_PLATFORM_WALLET_ADDRESS_*` variables. Arc is the primary settlement chain; deposits are swept here and withdrawals are paid from here.
+**3. Provision the platform treasury wallets.** Create an SCA treasury wallet per supported chain and record their ids/addresses in the `CIRCLE_PLATFORM_WALLET_ID_*` / `CIRCLE_PLATFORM_WALLET_ADDRESS_*` variables (or run `scripts/provision-treasury-wallets.mjs`). There is no single home chain: each chain's deposits are swept into that chain's treasury wallet, and on-chain funds are pooled in Circle Gateway's unified balance so withdrawals can go out on any supported chain.
 
 **4. Set up the Gateway delegate (for cross‑chain withdrawals).** Circle's Gateway only accepts **EOA** signatures for burn intents, but the treasury is an **SCA**. So a dedicated EOA is registered as a per‑token delegate via `addDelegate`:
 
@@ -283,7 +283,7 @@ This creates the EOA signer and submits `addDelegate` on all Gateway‑supported
 
 **User onboarding →** on registration (email or Google) the server calls `createUserCircleWallet()`, which creates an SCA wallet across the EVM chains (one shared address) and a separate Solana EOA wallet. Wallet ids/addresses are stored on the `users` row. `ensureAllChainWallets()` backfills any missing chains.
 
-**Deposit (crypto) →** the user sends USDC to their wallet on any supported chain. The **deposit indexer** detects it, records a `deposits` row (with unique indexes preventing double‑credits), then **sweeps** it to the treasury with `sweepUsdcToPlatformWallet()`. Deposits consolidate into the Arc treasury, where the user's spendable balance lives.
+**Deposit (crypto) →** the user sends USDC to their wallet on any supported chain. The **deposit indexer** detects it, records a `deposits` row (with unique indexes preventing double‑credits), then **sweeps** it into Sweep's treasury wallet **on the same chain**. On EVM chains the treasury then deposits it into **Circle Gateway** (`evmGatewaySweep()`: approve + `depositFor`), adding it to the unified balance. The user's spendable balance is their Sweep ledger balance, credited when the deposit is detected — it isn't tied to any one chain.
 
 **Deposit (fiat / wire) →** *implemented in the API, not yet enabled in the app.* `createCircleWireBankAccount()` + `getCircleWireDepositInstructions()` produce bank details; Circle mints USDC on receipt and a `payments` webhook credits the balance.
 
@@ -316,11 +316,11 @@ Started in `src/index.ts` after migrations, stopped on graceful shutdown:
 
 ## Supported chains
 
-Configured in `gatewayConfig.ts` (testnets). Arc is the treasury/settlement hub.
+Configured in `gatewayConfig.ts` (testnets). There is no hub chain — deposit on any enabled chain and withdraw on any enabled chain, with Circle Gateway's unified balance moving USDC between them.
 
 | Chain | Deposits | Withdrawals | Min withdrawal | Flat fee |
 |-------|:--------:|:-----------:|---------------:|---------:|
-| **Arc** (treasury) | ✅ | ✅ | $1 | $0.10 |
+| Arc | ✅ | ✅ | $1 | $0.10 |
 | Base | ✅ | ✅ | $1 | $0.21 |
 | Arbitrum | ✅ | ✅ | $1 | $0.21 |
 | Optimism | ✅ | ✅ | $1 | $0.21 |

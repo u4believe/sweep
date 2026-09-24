@@ -1,10 +1,10 @@
 /**
  * Circle integration — DCW client, wallet provisioning, USDC transfers.
  *
- * Supported networks:
- *   ARC-TESTNET  — Primary treasury chain. Deposits are swept here; all
- *                  withdrawals are sent from the Arc treasury wallet.
- *   BASE-SEPOLIA — User deposit chain only. No direct withdrawals from here.
+ * Each supported chain has its own platform treasury wallet. Deposits are swept
+ * into the treasury wallet on the chain they arrived on, and on-chain funds are
+ * pooled in Circle Gateway's unified balance, so withdrawals can go out on any
+ * enabled chain (see gatewayConfig.ts and gatewaySweep.ts).
  *
  * No private keys on the server. All signing uses Circle DCW (entity secret).
  */
@@ -636,8 +636,8 @@ async function resolveWalletId(walletAddress: string): Promise<string | null> {
 
 // ─── Platform treasury helpers ────────────────────────────────────────────────
 
-// Arc Testnet is the primary treasury chain — all deposits land here and
-// all withdrawals are sent from the Arc treasury wallet.
+// Default treasury wallet (the Arc treasury wallet). Per-chain treasury wallets
+// are resolved by getTreasuryWalletIdForChain() in gatewaySweep.ts.
 export function getPlatformWalletId(): string | null {
   return process.env.CIRCLE_PLATFORM_WALLET_ID_ARC_TESTNET
     ?? process.env.CIRCLE_PLATFORM_WALLET_ID_BASE_SEPOLIA

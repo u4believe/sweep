@@ -430,7 +430,7 @@ export const GATEWAY_SUPPORTED_CHAINS = new Set<ChainKey>([
 ]);
 
 const SOURCE_CHAIN_PRIORITY: ChainKey[] = [
-  "ARC-TESTNET",      // primary treasury — all user deposits sweep here
+  "ARC-TESTNET",      // tried first when choosing a Gateway source chain
   "BASE-SEPOLIA",
   "ARB-SEPOLIA",
   "OP-SEPOLIA",
