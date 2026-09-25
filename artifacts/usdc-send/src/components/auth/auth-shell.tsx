@@ -49,6 +49,61 @@ export function AuthShell({
   );
 }
 
+/** Field style for the night layout: white fields on the light form panel. */
+export const nightField =
+  "h-[54px] w-full rounded-[14px] border border-(--sw-field-line) bg-white px-4 text-[15px] font-medium text-(--sw-ink) outline-none placeholder:text-[#9aa4b5] focus:border-(--sw-blue) focus:shadow-[0_0_0_4px_rgb(17_40_245/.1)] transition disabled:opacity-60";
+
+/**
+ * v5 log-in layout: a navy panel (faint grid, blue glow) with the pitch and a sample
+ * "Swept" receipt, beside a light form panel. Stacked on phones.
+ */
+export function NightAuthShell({ children, footer }: { children: ReactNode; footer?: ReactNode }) {
+  return (
+    <div className="sweep-ui min-h-[100dvh] grid grid-cols-1 lg:grid-cols-2">
+      <section aria-label="Sweep" className="relative overflow-hidden bg-(--sw-navy) text-white px-6 sm:px-12 pt-9 pb-10 lg:py-9 flex flex-col justify-between gap-10 lg:min-h-[100dvh]">
+        <div aria-hidden className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgb(255_255_255/.045)_1px,transparent_1px),linear-gradient(90deg,rgb(255_255_255/.045)_1px,transparent_1px)] bg-[size:56px_56px]" />
+        <div aria-hidden className="absolute -left-[200px] -bottom-[300px] w-[900px] h-[700px] pointer-events-none bg-[radial-gradient(closest-side,rgb(17_40_245/.5),transparent)]" />
+        <Link href="/landing" className="relative flex items-center gap-2.5 self-start" aria-label="Sweep home">
+          <img src="/sweep-mark-white.svg" alt="" className="w-[22px]" />
+          <span className="font-extrabold text-xl tracking-[-0.02em]">Sweep</span>
+        </Link>
+        <div className="relative flex flex-col gap-[18px] max-w-[480px]">
+          <h2 className="font-extrabold text-[40px] sm:text-[48px] lg:text-[clamp(40px,4.6vw,64px)] leading-none tracking-[-0.05em]">Money that moves like email.</h2>
+          <p className="text-[17px] leading-[1.55] text-(--sw-on-navy)">
+            Log in to send by payment ID, withdraw USDC to eight networks, and manage recurring payments.
+          </p>
+          <div aria-hidden className="mt-2.5 bg-white text-(--sw-ink) rounded-[18px] px-4 py-3.5 flex items-center gap-3 max-w-[320px]">
+            <span className="w-10 h-10 rounded-xl bg-(--sw-blue) grid place-items-center shrink-0">
+              <img src="/sweep-mark-white.svg" alt="" className="w-[15px]" />
+            </span>
+            <span className="flex flex-col min-w-0">
+              <span className="font-extrabold text-[15px]">Swept. $25.00</span>
+              <span className="text-xs text-(--sw-muted) truncate">to tunde@example.com · now</span>
+            </span>
+          </div>
+        </div>
+        <span className="relative text-[13px] text-(--sw-faint)">Testnet · USDC by Circle · Gas sponsored</span>
+      </section>
+
+      <main className="bg-(--sw-bg) flex items-center justify-center px-5 sm:px-7 py-10 lg:py-12">
+        <div className="w-full max-w-[400px] flex flex-col gap-[22px]">
+          {children}
+          {footer && <p className="text-xs text-(--sw-faint) text-center border-t border-(--sw-line) pt-[18px]">{footer}</p>}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+export function NightTitle({ title, sub }: { title: string; sub?: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <h1 className="font-extrabold text-[32px] tracking-[-0.04em] leading-tight">{title}</h1>
+      {sub && <p className="text-[15px] text-(--sw-muted) leading-normal">{sub}</p>}
+    </div>
+  );
+}
+
 export function AuthTitle({ children }: { children: ReactNode }) {
   return <h1 className="font-extrabold text-2xl tracking-[-0.02em]">{children}</h1>;
 }

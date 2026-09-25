@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Clock, CreditCard, Repeat, Send } from "lucide-react";
+import { History, Repeat, ScanLine, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FullBalance, UnifiedTx } from "@/lib/wallet";
 import {
@@ -12,6 +12,7 @@ import { useDashboardData, type HistoryState } from "@/components/sweep/use-dash
 import type { SendStep } from "@/components/sweep/use-send-flow";
 import type { DashboardShellProps } from "@/components/sweep/types";
 import { MobileSend } from "./send";
+import { usePayQr } from "@/components/sweep/qr";
 
 type Screen = "home" | "history" | "send" | "fund" | "me" | "recurring" | "subs" | "settings" | "support";
 type Tab = "home" | "send" | "fund" | "me";
@@ -24,18 +25,24 @@ const TAB_OF: Record<Screen, Tab> = {
 
 type MobileDashboardProps = DashboardShellProps;
 
-export function MobileDashboard({ user, balance, depositAddresses, withdraw, onBalanceChanged, onLogout, slots }: MobileDashboardProps) {
-  const [screen,   setScreen]   = useState<Screen>("home");
+export function MobileDashboard({ user, balance, depositAddresses, withdraw, onBalanceChanged, onLogout, slots, initialPayTo }: MobileDashboardProps) {
+  const [screen,   setScreen]   = useState<Screen>(initialPayTo ? "send" : "home");
   const [backTo,   setBackTo]   = useState<Screen>("home");
   const [sendStep, setSendStep] = useState<SendStep>("form");
   const [subsTab,  setSubsTab]  = useState<SubsTab>("mine");
+  const [payTo,    setPayTo]    = useState(initialPayTo ? { id: initialPayTo, n: 1 } : null);
+
+  const qr = usePayQr({
+    name: user.name, paymentId: user.email,
+    onPayUser: (id) => { setPayTo({ id, n: Date.now() }); setScreen("send"); },
+  });
 
   const go = (next: Screen, from?: Screen) => {
     if (from) setBackTo(from);
     setScreen(next);
   };
 
-  const { history, txs, txTotal, recurringActive, subsActive, refreshCounts, contacts } = useDashboardData();
+  const { history, txs, recurringActive, subsActive, refreshCounts, contacts } = useDashboardData();
 
   // The reused desktop tabs manage their own data, so refresh the counts when coming back.
   useEffect(() => {
@@ -57,9 +64,8 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
           {screen === "home" && (
             <HomeScreen
               user={user} balance={balance}
-              txs={txs.slice(0, 5)} txTotal={txTotal} historyState={history}
-              recurringActive={recurringActive} subsActive={subsActive}
-              go={(s) => go(s, "home")}
+              txs={txs.slice(0, 5)} historyState={history}
+              go={(s) => go(s, "home")} onScan={qr.openScan}
             />
           )}
 
@@ -82,6 +88,8 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
               onSent={onBalanceChanged}
               onDone={() => setScreen("home")}
               onStepChange={setSendStep}
+              onScan={qr.openScan}
+              prefillTo={payTo}
             />
           )}
 
@@ -90,7 +98,7 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
           {screen === "me" && (
             <MeScreen
               user={user} recurringActive={recurringActive} subsActive={subsActive}
-              go={(s) => go(s, "me")} onLogout={onLogout}
+              go={(s) => go(s, "me")} onLogout={onLogout} onMyQr={qr.openMyQr}
             />
           )}
 
@@ -113,6 +121,8 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
         </motion.div>
       </AnimatePresence>
 
+      {qr.dialogs}
+
       {showTabs && (
         <nav aria-label="Main" className="flex-none grid grid-cols-4 gap-1.5 px-3 pt-2.5 pb-[max(env(safe-area-inset-bottom),14px)] bg-white border-t border-(--sw-line)">
           {tabs.map(([t, label]) => {
@@ -133,28 +143,25 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
 
 // ── Home ──────────────────────────────────────────────────────────────────────
 
-function HomeScreen({ user, balance, txs, txTotal, historyState, recurringActive, subsActive, go }: {
+function HomeScreen({ user, balance, txs, historyState, go, onScan }: {
   user: MobileDashboardProps["user"];
   balance: FullBalance | undefined;
   txs: UnifiedTx[];
-  txTotal: number | undefined;
   historyState: HistoryState;
-  recurringActive: number | undefined;
-  subsActive: number | undefined;
   go: (s: Screen) => void;
+  onScan: () => void;
 }) {
   const { hidden: hide, toggle: toggleHide } = useHiddenBalance();
 
   const hour     = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const total    = balance?.usdBalance ?? "0";
-  const claimed  = balance?.claimedBalance ?? "0";
-  const count    = (n: number | undefined, unit: string) => (n === undefined ? "—" : `${n} ${unit}`);
 
-  const tiles: Array<{ label: string; value: string; icon: ReactNode; to: Screen }> = [
-    { label: "Recurring",     value: count(recurringActive, "active"), icon: <Repeat className="w-5 h-5" />,     to: "recurring" },
-    { label: "Subscriptions", value: count(subsActive, "active"),      icon: <CreditCard className="w-5 h-5" />, to: "subs" },
-    { label: "History",       value: count(txTotal, txTotal === 1 ? "item" : "items"), icon: <Clock className="w-5 h-5" />, to: "history" },
+  const actions: Array<{ label: string; icon: ReactNode; onClick: () => void }> = [
+    { label: "Sweep",     icon: <img src="/sweep-mark-blue.svg" alt="" className="w-[22px]" />, onClick: () => go("send") },
+    { label: "Scan",      icon: <ScanLine className="w-[22px] h-[22px]" />, onClick: onScan },
+    { label: "Recurring", icon: <Repeat className="w-[22px] h-[22px]" />,   onClick: () => go("recurring") },
+    { label: "History",   icon: <History className="w-[22px] h-[22px]" />,  onClick: () => go("history") },
   ];
 
   return (
@@ -170,16 +177,13 @@ function HomeScreen({ user, balance, txs, txTotal, historyState, recurringActive
       <div className="mx-4 rounded-3xl px-[22px] pt-[22px] pb-[18px] text-white bg-(--sw-blue) relative overflow-hidden">
         <img src="/sweep-mark-white.svg" alt="" aria-hidden className="absolute -right-6 -bottom-10 w-44 opacity-[.07] pointer-events-none" />
         <div className="flex items-center justify-between text-[13px] font-medium relative">
-          <span className="opacity-80">Total balance · USD</span>
+          <span className="opacity-80">Total balance · USDC</span>
           <button type="button" onClick={toggleHide} className="text-xs font-bold opacity-80 hover:opacity-100">
             {hide ? "Show" : "Hide"}
           </button>
         </div>
-        <div className="font-extrabold text-[44px] tracking-[-0.04em] leading-[1.1] mt-1.5 tabular-nums relative">
+        <div className="font-extrabold text-[44px] tracking-[-0.04em] leading-[1.1] mt-1.5 mb-5 tabular-nums relative">
           {hide ? "$ ••••••" : fmtUsd(total)}
-        </div>
-        <div className="text-xs opacity-75 mt-1 mb-5 relative">
-          {hide ? "Backed 1:1 by USDC" : `${fmtUsd(claimed)} available to send`}
         </div>
         <div className="grid grid-cols-2 gap-2.5 relative">
           <button type="button" onClick={() => go("send")}
@@ -199,18 +203,16 @@ function HomeScreen({ user, balance, txs, txTotal, historyState, recurringActive
         <CopyIcon text={user.email} label="Copy payment ID" />
       </div>
 
-      <div className="grid grid-cols-3 gap-2 px-4 pt-3">
-        {tiles.map((t) => (
-          <button key={t.label} type="button" onClick={() => go(t.to)}
-            className="bg-white border border-(--sw-line) rounded-[18px] px-3 py-3.5 flex flex-col items-start gap-2 text-left hover:border-[#c9d0fd] transition-colors">
-            <span className="w-9 h-9 rounded-xl bg-(--sw-tint) text-(--sw-blue) grid place-items-center">{t.icon}</span>
-            <span className="flex flex-col min-w-0">
-              <span className="text-xs font-semibold text-(--sw-muted) truncate">{t.label}</span>
-              <span className="font-extrabold text-[15px] tracking-[-0.01em] tabular-nums">{t.value}</span>
+      <nav aria-label="Quick actions" className="grid grid-cols-4 gap-2 px-4 pt-4">
+        {actions.map((a) => (
+          <button key={a.label} type="button" onClick={a.onClick} className="flex flex-col items-center gap-2 group">
+            <span className="w-[52px] h-[52px] rounded-2xl bg-white border border-(--sw-line) text-(--sw-blue) grid place-items-center group-hover:border-[#c9d0fd] group-active:scale-95 transition">
+              {a.icon}
             </span>
+            <span className="text-xs font-semibold text-(--sw-label)">{a.label}</span>
           </button>
         ))}
-      </div>
+      </nav>
 
       <Card className="mx-4 mt-3 py-1.5">
         <div className="flex items-center justify-between px-[18px] pt-3 pb-1.5">
@@ -278,12 +280,13 @@ function FundScreen({ addresses }: { addresses: Record<string, string> }) {
 
 // ── Me ────────────────────────────────────────────────────────────────────────
 
-function MeScreen({ user, recurringActive, subsActive, go, onLogout }: {
+function MeScreen({ user, recurringActive, subsActive, go, onLogout, onMyQr }: {
   user: MobileDashboardProps["user"];
   recurringActive: number | undefined;
   subsActive: number | undefined;
   go: (s: Screen) => void;
   onLogout: () => void;
+  onMyQr: () => void;
 }) {
   return (
     <div className="flex-1 overflow-y-auto min-h-0 px-4 pt-[18px] pb-5 flex flex-col gap-3.5">
@@ -303,6 +306,9 @@ function MeScreen({ user, recurringActive, subsActive, go, onLogout }: {
         </button>
       </div>
 
+      <MenuGroup rows={[
+        { k: "My QR code", v: "Get paid by scan", onClick: onMyQr },
+      ]} />
       <MenuGroup rows={[
         { k: "Subscriptions",       v: subsActive === undefined ? undefined : `${subsActive} active`,      onClick: () => go("subs") },
         { k: "Recurring transfers", v: recurringActive === undefined ? undefined : `${recurringActive} active`, onClick: () => go("recurring") },

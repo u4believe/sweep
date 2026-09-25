@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { API_BASE } from "@/lib/api";
 import { authHeaders, EVM_ADDR_RE, SOL_ADDR_RE, WITHDRAWAL_CHAINS, type WithdrawalChain } from "@/lib/wallet";
 import { errorMessage, fmtUsd, shortAddr } from "./ui";
@@ -32,6 +32,8 @@ export interface SendFlowOptions {
   /** Needed for wallet (USDC) sends only; email-only surfaces can omit it. */
   withdraw?: WithdrawMutation;
   onSent: () => void;
+  /** A recipient from a scanned QR code or a /send/<id> link; `n` changes on every scan. */
+  prefillTo?: { id: string; n: number } | null;
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -42,7 +44,7 @@ export function sanitizeAmount(raw: string) {
   return (dec !== undefined ? `${whole}.${dec.slice(0, 2)}` : whole).slice(0, 9);
 }
 
-export function useSendFlow({ available, userEmail, hasTransactionPassword, withdraw, onSent }: SendFlowOptions) {
+export function useSendFlow({ available, userEmail, hasTransactionPassword, withdraw, onSent, prefillTo }: SendFlowOptions) {
   const [step,     setStep]     = useState<SendStep>("form");
   const [mode,     setModeRaw]  = useState<SendMode>("usd");
   const [amount,   setAmountRaw] = useState("");
@@ -54,6 +56,12 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
   const [busy,     setBusy]     = useState(false);
   const [error,    setError]    = useState<string | null>(null);
   const [result,   setResult]   = useState<SendResult | null>(null);
+
+  useEffect(() => {
+    if (!prefillTo) return;
+    setModeRaw("usd"); setEmail(prefillTo.id); setTxPwd("");
+    setPreview(null); setError(null); setResult(null); setStep("form");
+  }, [prefillTo?.n]);
 
   const chain = WITHDRAWAL_CHAINS.find((c) => c.key === chainKey)!;
   const usd   = mode === "usd";

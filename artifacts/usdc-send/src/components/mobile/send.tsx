@@ -1,20 +1,23 @@
 import { useEffect } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, ScanLine } from "lucide-react";
 import { Card, OutlineButton, PrimaryButton, ScreenHeader, Segmented, SummaryRows, fmtUsd } from "@/components/sweep/ui";
 import {
   AmountInput, ErrorLine, RecipientFields, ResultRows, ReviewCard, SendHint, SentHero, TxPasswordField, UnregisteredNote,
 } from "@/components/sweep/send-parts";
 import { useSendFlow, type SendFlowOptions, type SendMode, type SendStep } from "@/components/sweep/use-send-flow";
 
-export function MobileSend({ contacts, circleWallet, onDone, onStepChange, ...opts }: SendFlowOptions & {
+export function MobileSend({ contacts, circleWallet, onDone, onStepChange, onScan, ...opts }: SendFlowOptions & {
   contacts: string[];
   circleWallet?: string;
   onDone: () => void;
   onStepChange: (step: SendStep) => void;
+  onScan: () => void;
 }) {
   const flow = useSendFlow(opts);
 
   useEffect(() => { onStepChange(flow.step); }, [flow.step]);
+  // A scanned recipient still needs an amount
+  useEffect(() => { if (opts.prefillTo) setTimeout(() => document.getElementById("m-amount")?.focus(), 250); }, [opts.prefillTo?.n]);
 
   // ── Sent ────────────────────────────────────────────────────────────────────
   if (flow.step === "sent" && flow.result) {
@@ -57,7 +60,12 @@ export function MobileSend({ contacts, circleWallet, onDone, onStepChange, ...op
   // ── Form ────────────────────────────────────────────────────────────────────
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <ScreenHeader title="Send money" />
+      <ScreenHeader title="Send money" right={
+        <button type="button" onClick={onScan}
+          className="h-10 px-3.5 rounded-xl border border-(--sw-line) bg-white flex items-center gap-1.5 text-[13px] font-bold text-(--sw-blue) hover:bg-(--sw-tint)">
+          <ScanLine className="w-4 h-4" /> Scan
+        </button>
+      } />
       <div className="px-4">
         <Segmented<SendMode> value={flow.mode} onChange={flow.setMode}
           options={[{ value: "usd", label: "Email · USD" }, { value: "usdc", label: "Wallet · USDC" }]} />

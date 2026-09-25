@@ -12,14 +12,16 @@ import { AddMoney } from "@/components/sweep/deposit-addresses";
 import { useDashboardData, type HistoryState } from "@/components/sweep/use-dashboard-data";
 import type { DashboardShellProps } from "@/components/sweep/types";
 import { SendPanel } from "./send-panel";
+import { QrIconButton, usePayQr } from "@/components/sweep/qr";
 
 type Page = "dash" | "history" | "recurring" | "subs" | "settings" | "support";
 type SubsTab = "mine" | "plans" | "pay";
 
 const SIDEBAR_KEY = "sweep.sidebarHidden";
 
-export function WebDashboard({ user, balance, depositAddresses, withdraw, onBalanceChanged, onLogout, slots }: DashboardShellProps) {
+export function WebDashboard({ user, balance, depositAddresses, withdraw, onBalanceChanged, onLogout, slots, initialPayTo }: DashboardShellProps) {
   const [page,     setPage]     = useState<Page>("dash");
+  const [payTo,    setPayTo]    = useState(initialPayTo ? { id: initialPayTo, n: 1 } : null);
   const [subsTab,  setSubsTab]  = useState<SubsTab>("mine");
   const [fundOpen, setFundOpen] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(() => {
@@ -39,6 +41,11 @@ export function WebDashboard({ user, balance, depositAddresses, withdraw, onBala
   const firstName = user.name.split(" ")[0];
   const hour      = new Date().getHours();
   const greeting  = `${hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"}, ${firstName}`;
+
+  const qr = usePayQr({
+    name: user.name, paymentId: user.email,
+    onPayUser: (id) => { setPage("dash"); setPayTo({ id, n: Date.now() }); },
+  });
 
   const focusSend = () => {
     setPage("dash");
@@ -121,6 +128,7 @@ export function WebDashboard({ user, balance, depositAddresses, withdraw, onBala
             <span className="text-[13px] font-semibold text-(--sw-muted)">Payment ID</span>
             <span className="text-sm font-bold">{user.email}</span>
             <CopyIcon text={user.email} label="Copy payment ID" />
+            <QrIconButton kind="mine" onClick={qr.openMyQr} />
           </div>
         </header>
 
@@ -153,6 +161,8 @@ export function WebDashboard({ user, balance, depositAddresses, withdraw, onBala
                 contacts={contacts}
                 circleWallet={user.circleWalletAddress ?? undefined}
                 onViewHistory={() => setPage("history")}
+                onScan={qr.openScan}
+                prefillTo={payTo}
               />
             </Card>
           </div>
@@ -200,6 +210,7 @@ export function WebDashboard({ user, balance, depositAddresses, withdraw, onBala
       <AnimatePresence>
         {fundOpen && <AddMoneyDialog addresses={depositAddresses} onClose={() => setFundOpen(false)} />}
       </AnimatePresence>
+      {qr.dialogs}
     </div>
   );
 }

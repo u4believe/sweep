@@ -857,9 +857,10 @@ await resend.emails.send({
                 <Endpoint method="DELETE" path="/api/subscriptions/:id"                               description="Cancel a subscription" />
                 <Endpoint method="GET"    path="/api/subscriptions/passport"                          description="Get your Sweep Passport details" />
                 <Endpoint method="DELETE" path="/api/subscriptions/passport"                          description="Cancel your Sweep Passport" />
-                <Endpoint method="GET"    path="/api/subscriptions/merchant/:merchantId"              description="Subscribe to a merchant's plan" />
-                <Endpoint method="POST"   path="/api/subscriptions/confirmation-code/request-otp"    description="Request a confirmation OTP" />
-                <Endpoint method="POST"   path="/api/subscriptions/confirmation-code/generate"       description="Exchange OTP for a confirmation code" />
+                <Endpoint method="GET"    path="/api/subscriptions/merchant/:merchantId"              description="Look up a plan and its tiers by Merchant ID" />
+                <Endpoint method="POST"   path="/api/subscriptions/checkout"                          description="Pay for a plan: merchantId + intervalId + transaction password" />
+                <Endpoint method="POST"   path="/api/subscriptions/confirmation-code/request-otp"    description="Legacy: request a confirmation OTP" />
+                <Endpoint method="POST"   path="/api/subscriptions/confirmation-code/generate"       description="Legacy: exchange OTP for a confirmation code" />
               </SubSection>
 
             </Section>

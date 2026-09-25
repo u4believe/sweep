@@ -10,6 +10,8 @@ export interface DashboardShellProps {
   withdraw: WithdrawMutation;
   onBalanceChanged: () => void;
   onLogout: () => void;
+  /** Payment ID from a /send/<id> QR link, opened straight into Send. */
+  initialPayTo?: string | null;
   /** Existing dashboard tabs, rendered inside the shell unchanged. */
   slots: {
     recurring: ReactNode;

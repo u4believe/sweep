@@ -7,42 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  DollarSign,
-  CheckCircle2,
-  AlertCircle,
-  Loader2,
-  ExternalLink,
-  Copy,
-  Check,
-  ShieldCheck,
-  ArrowRight,
-  Mail,
-  Repeat,
-  Trash2,
-  CalendarDays,
-  Plus,
-  X,
-  KeyRound,
-  Lock,
-  LockKeyhole,
-  Eye,
-  EyeOff,
-  RefreshCw,
-  PlusCircle,
-  ChevronDown,
-  ChevronUp,
-  Users,
-  XCircle,
-  ShieldOff,
-  Smartphone,
-  Search,
-  Zap,
-  Star,
-  GripVertical,
-  Tag,
-  List,
-  Layers,
-  LifeBuoy,
+  DollarSign, CheckCircle2, AlertCircle, Loader2, ExternalLink, Copy, Check, ShieldCheck, ArrowRight, Mail, Repeat, Trash2, CalendarDays, Plus, X, KeyRound, Lock, LockKeyhole, Eye, EyeOff, RefreshCw, ChevronDown, ChevronUp, Users, XCircle, ShieldOff, Smartphone, Search, Zap, LifeBuoy, QrCode,
 } from "lucide-react";
 import {
   useGetCurrentUser,
@@ -62,6 +27,10 @@ import { TotpInput } from "@/components/auth/totp-input";
 import { useAuthConfig } from "@/components/auth/google-sign-in";
 import { fadeUp, scaleIn, staggerContainer } from "@/lib/motion";
 import type { FullBalance } from "@/lib/wallet";
+import { merchantQrUrl, takePayTo } from "@/lib/pay-qr";
+import { QrDialog, ShareableQr } from "@/components/sweep/qr";
+import { CreatePlan } from "@/components/subscriptions/create-plan";
+import { Checkout, type PlanInfo } from "@/components/subscriptions/checkout";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -189,6 +158,8 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
   // Below lg the dashboard renders the v4 mobile shell; from lg up, the web dashboard.
   const isDesktop = useMediaQuery("(min-width: 1024px)");
+  // Set when the user arrived through someone's payment QR code (/send/<payment ID>)
+  const [initialPayTo] = useState(() => takePayTo());
 
   const { data: user, isLoading: isUserLoading, isError: isUserError } =
     useGetCurrentUser({ query: { retry: false } as any });
@@ -256,6 +227,7 @@ export default function Dashboard() {
     balance: bal,
     depositAddresses,
     withdraw: withdrawCryptoMutation,
+    initialPayTo,
     onBalanceChanged: () => { refetchBalance(); invalidateHistory(); },
     onLogout: () => {
       localStorage.removeItem("token");
@@ -265,8 +237,8 @@ export default function Dashboard() {
     slots: {
       recurring:  <RecurringTransferTab userEmail={user.email} availableBalance={parseFloat(balance?.claimedBalance ?? "0")} hasTransactionPassword={hasTxnPwd} />,
       subsMine:   <MySubscriptionsTab user={user as any} />,
-      subsCreate: <CreateSubscriptionTab user={user} />,
-      subsPay:    <PaySubscriptionTab user={user} />,
+      subsCreate: <CreatePlan user={{ name: user.name, email: user.email }} />,
+      subsPay:    <PaySubscriptionTab />,
       settings:   <SecurityTab user={user as any} onSecurityUpdated={() => queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] })} />,
       support:    <SupportContent />,
     },
@@ -2315,6 +2287,7 @@ function MySubscriptionsTab({ user }: { user: { name: string; email: string; has
                             <div className="flex items-center gap-1">
                               <code className="text-[11px] font-mono text-foreground">{plan.merchantId}</code>
                               <CopyButton text={plan.merchantId} />
+                              <PlanQrButton merchantId={plan.merchantId} planTitle={plan.planTitle} />
                             </div>
                           </div>
                         )}
@@ -2437,697 +2410,54 @@ function MySubscriptionsTab({ user }: { user: { name: string; email: string; has
 
 // ─── Create Subscription Tab ──────────────────────────────────────────────────
 
-const PRESET_TIER_NAMES = ["Basic", "Starter", "Individual", "Pro", "Team", "Business", "Student", "Enterprise"];
-const MAX_TIERS = 5;
-const MAX_FEATURES = 20;
-
-type TierDraft = {
-  id:            string;
-  tierName:      string;
-  customName:    string;
-  description:   string;
-  features:      string[];
-  featureInput:  string;
-  isHighlighted: boolean;
-  displayOrder:  number;
-  intervals:     { interval: string; amount: string }[];
-};
-
-function makeTier(displayOrder: number): TierDraft {
-  return {
-    id:            crypto.randomUUID(),
-    tierName:      PRESET_TIER_NAMES[displayOrder] ?? "",
-    customName:    "",
-    description:   "",
-    features:      [],
-    featureInput:  "",
-    isHighlighted: displayOrder === 1,
-    displayOrder,
-    intervals:     [{ interval: "monthly", amount: "" }],
-  };
-}
-
-function CreateSubscriptionTab({ user: _user }: { user: any }) {
-  const [planMode,           setPlanMode]           = useState<"flat" | "tiered">("flat");
-  const [planTitle,          setPlanTitle]          = useState("");
-  const [paymentEmail,       setPaymentEmail]       = useState("");
-  const [intervals,          setIntervals]          = useState<{ interval: string; amount: string }[]>([{ interval: "monthly", amount: "" }]);
-  const [tiers,              setTiers]              = useState<TierDraft[]>([makeTier(0)]);
-  const [hasFreeTrial,       setHasFreeTrial]       = useState(false);
-  const [trialDurationDays,  setTrialDurationDays]  = useState("7");
-  const [pak,                setPak]                = useState("");
-  const [pakVisible,         setPakVisible]         = useState(false);
-  const [isSubmitting,       setIsSubmitting]       = useState(false);
-  const [error,              setError]              = useState<string | null>(null);
-  const [result,             setResult]             = useState<any | null>(null);
-  const authHeaders = () => {
-    const jwt = localStorage.getItem("token");
-    const h: Record<string, string> = { "Content-Type": "application/json" };
-    if (jwt) h["Authorization"] = `Bearer ${jwt}`;
-    return h;
-  };
-
-  // ── Flat-plan interval helpers ──────────────────────────────────────────────
-
-  const addInterval = () => {
-    const used = new Set(intervals.map((i) => i.interval));
-    const next  = ["weekly", "monthly", "yearly"].find((v) => !used.has(v));
-    if (next) setIntervals([...intervals, { interval: next, amount: "" }]);
-  };
-
-  const removeInterval = (idx: number) => {
-    if (intervals.length === 1) return;
-    setIntervals(intervals.filter((_, i) => i !== idx));
-  };
-
-  const updateInterval = (idx: number, field: "interval" | "amount", value: string) =>
-    setIntervals(intervals.map((iv, i) => (i === idx ? { ...iv, [field]: value } : iv)));
-
-  // ── Tier helpers ─────────────────────────────────────────────────────────────
-
-  const addTier = () => {
-    if (tiers.length >= MAX_TIERS) return;
-    setTiers((prev) => [...prev, makeTier(prev.length)]);
-  };
-
-  const removeTier = (id: string) => {
-    if (tiers.length === 1) return;
-    setTiers((prev) => prev.filter((t) => t.id !== id).map((t, i) => ({ ...t, displayOrder: i })));
-  };
-
-  const updateTier = (id: string, patch: Partial<TierDraft>) =>
-    setTiers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
-
-  const addTierInterval = (tierId: string) => {
-    setTiers((prev) => prev.map((t) => {
-      if (t.id !== tierId || t.intervals.length >= 3) return t;
-      const used = new Set(t.intervals.map((i) => i.interval));
-      const next = ["weekly", "monthly", "yearly"].find((v) => !used.has(v));
-      if (!next) return t;
-      return { ...t, intervals: [...t.intervals, { interval: next, amount: "" }] };
-    }));
-  };
-
-  const removeTierInterval = (tierId: string, idx: number) =>
-    setTiers((prev) => prev.map((t) =>
-      t.id === tierId && t.intervals.length > 1
-        ? { ...t, intervals: t.intervals.filter((_, i) => i !== idx) }
-        : t,
-    ));
-
-  const updateTierInterval = (tierId: string, idx: number, field: "interval" | "amount", value: string) =>
-    setTiers((prev) => prev.map((t) =>
-      t.id === tierId
-        ? { ...t, intervals: t.intervals.map((iv, i) => (i === idx ? { ...iv, [field]: value } : iv)) }
-        : t,
-    ));
-
-  const addFeature = (tierId: string) => {
-    setTiers((prev) => prev.map((t) => {
-      if (t.id !== tierId) return t;
-      const trimmed = t.featureInput.trim();
-      if (!trimmed || t.features.includes(trimmed) || t.features.length >= MAX_FEATURES) return t;
-      return { ...t, features: [...t.features, trimmed], featureInput: "" };
-    }));
-  };
-
-  const removeFeature = (tierId: string, feature: string) =>
-    setTiers((prev) => prev.map((t) =>
-      t.id === tierId ? { ...t, features: t.features.filter((f) => f !== feature) } : t,
-    ));
-
-  const handleSubmit = async (e: { preventDefault(): void }) => {
-    e.preventDefault();
-    setError(null);
-    setResult(null);
-    setIsSubmitting(true);
-    try {
-      const body = planMode === "tiered"
-        ? {
-            planTitle:         planTitle.trim(),
-            paymentEmail:      paymentEmail.trim(),
-            hasFreeTrial,
-            trialDurationDays: hasFreeTrial ? parseInt(trialDurationDays, 10) : undefined,
-            pak,
-            tiers: tiers.map((t) => ({
-              tierName:      t.tierName === "__custom__" ? t.customName.trim() : t.tierName,
-              description:   t.description.trim() || undefined,
-              features:      t.features,
-              isHighlighted: t.isHighlighted,
-              displayOrder:  t.displayOrder,
-              intervals:     t.intervals,
-            })),
-          }
-        : {
-            planTitle:         planTitle.trim(),
-            paymentEmail:      paymentEmail.trim(),
-            intervals,
-            hasFreeTrial,
-            trialDurationDays: hasFreeTrial ? parseInt(trialDurationDays, 10) : undefined,
-            pak,
-          };
-
-      const res  = await fetch(`${API_BASE}/api/subscriptions/plans`, {
-        method: "POST",
-        headers: authHeaders(),
-        body:    JSON.stringify(body),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.message ?? "Failed to create plan");
-      setResult(json);
-      setPlanTitle(""); setPaymentEmail("");
-      setIntervals([{ interval: "monthly", amount: "" }]);
-      setTiers([makeTier(0)]);
-      setHasFreeTrial(false); setTrialDurationDays("7"); setPak("");
-    } catch (err: any) {
-      setError(err.message ?? "Failed to create plan");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
+/** Shows a plan's QR code — scanning it opens the plan's checkout. */
+function PlanQrButton({ merchantId, planTitle }: { merchantId: string; planTitle: string }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="max-w-2xl mx-auto">
-      <div className="bg-white rounded-2xl border border-border shadow-sm overflow-hidden">
-
-        {/* Header */}
-        <div className="px-4 sm:px-8 py-6 border-b border-border">
-          <h3 className="text-lg font-bold text-foreground">New Subscription Plan</h3>
-          <p className="text-sm text-muted-foreground mt-1">
-            Subscribers are billed automatically on the schedule you define.
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="divide-y divide-border">
-
-          {/* §1 Plan Details */}
-          <div className="px-4 sm:px-8 py-7 space-y-5">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Plan Details</p>
-
-            <div className="space-y-1.5">
-              <label htmlFor="plan-title" className="text-sm font-medium text-foreground">Plan Title</label>
-              <input
-                id="plan-title" name="planTitle" type="text"
-                placeholder="e.g. Creator Pro…"
-                autoComplete="off"
-                value={planTitle} onChange={(e) => setPlanTitle(e.target.value)} required
-                className="w-full h-11 rounded-xl border border-border bg-white px-4 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label htmlFor="payment-email" className="text-sm font-medium text-foreground">Payment Email</label>
-              <p className="text-xs text-muted-foreground">Subscription payments are sent to this address.</p>
-              <input
-                id="payment-email" name="paymentEmail" type="email"
-                placeholder="payments@yourdomain.com"
-                autoComplete="email"
-                spellCheck={false}
-                value={paymentEmail} onChange={(e) => setPaymentEmail(e.target.value)} required
-                className="w-full h-11 rounded-xl border border-border bg-white px-4 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
-              />
-            </div>
-          </div>
-
-          {/* §2 Plan Structure */}
-          <div className="px-4 sm:px-8 py-7 space-y-6">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Plan Structure</p>
-
-            {/* Mode toggle */}
-            <div role="group" aria-label="Plan structure type" className="flex flex-col sm:flex-row gap-3">
-              {([
-                { mode: "flat",   Icon: List,   label: "Simple",  sub: "One price for all subscribers" },
-                { mode: "tiered", Icon: Layers, label: "Tiered",  sub: "Multiple tiers with different prices" },
-              ] as const).map(({ mode, Icon, label, sub }) => (
-                <button
-                  key={mode}
-                  type="button"
-                  aria-pressed={planMode === mode}
-                  onClick={() => setPlanMode(mode)}
-                  className={cn(
-                    "flex-1 flex items-center gap-3 px-4 py-3.5 rounded-xl border-2 text-left transition-all",
-                    planMode === mode
-                      ? "border-primary bg-primary/5"
-                      : "border-border bg-slate-50/60 hover:border-primary/30 hover:bg-white",
-                  )}
-                >
-                  <div className={cn(
-                    "w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
-                    planMode === mode ? "bg-primary text-white" : "bg-white border border-border text-muted-foreground",
-                  )}>
-                    <Icon className="w-4 h-4" aria-hidden />
-                  </div>
-                  <div className="min-w-0">
-                    <p className={cn("text-sm font-semibold", planMode === mode ? "text-primary" : "text-foreground")}>{label}</p>
-                    <p className="text-[11px] text-muted-foreground truncate">{sub}</p>
-                  </div>
-                </button>
-              ))}
-            </div>
-
-            {/* ── Simple mode ── */}
-            {planMode === "flat" && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-sm font-medium text-foreground">Billing Intervals</label>
-                  {intervals.length < 3 && (
-                    <button type="button" onClick={addInterval}
-                      className="flex items-center gap-1 text-xs font-semibold text-primary hover:text-primary/80 transition">
-                      <Plus className="w-3.5 h-3.5" aria-hidden /> Add Interval
-                    </button>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  {intervals.map((iv, idx) => (
-                    <div key={idx} className="flex flex-wrap items-center gap-2 px-3 py-3 rounded-xl bg-slate-50 border border-border">
-                      <select
-                        value={iv.interval} onChange={(e) => updateInterval(idx, "interval", e.target.value)}
-                        aria-label={`Billing cadence for interval ${idx + 1}`}
-                        className="h-9 rounded-lg border border-border bg-white px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition shrink-0"
-                      >
-                        {["weekly", "monthly", "yearly"].map((opt) => (
-                          <option key={opt} value={opt} disabled={intervals.some((x, i) => i !== idx && x.interval === opt)}>
-                            {opt.charAt(0).toUpperCase() + opt.slice(1)}
-                          </option>
-                        ))}
-                      </select>
-                      <div className="relative flex-1">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground" aria-hidden>$</span>
-                        <input
-                          type="number" min="0.01" step="0.01" placeholder="0.00"
-                          aria-label={`Price for interval ${idx + 1}`}
-                          value={iv.amount} onChange={(e) => updateInterval(idx, "amount", e.target.value)} required
-                          className="w-full h-9 rounded-lg border border-border bg-white pl-7 pr-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
-                        />
-                      </div>
-                      {intervals.length > 1 && (
-                        <button type="button" onClick={() => removeInterval(idx)} aria-label="Remove interval"
-                          className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition">
-                          <X className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ── Tiered mode ── */}
-            {planMode === "tiered" && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-foreground">Plan Tiers</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">Each tier has its own name, features, and pricing.</p>
-                  </div>
-                  <button
-                    type="button" onClick={addTier} disabled={tiers.length >= MAX_TIERS}
-                    className="flex items-center gap-1.5 text-xs font-semibold text-primary hover:text-primary/80 disabled:opacity-40 disabled:cursor-not-allowed transition"
-                  >
-                    <PlusCircle className="w-4 h-4" aria-hidden />
-                    Add Tier {tiers.length < MAX_TIERS ? `(${tiers.length}/${MAX_TIERS})` : "(max)"}
-                  </button>
-                </div>
-
-                <div className={cn("grid gap-4", tiers.length >= 2 ? "xl:grid-cols-2" : "grid-cols-1")}>
-                  {tiers.map((tier, tierIdx) => (
-                    <div key={tier.id} className={cn(
-                      "rounded-xl border-2 bg-white overflow-hidden transition-all",
-                      tier.isHighlighted ? "border-primary/40 shadow-sm shadow-primary/10" : "border-border",
-                    )}>
-                      {/* Tier header */}
-                      <div className={cn(
-                        "flex items-center justify-between px-4 py-3 border-b",
-                        tier.isHighlighted ? "bg-primary/5 border-primary/20" : "bg-slate-50 border-border",
-                      )}>
-                        <div className="flex items-center gap-2">
-                          <GripVertical className="w-4 h-4 text-muted-foreground/30" aria-hidden />
-                          <span className="text-xs font-bold text-muted-foreground uppercase tracking-wide">Tier {tierIdx + 1}</span>
-                          {tier.isHighlighted && (
-                            <span className="flex items-center gap-1 text-[10px] font-bold text-primary px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20">
-                              <Star className="w-2.5 h-2.5" aria-hidden /> Recommended
-                            </span>
-                          )}
-                        </div>
-                        <button
-                          type="button" onClick={() => removeTier(tier.id)} disabled={tiers.length === 1}
-                          aria-label={`Remove tier ${tierIdx + 1}`}
-                          className="p-1 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-30 disabled:cursor-not-allowed transition"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      <div className="px-4 py-4 space-y-4">
-                        {/* Name */}
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                            Tier Name <span aria-hidden className="text-destructive">*</span>
-                          </label>
-                          <div role="group" aria-label="Preset tier names" className="flex flex-wrap gap-1.5">
-                            {PRESET_TIER_NAMES.map((name) => (
-                              <button key={name} type="button"
-                                onClick={() => updateTier(tier.id, { tierName: name, customName: "" })}
-                                aria-pressed={tier.tierName === name}
-                                className={cn(
-                                  "px-2.5 py-1 rounded-lg text-xs font-medium border transition-all",
-                                  tier.tierName === name
-                                    ? "bg-primary text-white border-primary"
-                                    : "bg-white text-muted-foreground border-border hover:border-primary/50 hover:text-primary",
-                                )}
-                              >{name}</button>
-                            ))}
-                          </div>
-                          <input
-                            type="text" placeholder="Or type a custom name…" maxLength={50}
-                            aria-label={`Custom name for tier ${tierIdx + 1}`}
-                            value={tier.tierName === "__custom__" ? tier.customName : ""}
-                            onChange={(e) => updateTier(tier.id, { tierName: "__custom__", customName: e.target.value })}
-                            onFocus={() => { if (!PRESET_TIER_NAMES.includes(tier.tierName) && tier.tierName !== "__custom__") updateTier(tier.id, { tierName: "__custom__", customName: tier.tierName }); }}
-                            className="w-full h-9 rounded-xl border border-border bg-white px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition placeholder:text-muted-foreground/50"
-                          />
-                          {(tier.tierName === "__custom__" ? !tier.customName.trim() : !tier.tierName) && (
-                            <p className="text-[11px] text-destructive" role="alert">Select a preset or type a custom tier name.</p>
-                          )}
-                        </div>
-
-                        {/* Description */}
-                        <div className="space-y-1.5">
-                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                            Description <span className="text-muted-foreground font-normal normal-case">(optional)</span>
-                          </label>
-                          <div className="relative">
-                            <textarea rows={2} maxLength={200}
-                              placeholder="Briefly describe what's included…"
-                              aria-label={`Description for tier ${tierIdx + 1}`}
-                              value={tier.description}
-                              onChange={(e) => updateTier(tier.id, { description: e.target.value })}
-                              className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm resize-none focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition placeholder:text-muted-foreground/50"
-                            />
-                            <span className="absolute bottom-2 right-3 text-[10px] text-muted-foreground/40">{tier.description.length}/200</span>
-                          </div>
-                        </div>
-
-                        {/* Features */}
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                            Features <span className="text-muted-foreground font-normal normal-case">(optional)</span>
-                          </label>
-                          <div className="flex gap-2">
-                            <input
-                              type="text" placeholder="e.g. Unlimited projects…" maxLength={60}
-                              aria-label={`Add feature to tier ${tierIdx + 1}`}
-                              value={tier.featureInput}
-                              onChange={(e) => updateTier(tier.id, { featureInput: e.target.value })}
-                              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addFeature(tier.id); } }}
-                              className="flex-1 h-9 rounded-xl border border-border bg-white px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
-                            />
-                            <button type="button" onClick={() => addFeature(tier.id)}
-                              disabled={!tier.featureInput.trim() || tier.features.length >= MAX_FEATURES}
-                              className="h-9 px-4 rounded-xl bg-primary/10 text-primary text-xs font-semibold hover:bg-primary/20 disabled:opacity-40 transition"
-                            >Add</button>
-                          </div>
-                          {tier.features.length > 0 && (
-                            <div role="list" aria-label={`Features for tier ${tierIdx + 1}`} className="flex flex-wrap gap-1.5 pt-1">
-                              {tier.features.map((feat) => (
-                                <span key={feat} role="listitem"
-                                  className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-secondary border border-border text-xs text-foreground"
-                                >
-                                  <Tag className="w-3 h-3 text-muted-foreground" aria-hidden />{feat}
-                                  <button type="button" onClick={() => removeFeature(tier.id, feat)}
-                                    aria-label={`Remove feature: ${feat}`}
-                                    className="ml-0.5 text-muted-foreground hover:text-destructive transition"
-                                  ><X className="w-3 h-3" /></button>
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Pricing */}
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between">
-                            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Pricing</label>
-                            {tier.intervals.length < 3 && (
-                              <button type="button" onClick={() => addTierInterval(tier.id)}
-                                className="flex items-center gap-1 text-xs font-semibold text-primary hover:text-primary/80 transition">
-                                <Plus className="w-3.5 h-3.5" aria-hidden /> Add Interval
-                              </button>
-                            )}
-                          </div>
-                          <div className="space-y-2">
-                            {tier.intervals.map((iv, ivIdx) => (
-                              <div key={ivIdx} className="flex flex-wrap items-center gap-2 p-2.5 rounded-lg bg-slate-50 border border-border">
-                                <select value={iv.interval}
-                                  onChange={(e) => updateTierInterval(tier.id, ivIdx, "interval", e.target.value)}
-                                  aria-label={`Billing cadence for tier ${tierIdx + 1} interval ${ivIdx + 1}`}
-                                  className="h-8 rounded-lg border border-border bg-white px-2 text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
-                                >
-                                  {["weekly", "monthly", "yearly"].map((opt) => (
-                                    <option key={opt} value={opt} disabled={tier.intervals.some((x, i) => i !== ivIdx && x.interval === opt)}>
-                                      {opt.charAt(0).toUpperCase() + opt.slice(1)}
-                                    </option>
-                                  ))}
-                                </select>
-                                <div className="relative flex-1">
-                                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground" aria-hidden>$</span>
-                                  <input type="number" min="0.01" step="0.01" placeholder="0.00"
-                                    aria-label={`Price for tier ${tierIdx + 1} interval ${ivIdx + 1}`}
-                                    value={iv.amount}
-                                    onChange={(e) => updateTierInterval(tier.id, ivIdx, "amount", e.target.value)}
-                                    required
-                                    className="w-full h-8 rounded-lg border border-border bg-white pl-6 pr-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
-                                  />
-                                </div>
-                                {tier.intervals.length > 1 && (
-                                  <button type="button" onClick={() => removeTierInterval(tier.id, ivIdx)} aria-label="Remove interval"
-                                    className="p-1 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition">
-                                    <X className="w-3.5 h-3.5" />
-                                  </button>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* Highlight toggle */}
-                        <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                          <input type="checkbox" checked={tier.isHighlighted}
-                            onChange={(e) => updateTier(tier.id, { isHighlighted: e.target.checked })}
-                            className="w-4 h-4 accent-primary rounded"
-                            aria-label={`Mark tier ${tierIdx + 1} as highlighted`}
-                          />
-                          <span className="text-sm text-foreground">Highlight as <span className="font-medium">"Recommended"</span></span>
-                        </label>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* §3 Settings */}
-          <div className="px-4 sm:px-8 py-7 space-y-5">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Settings</p>
-
-            {/* Free trial */}
-            <div className="flex items-start gap-3 p-4 rounded-xl border border-border bg-slate-50/60">
-              <input
-                id="free-trial-toggle"
-                type="checkbox" checked={hasFreeTrial}
-                onChange={(e) => setHasFreeTrial(e.target.checked)}
-                className="w-4 h-4 mt-0.5 accent-primary rounded shrink-0"
-              />
-              <div className="flex-1 min-w-0">
-                <label htmlFor="free-trial-toggle" className="text-sm font-medium text-foreground cursor-pointer">
-                  Offer a free trial
-                </label>
-                <p className="text-xs text-muted-foreground mt-0.5">Let new subscribers try your plan before they're charged.</p>
-                {hasFreeTrial && (
-                  <div className="flex items-center gap-2 mt-3">
-                    <input
-                      type="number" min="1" value={trialDurationDays}
-                      onChange={(e) => setTrialDurationDays(e.target.value)}
-                      aria-label="Trial duration in days"
-                      className="w-20 h-9 rounded-xl border border-border bg-white px-3 text-sm text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
-                    />
-                    <span className="text-sm text-muted-foreground">days free</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* PAK */}
-            <div className="space-y-1.5">
-              <label htmlFor="pak-input" className="text-sm font-medium text-foreground">
-                Personal Authorization Key
-              </label>
-              <p className="text-xs text-muted-foreground">Required to create or manage plans.</p>
-              <div className="relative">
-                <input
-                  id="pak-input" name="pak"
-                  type={pakVisible ? "text" : "password"} placeholder="Enter your PAK…"
-                  value={pak} onChange={(e) => setPak(e.target.value)} required
-                  className="w-full h-11 rounded-xl border border-border bg-white px-4 pr-11 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition"
-                />
-                <button
-                  type="button" onClick={() => setPakVisible((v) => !v)}
-                  aria-label={pakVisible ? "Hide PAK" : "Show PAK"}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition"
-                >
-                  {pakVisible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* §4 Actions */}
-          <div className="px-4 sm:px-8 py-6 space-y-4 bg-slate-50/60">
-            {error && <InlineError message={error} />}
-
-            {result && (() => {
-              const planMerchantId = result.plan.merchantId ?? "";
-              const subscribeUrl   = `${window.location.origin}${BASE}/subscribe/${planMerchantId}`;
-              const embedCode      = `<a href="${subscribeUrl}" style="display:inline-block;padding:12px 24px;background:#6366f1;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-family:sans-serif;">Subscribe to ${result.plan.planTitle}</a>`;
-              const isTieredResult = Array.isArray(result.tiers) && result.tiers.length > 0;
-              return (
-                <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
-                  className="rounded-xl bg-green-50 border border-green-200 p-5 space-y-4"
-                  role="status" aria-label="Plan created successfully"
-                >
-                  <div className="flex items-center gap-2 text-green-700 font-semibold text-sm">
-                    <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden /> Plan created successfully!
-                  </div>
-
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold text-green-800 uppercase tracking-wide">Merchant ID</p>
-                    <div className="flex items-center justify-between rounded-lg bg-white border border-green-200 px-3 py-2.5">
-                      <div>
-                        <p className="text-xs text-muted-foreground mb-0.5">Share with subscribers</p>
-                        <code className="text-sm font-mono font-bold text-foreground tracking-wider" translate="no">{planMerchantId}</code>
-                      </div>
-                      <CopyButton text={planMerchantId} />
-                    </div>
-                    {!isTieredResult && Array.isArray(result.intervals) && (
-                      <div className="space-y-1">
-                        {result.intervals.map((iv: any) => (
-                          <div key={iv.id} className="flex items-center justify-between rounded-lg bg-white/60 border border-green-100 px-3 py-1.5">
-                            <span className="text-xs font-semibold capitalize text-green-700">{iv.interval}</span>
-                            <span className="text-xs text-muted-foreground">${parseFloat(iv.amount).toFixed(2)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {isTieredResult && (
-                      <div className="grid sm:grid-cols-2 gap-2 mt-1">
-                        {result.tiers.map(({ tier, intervals: tierIvs }: any) => (
-                          <div key={tier.id} className={cn(
-                            "rounded-lg border px-3 py-2.5 space-y-1.5",
-                            tier.isHighlighted ? "bg-primary/5 border-primary/30" : "bg-white/60 border-green-100",
-                          )}>
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-bold text-green-800">{tier.tierName}</span>
-                              {tier.isHighlighted && (
-                                <span className="text-[10px] font-bold text-primary px-1.5 py-0.5 rounded-full bg-primary/10 border border-primary/20">Recommended</span>
-                              )}
-                            </div>
-                            {tierIvs.map((iv: any) => (
-                              <div key={iv.id} className="flex items-center justify-between">
-                                <span className="text-xs font-semibold capitalize text-green-700">{iv.interval}</span>
-                                <span className="text-xs text-muted-foreground">${parseFloat(iv.amount).toFixed(2)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold text-green-800 uppercase tracking-wide">Subscription Page</p>
-                    <div className="flex items-center gap-2 rounded-lg bg-white border border-green-200 px-3 py-2">
-                      <a href={subscribeUrl} target="_blank" rel="noreferrer"
-                        className="flex-1 text-xs font-mono text-primary truncate hover:underline"
-                      >{subscribeUrl}</a>
-                      <CopyButton text={subscribeUrl} />
-                      <a href={subscribeUrl} target="_blank" rel="noreferrer"
-                        aria-label="Open subscription page"
-                        className="p-1 rounded hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
-                      ><ExternalLink className="w-3.5 h-3.5" /></a>
-                    </div>
-                    <p className="text-[11px] text-green-700">Share this link — subscribers visit it to activate.</p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold text-green-800 uppercase tracking-wide">
-                      Embed Code <span className="text-green-600 font-normal normal-case">(optional)</span>
-                    </p>
-                    <div className="relative rounded-lg bg-white border border-green-200 px-3 py-2">
-                      <pre className="text-[10px] font-mono text-muted-foreground whitespace-pre-wrap break-all leading-relaxed pr-8">{embedCode}</pre>
-                      <div className="absolute top-2 right-2">
-                        <CopyButton text={embedCode} />
-                      </div>
-                    </div>
-                    <p className="text-[11px] text-green-700">Paste into your website to add a subscribe button.</p>
-                  </div>
-                </motion.div>
-              );
-            })()}
-
-            <button
-              type="submit" disabled={isSubmitting}
-              className="w-full h-11 rounded-xl bg-primary text-white font-bold text-sm hover:bg-primary/90 disabled:opacity-60 flex items-center justify-center gap-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
-            >
-              {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <Plus className="w-4 h-4" aria-hidden />}
-              {isSubmitting ? "Creating…" : "Create Plan"}
-            </button>
-          </div>
-
-        </form>
-      </div>
-    </div>
+    <>
+      <button type="button" onClick={() => setOpen(true)} aria-label="Show plan QR code" title="QR code"
+        className="p-1 rounded hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground">
+        <QrCode className="w-3.5 h-3.5" />
+      </button>
+      <AnimatePresence>
+        {open && (
+          <QrDialog title="Plan QR code" onClose={() => setOpen(false)}>
+            <p className="text-sm text-(--sw-muted) -mt-2">Subscribers scan this to open the checkout for this plan.</p>
+            <ShareableQr
+              value={merchantQrUrl(merchantId)}
+              label={planTitle}
+              sublabel={<code className="text-[13px] font-mono font-semibold text-(--sw-blue)">{merchantId}</code>}
+              fileName={`sweep-plan-${merchantId}.png`}
+              shareText={`Subscribe to ${planTitle} on Sweep`}
+            />
+          </QrDialog>
+        )}
+      </AnimatePresence>
+    </>
   );
 }
 
-// ─── Pay Subscription Tab ─────────────────────────────────────────────────────
+/** In-app "Pay a subscription": look up a Merchant ID, then the shared checkout. */
+function PaySubscriptionTab() {
+  const [merchantId, setMerchantId] = useState("");
+  const [planInfo,   setPlanInfo]   = useState<PlanInfo | null>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [isLooking,  setIsLooking]  = useState(false);
 
-function PaySubscriptionTab({ user }: { user: any }) {
-  const [merchantId,           setMerchantId]           = useState("");
-  const [planInfo,             setPlanInfo]             = useState<any | null>(null);
-  const [lookupError,          setLookupError]          = useState<string | null>(null);
-  const [isLooking,            setIsLooking]            = useState(false);
-  const [selectedPlanInterval, setSelectedPlanInterval] = useState("");
-  const [selectedIntervalId,   setSelectedIntervalId]   = useState<number | null>(null);
-  const [txPassword,           setTxPassword]           = useState("");
-  const [txPasswordVisible,    setTxPasswordVisible]    = useState(false);
-  const [step,                 setStep]                 = useState<"lookup" | "otp" | "done">("lookup");
-  const [otp,                  setOtp]                  = useState("");
-  const [isSubmitting,         setIsSubmitting]         = useState(false);
-  const [stepError,            setStepError]            = useState<string | null>(null);
-
-  const hasTransactionPassword = (user as any)?.hasTransactionPassword;
-
-  const authHeaders = () => {
-    const jwt = localStorage.getItem("token");
-    const h: Record<string, string> = { "Content-Type": "application/json" };
-    if (jwt) h["Authorization"] = `Bearer ${jwt}`;
-    return h;
+  // Format as XXXX-XXXX-XXXX while typing
+  const onId = (raw: string) => {
+    setMerchantId(raw.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12).replace(/(.{4})(?=.)/g, "$1-"));
+    setLookupError(null);
   };
 
   const handleLookup = async () => {
-    if (!merchantId.trim()) return;
-    setLookupError(null); setPlanInfo(null);
-    setIsLooking(true);
+    if (merchantId.length < 14 || isLooking) return;
+    setLookupError(null); setIsLooking(true);
     try {
-      const res  = await fetch(`${API_BASE}/api/subscriptions/merchant/${encodeURIComponent(merchantId.trim())}`, { headers: authHeaders() });
-      const json = await res.json();
+      const res  = await fetch(`${API_BASE}/api/subscriptions/merchant/${encodeURIComponent(merchantId)}`);
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.message ?? "Merchant ID not found");
       setPlanInfo(json);
-      if (json.intervals?.length === 1) {
-        setSelectedPlanInterval(json.intervals[0].interval);
-        setSelectedIntervalId(json.intervals[0].intervalId ?? null);
-      }
     } catch (err: any) {
       setLookupError(err.message ?? "Merchant ID not found");
     } finally {
@@ -3135,287 +2465,34 @@ function PaySubscriptionTab({ user }: { user: any }) {
     }
   };
 
-  const handleRequestOtp = async () => {
-    if (!selectedPlanInterval) return;
-    setStepError(null); setIsSubmitting(true);
-    try {
-      const body: Record<string, any> = { merchantId: merchantId, planInterval: selectedPlanInterval };
-      if (selectedIntervalId) body["intervalId"] = selectedIntervalId;
-      if (hasTransactionPassword && txPassword) body["transactionPassword"] = txPassword;
-      const res  = await fetch(`${API_BASE}/api/subscriptions/confirmation-code/request-otp`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.message ?? "Failed to send OTP");
-      setStep("otp");
-    } catch (err: any) {
-      setStepError(err.message ?? "Failed to send OTP");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+  const reset = () => { setPlanInfo(null); setMerchantId(""); setLookupError(null); };
 
-  const handleGenerateCode = async () => {
-    if (!otp.trim()) return;
-    setStepError(null); setIsSubmitting(true);
-    try {
-      const res  = await fetch(`${API_BASE}/api/subscriptions/confirmation-code/generate`, {
-        method: "POST", headers: authHeaders(),
-        body: JSON.stringify({ otp: otp.trim(), merchantId: merchantId, planInterval: selectedPlanInterval, ...(selectedIntervalId ? { intervalId: selectedIntervalId } : {}) }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.message ?? "Failed to generate code");
-      setStep("done");
-    } catch (err: any) {
-      setStepError(err.message ?? "Failed to generate code");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const resetForm = () => {
-    setMerchantId(""); setPlanInfo(null); setLookupError(null);
-    setSelectedPlanInterval(""); setSelectedIntervalId(null);
-    setTxPassword(""); setOtp(""); setStep("lookup"); setStepError(null);
-  };
+  if (planInfo) {
+    return (
+      <div className="flex flex-col gap-5 max-w-[560px]">
+        <button type="button" onClick={reset} className="self-start text-sm font-bold text-(--sw-muted) hover:text-(--sw-ink)">← Different Merchant ID</button>
+        <Checkout merchantId={merchantId} plan={planInfo} variant="embedded" onPayAnother={reset} />
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-5">
-      <div className="rounded-2xl border-2 border-border bg-white overflow-hidden">
-        <div className="px-5 py-4 border-b border-border bg-slate-50">
-          <h3 className="text-sm font-bold text-foreground">Pay Subscription</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">Enter the Merchant ID provided by the creator to get your confirmation code.</p>
-        </div>
-
-        <div className="px-5 py-5 space-y-4">
-
-          {/* ── Step: lookup ── */}
-          {step === "lookup" && (
-            <>
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Merchant ID</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text" placeholder="XXXX-XXXX-XXXX"
-                    value={merchantId} onChange={(e) => setMerchantId(e.target.value.toUpperCase())}
-                    className="flex-1 h-10 rounded-xl border border-border bg-white px-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 transition"
-                  />
-                  <button type="button" onClick={handleLookup} disabled={isLooking || !merchantId.trim()}
-                    className="h-10 px-4 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary/90 disabled:opacity-60 flex items-center gap-2 transition"
-                  >
-                    {isLooking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Look up"}
-                  </button>
-                </div>
-                {lookupError && <InlineError message={lookupError} />}
-              </div>
-
-              {planInfo && (
-                <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-                  {/* Plan card */}
-                  <div className="rounded-xl bg-primary/5 border border-primary/20 p-4 space-y-1">
-                    <p className="text-sm font-semibold text-foreground">{planInfo.planTitle}</p>
-                    <p className="text-xs text-muted-foreground">By {planInfo.creatorName}</p>
-                    {planInfo.hasFreeTrial && (
-                      <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 border border-violet-200">
-                        {planInfo.trialDurationDays} day free trial
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Interval / tier selector */}
-                  {(() => {
-                    const isTiered = planInfo.tiers?.length > 0;
-                    const selectIv = (iv: any) => {
-                      setSelectedPlanInterval(iv.interval);
-                      setSelectedIntervalId(iv.intervalId ?? null);
-                    };
-
-                    if (isTiered) {
-                      return (
-                        <div className="space-y-3">
-                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Choose a Plan</label>
-                          {planInfo.tiers.map((tier: any) => (
-                            <div
-                              key={tier.tierId}
-                              className={cn(
-                                "rounded-2xl border-2 overflow-hidden transition-all",
-                                tier.isHighlighted ? "border-primary/40 shadow-sm shadow-primary/10" : "border-border",
-                              )}
-                            >
-                              {/* Tier header */}
-                              <div className={cn(
-                                "px-4 py-3 border-b",
-                                tier.isHighlighted ? "bg-primary/5 border-primary/20" : "bg-slate-50 border-border",
-                              )}>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm font-bold text-foreground">{tier.tierName}</span>
-                                  {tier.isHighlighted && (
-                                    <span className="flex items-center gap-1 text-[10px] font-bold text-primary px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20">
-                                      <Star className="w-2.5 h-2.5" aria-hidden /> Recommended
-                                    </span>
-                                  )}
-                                </div>
-                                {tier.description && (
-                                  <p className="text-xs text-muted-foreground mt-0.5">{tier.description}</p>
-                                )}
-                                {tier.features?.length > 0 && (
-                                  <div className="flex flex-wrap gap-1 mt-2">
-                                    {tier.features.map((f: string) => (
-                                      <span key={f} className="px-2 py-0.5 rounded-full bg-secondary border border-border text-[11px] text-muted-foreground">
-                                        {f}
-                                      </span>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                              {/* Tier intervals */}
-                              <div className="divide-y divide-border">
-                                {tier.intervals.map((iv: any) => {
-                                  const isSelected = selectedIntervalId === iv.intervalId;
-                                  return (
-                                    <button
-                                      key={iv.intervalId}
-                                      type="button"
-                                      onClick={() => selectIv(iv)}
-                                      aria-pressed={isSelected}
-                                      className={cn(
-                                        "w-full flex items-center justify-between px-4 py-3 text-left transition-all",
-                                        isSelected ? "bg-primary/5" : "bg-white hover:bg-slate-50",
-                                      )}
-                                    >
-                                      <div className="flex items-center gap-3">
-                                        <div className={cn(
-                                          "w-4 h-4 rounded-full border-2 shrink-0 transition-colors",
-                                          isSelected ? "border-primary bg-primary" : "border-muted-foreground/40",
-                                        )} />
-                                        <span className="text-sm font-semibold capitalize text-foreground">{iv.interval}</span>
-                                      </div>
-                                      <div className="text-right">
-                                        <span className="text-sm font-bold text-primary">${parseFloat(iv.amount).toFixed(2)}</span>
-                                        <span className="text-xs text-muted-foreground ml-1">/ {iv.interval === "yearly" ? "yr" : iv.interval === "weekly" ? "wk" : "mo"}</span>
-                                      </div>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    }
-
-                    if (planInfo.intervals.length > 1) {
-                      return (
-                        <div className="space-y-1.5">
-                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Billing Cycle</label>
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                            {planInfo.intervals.map((iv: any) => {
-                              const isSelected = selectedIntervalId === iv.intervalId;
-                              return (
-                                <button key={iv.intervalId ?? iv.interval} type="button"
-                                  onClick={() => selectIv(iv)}
-                                  aria-pressed={isSelected}
-                                  className={cn(
-                                    "flex flex-col items-start rounded-xl border-2 p-3 text-left transition-all",
-                                    isSelected ? "border-primary bg-primary/5" : "border-border hover:border-primary/50",
-                                  )}
-                                >
-                                  <span className="text-xs font-semibold capitalize text-foreground">{iv.interval}</span>
-                                  <span className="text-sm font-bold text-primary">${parseFloat(iv.amount).toFixed(2)}</span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    return null;
-                  })()}
-
-                  {/* Transaction password */}
-                  {hasTransactionPassword && (
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Transaction Password</label>
-                      <div className="relative">
-                        <input type={txPasswordVisible ? "text" : "password"} placeholder="Enter your transaction password"
-                          value={txPassword} onChange={(e) => setTxPassword(e.target.value)}
-                          className="w-full h-10 rounded-xl border border-border bg-white px-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition"
-                        />
-                        <button type="button" onClick={() => setTxPasswordVisible((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition">
-                          {txPasswordVisible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {stepError && <InlineError message={stepError} />}
-
-                  <button type="button" disabled={isSubmitting || !selectedPlanInterval} onClick={handleRequestOtp}
-                    className="w-full h-11 rounded-xl bg-primary text-white font-bold text-sm hover:bg-primary/90 disabled:opacity-60 flex items-center justify-center gap-2 transition"
-                  >
-                    {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
-                    {isSubmitting ? "Sending OTP…" : "Continue"}
-                  </button>
-                </motion.div>
-              )}
-            </>
-          )}
-
-          {/* ── Step: OTP entry ── */}
-          {step === "otp" && (
-            <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-              <div className="flex items-start gap-3 px-4 py-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 text-sm">
-                <Mail className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>We sent a 6-digit OTP to your registered email. Enter it below to generate your confirmation code.</span>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">One-Time Password</label>
-                <input type="text" inputMode="numeric" maxLength={6} placeholder="123456"
-                  value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  className="w-full h-10 rounded-xl border border-border bg-white px-3 text-sm font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-primary/30 transition"
-                />
-              </div>
-              {stepError && <InlineError message={stepError} />}
-              <div className="flex gap-2">
-                <button type="button" onClick={() => { setStep("lookup"); setStepError(null); }}
-                  className="flex-1 h-11 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition"
-                >
-                  Back
-                </button>
-                <button type="button" disabled={isSubmitting || otp.length < 6} onClick={handleGenerateCode}
-                  className="flex-1 h-11 rounded-xl bg-primary text-white font-bold text-sm hover:bg-primary/90 disabled:opacity-60 flex items-center justify-center gap-2 transition"
-                >
-                  {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                  {isSubmitting ? "Generating…" : "Generate Code"}
-                </button>
-              </div>
-            </motion.div>
-          )}
-
-          {/* ── Step: success ── */}
-          {step === "done" && (
-            <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
-              className="flex flex-col items-center gap-4 py-6 text-center"
-            >
-              <div className="w-14 h-14 rounded-2xl bg-green-100 flex items-center justify-center">
-                <CheckCircle2 className="w-7 h-7 text-green-600" />
-              </div>
-              <div className="space-y-1">
-                <h3 className="text-base font-semibold text-foreground">Confirmation code sent!</h3>
-                <p className="text-sm text-muted-foreground max-w-xs">
-                  Your 8-character confirmation code has been emailed to you. Visit the creator's subscription page and enter it to activate your subscription.
-                </p>
-              </div>
-              <p className="text-xs text-muted-foreground">The code expires in 7 days.</p>
-              <button type="button" onClick={resetForm}
-                className="mt-2 h-10 px-6 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition"
-              >
-                Pay another subscription
-              </button>
-            </motion.div>
-          )}
-
-        </div>
+    <form className="flex flex-col gap-4 max-w-[480px]" onSubmit={(e) => { e.preventDefault(); handleLookup(); }}>
+      <div className="flex flex-col gap-1">
+        <h3 className="font-extrabold text-xl tracking-[-0.02em]">Pay a subscription</h3>
+        <p className="text-sm text-(--sw-muted)">Enter the Merchant ID from the creator, or scan their QR code from the dashboard.</p>
       </div>
-    </div>
+      <div className="flex flex-col gap-2">
+        <label htmlFor="pay-mid" className="text-[13px] font-bold text-(--sw-label)">Merchant ID</label>
+        <input id="pay-mid" value={merchantId} onChange={(e) => onId(e.target.value)} placeholder="XXXX-XXXX-XXXX"
+          autoComplete="off" autoCapitalize="characters" spellCheck={false}
+          className="h-[54px] rounded-[14px] border border-(--sw-field-line) bg-white px-4 text-lg font-bold tracking-[0.08em] outline-none placeholder:text-[#c5ccd8] placeholder:font-semibold focus:border-(--sw-blue) focus:shadow-[0_0_0_4px_rgb(17_40_245/.1)] transition" />
+      </div>
+      {lookupError && <p role="alert" className="rounded-2xl bg-[#fef3f2] text-[#b42318] px-4 py-3 text-sm font-medium">{lookupError}</p>}
+      <button type="submit" disabled={merchantId.length < 14 || isLooking}
+        className="h-[54px] rounded-2xl bg-(--sw-blue) text-white text-[15px] font-bold hover:bg-(--sw-blue-hover) disabled:bg-[#c5ccd8] disabled:cursor-not-allowed flex items-center justify-center gap-2 transition">
+        {isLooking && <Loader2 className="w-4 h-4 animate-spin" />}{isLooking ? "Looking up…" : "Look up merchant"}
+      </button>
+    </form>
   );
 }

@@ -493,7 +493,7 @@ const USE_CASES = [
   {
     audience: "MERCHANTS & CREATORS",
     headline: "Automate billing with subscription plans.",
-    points: ["Create weekly, monthly, or yearly billing plans", "Customers activate with a one-time confirmation code", "Automatic recurring charges with email receipts", "Real-time dashboard of active subscribers"],
+    points: ["Create weekly, monthly, or yearly billing plans", "Customers pay with your Merchant ID and their transaction password", "Automatic recurring charges with email receipts", "Real-time dashboard of active subscribers"],
   },
   {
     audience: "BUSINESSES & TEAMS",

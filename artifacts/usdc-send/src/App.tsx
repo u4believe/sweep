@@ -17,6 +17,7 @@ import Docs from "./pages/docs";
 import ForgotPassword from "./pages/forgot-password";
 import ResetPassword from "./pages/reset-password";
 import NotFound from "./pages/not-found";
+import SendTo from "./pages/send-to";
 
 // Wire up base URL and auth token for every generated API hook
 setBaseUrl(API_BASE);
@@ -48,6 +49,7 @@ function Router() {
       <Route path="/register" component={Register} />
       <Route path="/subscribe/:merchantId" component={Subscribe} />
       <Route path="/pay/:merchantId" component={Pay} />
+      <Route path="/send/:paymentId" component={SendTo} />
       <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/reset-password" component={ResetPassword} />
       <Route path="/docs" component={Docs} />

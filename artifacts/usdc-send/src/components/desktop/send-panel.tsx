@@ -1,4 +1,5 @@
-import { ChevronLeft, Loader2 } from "lucide-react";
+import { useEffect } from "react";
+import { ChevronLeft, Loader2, ScanLine } from "lucide-react";
 import { OutlineButton, PrimaryButton, Segmented, SummaryRows, fmtUsd } from "@/components/sweep/ui";
 import {
   AmountInput, ErrorLine, RecipientFields, ResultRows, ReviewCard, SendHint, SentHero, TxPasswordField, UnregisteredNote,
@@ -6,12 +7,16 @@ import {
 import { useSendFlow, type SendFlowOptions, type SendMode } from "@/components/sweep/use-send-flow";
 
 /** The web dashboard's "Sweep money" panel: form → review → sent, all in place. */
-export function SendPanel({ contacts, circleWallet, onViewHistory, ...opts }: SendFlowOptions & {
+export function SendPanel({ contacts, circleWallet, onViewHistory, onScan, ...opts }: SendFlowOptions & {
   contacts: string[];
   circleWallet?: string;
   onViewHistory: () => void;
+  onScan: () => void;
 }) {
   const flow = useSendFlow(opts);
+
+  // A scanned recipient still needs an amount
+  useEffect(() => { if (opts.prefillTo) setTimeout(() => document.getElementById("d-amount")?.focus(), 80); }, [opts.prefillTo?.n]);
 
   if (flow.step === "sent" && flow.result) {
     return (
@@ -55,7 +60,13 @@ export function SendPanel({ contacts, circleWallet, onViewHistory, ...opts }: Se
 
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="font-extrabold text-xl tracking-[-0.02em]">Sweep money</h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="font-extrabold text-xl tracking-[-0.02em]">Sweep money</h2>
+        <button type="button" onClick={onScan}
+          className="h-9 px-3 rounded-xl border border-(--sw-line) flex items-center gap-1.5 text-[13px] font-bold text-(--sw-blue) hover:bg-(--sw-tint)">
+          <ScanLine className="w-4 h-4" /> Scan QR
+        </button>
+      </div>
       <Segmented<SendMode> value={flow.mode} onChange={flow.setMode}
         options={[{ value: "usd", label: "Email · USD" }, { value: "usdc", label: "Wallet · USDC" }]} />
       <div className="pt-2.5 pb-1">

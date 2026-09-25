@@ -1,17 +1,20 @@
 import { useState, useRef, useEffect } from "react";
 import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, Send, ShieldCheck, RefreshCw, Eye, EyeOff, Smartphone } from "lucide-react";
+import { Loader2, Send, ShieldCheck, RefreshCw, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 import { API_BASE } from "@/lib/api";
 import { finishSignIn, TWO_FACTOR_CHALLENGE_KEY } from "@/lib/auth-session";
-import { GoogleSignInButton, type GoogleAuthResult } from "@/components/auth/google-sign-in";
+import { GoogleSignInButton, useAuthConfig, type GoogleAuthResult } from "@/components/auth/google-sign-in";
 import { TotpInput } from "@/components/auth/totp-input";
 import {
-  AuthBackLink, AuthError, AuthNotice, AuthShell, AuthTitle, authCodeField, authField, authPrimary,
+  AuthBackLink, AuthError, AuthNotice, NightAuthShell, NightTitle, authPrimary, nightField,
 } from "@/components/auth/auth-shell";
+
+const label = "text-[13px] font-bold text-(--sw-label)";
+const nightCodeField = "h-[54px] rounded-[14px] border border-(--sw-field-line) bg-white focus:border-(--sw-blue) focus:ring-0";
 
 type Step = "credentials" | "otp" | "unverified" | "google-2fa";
 
@@ -21,6 +24,7 @@ const readStoredChallenge = () => {
 
 export default function Login() {
   const queryClient = useQueryClient();
+  const googleEnabled = !!useAuthConfig().data?.googleClientId;
 
   const [challenge, setChallenge]     = useState<string | null>(readStoredChallenge);
   const [step, setStep]               = useState<Step>(() => (challenge ? "google-2fa" : "credentials"));
@@ -221,44 +225,56 @@ export default function Login() {
   const errorBox = <AuthError message={error} />;
 
   return (
-    <AuthShell>
+    <NightAuthShell footer="Protected by email OTP and your transaction password.">
 
           {step === "credentials" && (
             <>
-              <AuthTitle>Log in</AuthTitle>
+              <NightTitle title="Welcome back" sub="Log in with your email and password." />
               {notice && <AuthNotice tone={notice.tone as "ok" | "warn" | "bad"}>{notice.text}</AuthNotice>}
               {errorBox}
-              <GoogleSignInButton text="signin_with" onResult={handleGoogleResult} onError={setError} />
-              <form onSubmit={handleCredentials} className="flex flex-col gap-3" noValidate>
-                <label htmlFor="login-email" className="sr-only">Email</label>
-                <input id="login-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com" autoComplete="email" inputMode="email" autoCapitalize="none" required className={authField} />
-                <label htmlFor="login-password" className="sr-only">Password</label>
-                <div className="relative">
-                  <input id="login-password" type={showPassword ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Password" autoComplete="current-password" required className={cn(authField, "pr-12")} />
-                  <button type="button" onClick={() => setShowPassword((v) => !v)} aria-label={showPassword ? "Hide password" : "Show password"}
-                    className="absolute inset-y-0 right-0 px-4 flex items-center text-(--sw-muted) hover:text-(--sw-ink)">
-                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                  </button>
+              <form onSubmit={handleCredentials} className="flex flex-col gap-[22px]" noValidate>
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="login-email" className={label}>Email</label>
+                  <input id="login-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com" autoComplete="email" inputMode="email" autoCapitalize="none" required className={nightField} />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="login-password" className={label}>Password</label>
+                    <Link href="/forgot-password" className="text-[13px] font-bold text-(--sw-blue) hover:text-(--sw-blue-hover)">Forgot password?</Link>
+                  </div>
+                  <div className="relative">
+                    <input id="login-password" type={showPassword ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Your password" autoComplete="current-password" required className={cn(nightField, "pr-16")} />
+                    <button type="button" onClick={() => setShowPassword((v) => !v)} aria-label={showPassword ? "Hide password" : "Show password"}
+                      className="absolute inset-y-0 right-0 px-3.5 text-[13px] font-bold text-(--sw-blue) hover:text-(--sw-blue-hover)">
+                      {showPassword ? "Hide" : "Show"}
+                    </button>
+                  </div>
                 </div>
                 <button type="submit" disabled={isPending} className={authPrimary}>
                   {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : "Log in"}
                 </button>
               </form>
-              <div className="flex justify-between text-sm font-semibold px-1 pt-1">
-                <Link href="/register" className="text-(--sw-blue) hover:text-(--sw-blue-hover)">Create account</Link>
-                <Link href="/forgot-password" className="text-(--sw-muted) hover:text-(--sw-ink)">Forgot password?</Link>
-              </div>
+              {googleEnabled && (
+                <>
+                  <div className="flex items-center gap-3 text-xs font-semibold text-(--sw-faint) -my-1" aria-hidden>
+                    <span className="h-px flex-1 bg-(--sw-field-line)" /> or <span className="h-px flex-1 bg-(--sw-field-line)" />
+                  </div>
+                  <GoogleSignInButton text="signin_with" onResult={handleGoogleResult} onError={setError} />
+                </>
+              )}
+              <p className="text-sm text-(--sw-muted) text-center">
+                New to Sweep? <Link href="/register" className="font-bold text-(--sw-blue) hover:text-(--sw-blue-hover)">Open an account</Link>
+              </p>
             </>
           )}
 
           {step === "unverified" && (
             <>
-              <AuthTitle>Verify your email</AuthTitle>
-              <p className="text-sm text-(--sw-muted) leading-relaxed">
-                We need to verify <span className="font-bold text-(--sw-ink)">{sentEmail}</span> before you can log in. Check your inbox for a verification link — it's valid for 72 hours.
-              </p>
+              <NightTitle title="Verify your email" sub={<>
+                We need to verify <strong className="text-(--sw-ink)">{sentEmail}</strong> before you can log in. Check your inbox for a verification link — it's valid for 72 hours.
+              </>} />
               {resentVerification && <AuthNotice tone="ok">Verification email resent — check your inbox.</AuthNotice>}
               <button type="button" onClick={handleResendVerification} disabled={isPending} className={cn(authPrimary, "mt-2")}>
                 {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Send className="w-5 h-5" /> Resend verification email</>}
@@ -269,10 +285,7 @@ export default function Login() {
 
           {step === "otp" && (
             <form onSubmit={handleVerifyOtp} className="flex flex-col gap-3">
-              <AuthTitle>Check your email</AuthTitle>
-              <p className="text-sm text-(--sw-muted)">
-                We sent a 6-digit code to <span className="font-bold text-(--sw-ink)">{sentEmail}</span>
-              </p>
+              <NightTitle title="Check your email" sub={<>We sent a 6-digit code to <strong className="text-(--sw-ink)">{sentEmail}</strong>.</>} />
               {errorBox}
               <fieldset className="mt-1">
                 <legend className="text-[13px] font-bold text-(--sw-label) mb-2">Email code</legend>
@@ -289,7 +302,7 @@ export default function Login() {
                       aria-label={`Digit ${i + 1}`}
                       onChange={(e) => handleOtpChange(i, e.target.value)}
                       onKeyDown={(e) => handleOtpKeyDown(i, e)}
-                      className={cn("h-14 w-full min-w-0 text-center text-xl font-extrabold rounded-[14px] border bg-(--sw-bg) outline-none transition-colors focus:border-(--sw-blue) focus:bg-white",
+                      className={cn("h-14 w-full min-w-0 text-center text-xl font-extrabold rounded-[14px] border bg-white outline-none transition focus:border-(--sw-blue) focus:shadow-[0_0_0_4px_rgb(17_40_245/.1)]",
                         digit ? "border-(--sw-blue)" : "border-(--sw-field-line)")}
                     />
                   ))}
@@ -300,7 +313,7 @@ export default function Login() {
                   <label htmlFor="login-totp" className="flex items-center gap-1.5 text-[13px] font-bold text-(--sw-label) mb-2">
                     <Smartphone className="w-4 h-4 text-(--sw-blue)" /> Authenticator app code
                   </label>
-                  <TotpInput id="login-totp" value={totp} onChange={setTotp} disabled={isPending} className={authCodeField} />
+                  <TotpInput id="login-totp" value={totp} onChange={setTotp} disabled={isPending} className={nightCodeField} />
                   <p className="text-xs text-(--sw-muted) mt-2">Open your authenticator app and enter the current code for Sweep.</p>
                 </div>
               )}
@@ -317,19 +330,18 @@ export default function Login() {
 
           {step === "google-2fa" && (
             <form onSubmit={handleGoogle2fa} className="flex flex-col gap-3">
-              <AuthTitle>Two-factor authentication</AuthTitle>
-              <p className="text-sm text-(--sw-muted)">Enter the 6-digit code from your authenticator app to finish signing in with Google.</p>
+              <NightTitle title="Two-factor authentication" sub="Enter the 6-digit code from your authenticator app to finish signing in with Google." />
               {errorBox}
               <label htmlFor="google-totp" className="flex items-center gap-1.5 text-[13px] font-bold text-(--sw-label) mt-1">
                 <Smartphone className="w-4 h-4 text-(--sw-blue)" /> Authenticator app code
               </label>
-              <TotpInput id="google-totp" value={totp} onChange={setTotp} disabled={isPending} className={authCodeField} />
+              <TotpInput id="google-totp" value={totp} onChange={setTotp} disabled={isPending} className={nightCodeField} />
               <button type="submit" disabled={isPending || totp.length < 6} className={cn(authPrimary, "mt-2")}>
                 {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ShieldCheck className="w-5 h-5" /> Verify &amp; log in</>}
               </button>
               {back}
             </form>
           )}
-    </AuthShell>
+    </NightAuthShell>
   );
 }
