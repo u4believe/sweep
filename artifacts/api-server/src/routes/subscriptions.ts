@@ -8,7 +8,10 @@
  * Public lookup (subscriber — no auth):
  *   GET  /api/subscriptions/merchant/:id       — reveal plan info from Merchant ID
  *
- * Confirmation code flow (subscriber — requires auth):
+ * One-step checkout (subscriber — requires auth):
+ *   POST /api/subscriptions/checkout           — Merchant ID + interval + tx pwd, charges now
+ *
+ * Confirmation code flow (legacy — kept for API clients):
  *   POST /api/subscriptions/confirmation-code/request-otp  — verify tx pwd, send OTP
  *   POST /api/subscriptions/confirmation-code/generate     — verify OTP, emit code
  *
@@ -783,39 +786,8 @@ router.post("/activate", async (req, res) => {
       }
     }
 
-    // Auto-issue or reactivate Subscription Passport on successful confirmation-code activation
-    try {
-      const [existingPassport] = await db
-        .select()
-        .from(subscriptionPassportsTable)
-        .where(eq(subscriptionPassportsTable.userId, subscriberUserId))
-        .limit(1);
-
-      if (!existingPassport) {
-        const secret    = process.env.PASSPORT_SECRET!;
-        const payload   = `passport:${subscriberUserId}:${Date.now()}`;
-        const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
-
-        await db.insert(subscriptionPassportsTable).values({
-          userId:    subscriberUserId,
-          status:    "active",
-          signature,
-          issuedAt:  new Date(),
-        });
-
-        try { await sendPassportCreatedEmail(subscriber!.email); } catch {}
-        logger.info({ userId: subscriberUserId }, "[subscriptions] Subscription passport issued");
-      } else if (existingPassport.status === "suspended") {
-        // Reactivate suspended passport — user proved their identity via confirmation code
-        await db.update(subscriptionPassportsTable)
-          .set({ status: "active", suspendedAt: null, suspendedReason: null, updatedAt: new Date() })
-          .where(eq(subscriptionPassportsTable.id, existingPassport.id));
-        logger.info({ userId: subscriberUserId }, "[subscriptions] Subscription passport reactivated");
-      }
-      // revoked passports are not reinstated
-    } catch (passportErr: any) {
-      logger.warn({ err: passportErr.message }, "[subscriptions] Failed to auto-issue/reactivate passport");
-    }
+    // Auto-issue or reactivate Subscription Passport — the confirmation code proved identity
+    await ensurePassport(subscriberUserId, subscriber!.email);
 
     // Notify subscriber of activation
     try {
@@ -986,6 +958,253 @@ router.get("/passport", requireAuth, async (req, res) => {
   }
 });
 
+// ── Shared activation ────────────────────────────────────────────────────────
+
+type PlanRow     = typeof subscriptionPlansTable.$inferSelect;
+type IntervalRow = typeof subscriptionIntervalsTable.$inferSelect;
+type UserRow     = typeof usersTable.$inferSelect;
+
+/** Resolve a plan's interval — intervalId (required for tiered plans) or a flat planInterval name. */
+async function resolveInterval(planId: number, intervalId?: number, planInterval?: string): Promise<IntervalRow | undefined> {
+  const [row] = await db
+    .select()
+    .from(subscriptionIntervalsTable)
+    .where(
+      intervalId
+        ? and(eq(subscriptionIntervalsTable.id, intervalId), eq(subscriptionIntervalsTable.planId, planId))
+        : and(eq(subscriptionIntervalsTable.planId, planId), eq(subscriptionIntervalsTable.interval, planInterval!)),
+    )
+    .limit(1);
+  return row;
+}
+
+/**
+ * Start (or replace) a subscription: cancels any existing one to the same merchant,
+ * charges the first period unless the plan has a free trial, then notifies both sides.
+ * Throws InsufficientBalanceError / SelfPaymentError from the ledger.
+ */
+async function startSubscription(opts: {
+  subscriber:       UserRow;
+  plan:             PlanRow;
+  interval:         IntervalRow;
+  activationMethod: string;
+  externalRef?:     string | null;
+}) {
+  const { subscriber, plan, interval, activationMethod } = opts;
+  const merchantId   = plan.merchantId;
+  const planInterval = interval.interval;
+  const amount       = parseFloat(interval.amount);
+  const isDevPlan    = plan.pakHash === "dev-api-plan";
+  const externalRef  = isDevPlan ? (opts.externalRef?.trim() || null) : null;
+
+  const now      = new Date();
+  const trialing = !!(plan.hasFreeTrial && plan.trialDurationDays);
+  const status   = trialing ? "trialing" : "active";
+  const trialEndsAt   = trialing ? new Date(now.getTime() + plan.trialDurationDays! * 24 * 60 * 60 * 1000) : null;
+  const nextBillingAt = trialEndsAt ?? advanceBillingDate(now, planInterval as Interval);
+
+  // Cancel the old subscription, charge (unless trialing) and create the new one — all atomic
+  const [subscription] = await db.transaction(async (tx) => {
+    await tx.update(subscriptionsTable)
+      .set({ status: "cancelled", cancelledAt: now, updatedAt: now })
+      .where(and(eq(subscriptionsTable.subscriberUserId, subscriber.id), eq(subscriptionsTable.merchantId, merchantId)));
+
+    if (!trialing) await chargeSubscription(tx, subscriber, plan, amount, now);
+
+    return tx.insert(subscriptionsTable).values({
+      subscriberUserId: subscriber.id,
+      planId:           plan.id,
+      intervalId:       interval.id,
+      merchantId,
+      planInterval,
+      amount:           amount.toFixed(6),
+      status,
+      startedAt:        now,
+      trialEndsAt,
+      nextBillingAt,
+      externalRef,
+      activationMethod,
+    }).returning();
+  });
+
+  // Fire webhook for developer-class plans
+  if (isDevPlan) {
+    enqueueWebhook(plan.creatorUserId, "subscription.created", {
+      subscription_id:    subscription!.id,
+      merchant_id:        merchantId,
+      plan_id:            plan.id,
+      plan_name:          plan.planTitle,
+      external_ref:       externalRef,
+      interval:           planInterval,
+      amount:             amount.toFixed(6),
+      currency:           "USD",
+      status,
+      trial_end:          trialEndsAt?.toISOString() ?? null,
+      current_period_end: nextBillingAt.toISOString(),
+      created_at:         now.toISOString(),
+    }).catch(() => {});
+  }
+
+  // Notify subscriber of activation
+  try {
+    await sendSubscriptionActivatedEmail(
+      subscriber.email,
+      plan.planTitle,
+      amount.toFixed(2),
+      planInterval,
+      trialing,
+      trialing ? undefined : nextBillingAt,
+      trialEndsAt ?? undefined,
+    );
+  } catch {}
+
+  // Notify creator of new subscriber
+  try {
+    const activeSubs = await db
+      .select({ id: subscriptionsTable.id })
+      .from(subscriptionsTable)
+      .where(
+        and(
+          eq(subscriptionsTable.planId, plan.id),
+          ne(subscriptionsTable.status, "cancelled"),
+          ne(subscriptionsTable.status, "failed"),
+        ),
+      );
+    await sendCreatorNewSubscriberEmail(plan.paymentEmail, subscriber.email, plan.planTitle, planInterval, activeSubs.length);
+  } catch (emailErr) {
+    logger.warn({ err: emailErr }, "[subscriptions] Failed to send creator new-subscriber email");
+  }
+
+  logger.info(
+    { subscriptionId: subscription!.id, subscriberUserId: subscriber.id, merchantId, status, method: activationMethod },
+    "[subscriptions] Subscription activated",
+  );
+
+  return {
+    message:      trialing ? "Subscription activated — free trial started" : "Subscription activated",
+    subscription: { id: subscription!.id, status, planTitle: plan.planTitle, planInterval, amount: amount.toFixed(2) },
+  };
+}
+
+/** Map ledger errors from startSubscription to responses; returns false for anything else. */
+function sendActivationError(res: any, err: unknown): boolean {
+  if (err instanceof InsufficientBalanceError) {
+    res.status(402).json({ error: "Insufficient balance", message: "Your account balance is too low to start this subscription" });
+    return true;
+  }
+  if (err instanceof SelfPaymentError) {
+    res.status(400).json({ error: "Invalid subscription", message: "You cannot subscribe to your own plan" });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Issue a Subscription Passport if the user has none, or reactivate a suspended one —
+ * the caller has just proved their identity. Revoked passports are not reinstated.
+ */
+async function ensurePassport(userId: number, email: string): Promise<void> {
+  try {
+    const [existing] = await db
+      .select()
+      .from(subscriptionPassportsTable)
+      .where(eq(subscriptionPassportsTable.userId, userId))
+      .limit(1);
+
+    if (!existing) {
+      const secret    = process.env.PASSPORT_SECRET!;
+      const payload   = `passport:${userId}:${Date.now()}`;
+      const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+
+      await db.insert(subscriptionPassportsTable).values({ userId, status: "active", signature, issuedAt: new Date() });
+      try { await sendPassportCreatedEmail(email); } catch {}
+      logger.info({ userId }, "[subscriptions] Subscription passport issued");
+    } else if (existing.status === "suspended") {
+      await db.update(subscriptionPassportsTable)
+        .set({ status: "active", suspendedAt: null, suspendedReason: null, updatedAt: new Date() })
+        .where(eq(subscriptionPassportsTable.id, existing.id));
+      logger.info({ userId }, "[subscriptions] Subscription passport reactivated");
+    }
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "[subscriptions] Failed to issue/reactivate passport");
+  }
+}
+
+// ── POST /api/subscriptions/checkout ─────────────────────────────────────────
+// One-step checkout: Merchant ID + chosen tier/interval + transaction password.
+
+router.post("/checkout", requireAuth, requireEmailVerified, async (req, res) => {
+  try {
+    const user = (req as any).user as { userId: number };
+    const { merchantId, intervalId, transactionPassword } = req.body as {
+      merchantId?:          string;
+      intervalId?:          number;
+      transactionPassword?: string;
+    };
+
+    if (!merchantId?.trim() || !intervalId) {
+      res.status(400).json({ error: "Validation", message: "merchantId and intervalId are required" });
+      return;
+    }
+
+    const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.userId)).limit(1);
+    if (!dbUser) {
+      res.status(404).json({ error: "Not found", message: "User not found" });
+      return;
+    }
+    if (!dbUser.transactionPasswordHash) {
+      res.status(403).json({ error: "Forbidden", message: "Set a transaction password in Settings before paying" });
+      return;
+    }
+    if (!transactionPassword || !(await bcrypt.compare(transactionPassword, dbUser.transactionPasswordHash))) {
+      res.status(403).json({ error: "Forbidden", message: "Invalid transaction password" });
+      return;
+    }
+
+    const [plan] = await db
+      .select()
+      .from(subscriptionPlansTable)
+      .where(eq(subscriptionPlansTable.merchantId, merchantId.trim()))
+      .limit(1);
+    if (!plan) {
+      res.status(404).json({ error: "Not found", message: "Merchant ID not found" });
+      return;
+    }
+
+    const interval = await resolveInterval(plan.id, intervalId);
+    if (!interval) {
+      res.status(404).json({ error: "Not found", message: "Interval not found for this plan" });
+      return;
+    }
+
+    if (isSelfSubscription(dbUser, plan)) {
+      res.status(400).json({ error: "Invalid subscription", message: "You cannot subscribe to your own plan" });
+      return;
+    }
+
+    let result;
+    try {
+      result = await startSubscription({
+        subscriber:       dbUser,
+        plan,
+        interval,
+        activationMethod: "transaction_password",
+      });
+    } catch (err) {
+      if (sendActivationError(res, err)) return;
+      throw err;
+    }
+
+    // Keeps developer checkout pages (/pay/:merchantId) one-tap for this user
+    await ensurePassport(dbUser.id, dbUser.email);
+
+    res.json(result);
+  } catch (err: any) {
+    logger.error({ err: err.message }, "[subscriptions] Checkout error");
+    res.status(500).json({ error: "Internal server error", message: err.message });
+  }
+});
+
 // ── POST /api/subscriptions/passport/activate ─────────────────────────────────
 // Passport-based subscription activation — no confirmation code required.
 // Requires: auth, active passport, transaction password (if set).
@@ -1056,184 +1275,29 @@ router.post("/passport/activate", requireAuth, requireEmailVerified, async (req,
       return;
     }
 
-    // Resolve interval — prefer intervalId for tiered plans
-    let intervalRecord: typeof subscriptionIntervalsTable.$inferSelect | undefined;
-    if (rawIntervalId) {
-      const [row] = await db
-        .select()
-        .from(subscriptionIntervalsTable)
-        .where(
-          and(
-            eq(subscriptionIntervalsTable.id, rawIntervalId),
-            eq(subscriptionIntervalsTable.planId, plan.id),
-          ),
-        )
-        .limit(1);
-      intervalRecord = row;
-    } else {
-      const [row] = await db
-        .select()
-        .from(subscriptionIntervalsTable)
-        .where(
-          and(
-            eq(subscriptionIntervalsTable.planId, plan.id),
-            eq(subscriptionIntervalsTable.interval, reqPlanInterval!),
-          ),
-        )
-        .limit(1);
-      intervalRecord = row;
-    }
-
-    if (!intervalRecord) {
+    const interval = await resolveInterval(plan.id, rawIntervalId, reqPlanInterval);
+    if (!interval) {
       res.status(404).json({ error: "Not found", message: "Interval not found for this plan" });
       return;
     }
-
-    const planInterval = intervalRecord.interval;
-
-    const subscriberUserId = user.userId;
-    const amount           = parseFloat(intervalRecord.amount);
-
-    const now = new Date();
-    let status: string;
-    let trialEndsAt: Date | null = null;
-    let nextBillingAt: Date;
-    let passportSubscription: typeof subscriptionsTable.$inferSelect;
-
-    const isDevPlan = plan.pakHash === "dev-api-plan";
 
     if (isSelfSubscription(dbUser, plan)) {
       res.status(400).json({ error: "Invalid subscription", message: "You cannot subscribe to your own plan" });
       return;
     }
 
-    if (plan.hasFreeTrial && plan.trialDurationDays) {
-      status        = "trialing";
-      trialEndsAt   = new Date(now.getTime() + plan.trialDurationDays * 24 * 60 * 60 * 1000);
-      nextBillingAt = trialEndsAt;
-
-      [passportSubscription] = await db.transaction(async (tx) => {
-        await tx.update(subscriptionsTable)
-          .set({ status: "cancelled", cancelledAt: now, updatedAt: now })
-          .where(and(eq(subscriptionsTable.subscriberUserId, subscriberUserId), eq(subscriptionsTable.merchantId, merchantId)));
-
-        return tx.insert(subscriptionsTable).values({
-          subscriberUserId,
-          planId:           plan.id,
-          intervalId:       intervalRecord.id,
-          merchantId,
-          planInterval,
-          amount:           amount.toFixed(6),
-          status,
-          startedAt:        now,
-          trialEndsAt,
-          nextBillingAt,
-          externalRef:      isDevPlan ? (externalRef?.trim() || null) : null,
-          activationMethod: isDevPlan ? "checkout" : "passport",
-        }).returning();
-      });
-    } else {
-      // Immediate billing
-      status        = "active";
-      nextBillingAt = advanceBillingDate(now, planInterval as Interval);
-
-      try {
-        [passportSubscription] = await db.transaction(async (tx) => {
-          await tx.update(subscriptionsTable)
-            .set({ status: "cancelled", cancelledAt: now, updatedAt: now })
-            .where(and(eq(subscriptionsTable.subscriberUserId, subscriberUserId), eq(subscriptionsTable.merchantId, merchantId)));
-
-          await chargeSubscription(tx, dbUser, plan, amount, now);
-
-          return tx.insert(subscriptionsTable).values({
-            subscriberUserId,
-            planId:           plan.id,
-            intervalId:       intervalRecord.id,
-            merchantId,
-            planInterval,
-            amount:           amount.toFixed(6),
-            status,
-            startedAt:        now,
-            trialEndsAt:      null,
-            nextBillingAt,
-            externalRef:      isDevPlan ? (externalRef?.trim() || null) : null,
-            activationMethod: isDevPlan ? "checkout" : "passport",
-          }).returning();
-        });
-      } catch (err) {
-        if (err instanceof InsufficientBalanceError) {
-          res.status(402).json({ error: "Insufficient balance", message: "Your account balance is too low to start this subscription" });
-          return;
-        }
-        if (err instanceof SelfPaymentError) {
-          res.status(400).json({ error: "Invalid subscription", message: "You cannot subscribe to your own plan" });
-          return;
-        }
-        throw err;
-      }
-    }
-
-    // Fire webhook for developer-class plans
-    if (isDevPlan) {
-      enqueueWebhook(plan.creatorUserId, "subscription.created", {
-        subscription_id:    passportSubscription.id,
-        merchant_id:        merchantId,
-        plan_id:            plan.id,
-        plan_name:          plan.planTitle,
-        external_ref:       externalRef?.trim() || null,
-        interval:           planInterval,
-        amount:             amount.toFixed(6),
-        currency:           "USD",
-        status,
-        trial_end:          trialEndsAt?.toISOString() ?? null,
-        current_period_end: nextBillingAt.toISOString(),
-        created_at:         now.toISOString(),
-      }).catch(() => {});
-    }
-
-    // Notify subscriber of activation
     try {
-      await sendSubscriptionActivatedEmail(
-        dbUser.email,
-        plan.planTitle,
-        amount.toFixed(2),
-        planInterval,
-        status === "trialing",
-        status === "trialing" ? undefined : nextBillingAt,
-        trialEndsAt ?? undefined,
-      );
-    } catch {}
-
-    // Notify creator of new subscriber
-    try {
-      const activeSubs = await db
-        .select({ id: subscriptionsTable.id })
-        .from(subscriptionsTable)
-        .where(
-          and(
-            eq(subscriptionsTable.planId, plan.id),
-            ne(subscriptionsTable.status, "cancelled"),
-            ne(subscriptionsTable.status, "failed"),
-          ),
-        );
-      await sendCreatorNewSubscriberEmail(
-        plan.paymentEmail,
-        dbUser.email,
-        plan.planTitle,
-        planInterval,
-        activeSubs.length,
-      );
-    } catch {}
-
-    logger.info(
-      { subscriptionId: passportSubscription.id, subscriberUserId, merchantId, status, method: "passport" },
-      "[subscriptions] Passport-based subscription activated",
-    );
-
-    res.json({
-      message:      status === "trialing" ? "Subscription activated — free trial started" : "Subscription activated",
-      subscription: { id: passportSubscription.id, status, planTitle: plan.planTitle, planInterval, amount: amount.toFixed(2) },
-    });
+      res.json(await startSubscription({
+        subscriber:       dbUser,
+        plan,
+        interval,
+        activationMethod: plan.pakHash === "dev-api-plan" ? "checkout" : "passport",
+        externalRef,
+      }));
+    } catch (err) {
+      if (sendActivationError(res, err)) return;
+      throw err;
+    }
   } catch (err: any) {
     logger.error({ err: err.message }, "[subscriptions] Passport activate error");
     res.status(500).json({ error: "Internal server error", message: err.message });
