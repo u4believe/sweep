@@ -276,6 +276,12 @@ router.post("/crypto", requireAuth, requireEmailVerified, withdrawalLimiter, asy
           return;
         }
 
+        // Mark the route first: if the server stops mid-submission, recovery must not
+        // replay this as a direct transfer (Gateway may already have accepted it).
+        await db.update(withdrawalsTable)
+          .set({ status: "submitting_gateway" })
+          .where(eq(withdrawalsTable.id, withdrawal.id));
+
         const result = await gatewayWithdrawal({
           destinationAddress: walletAddress,
           destinationChain:   chainKey as ChainKey,
@@ -289,6 +295,26 @@ router.post("/crypto", requireAuth, requireEmailVerified, withdrawalLimiter, asy
         );
       }
     } catch (err: any) {
+      // No answer from Circle ≠ rejected. Refunding here could pay the user twice.
+      //  - Gateway: it may have accepted the burn → hold for review.
+      //  - Direct: the reconciliation worker replays it with the same idempotency
+      //    key, which either returns the sent transfer or sends it once.
+      const noAnswer = !!err?.inconclusive || (direct && typeof err?.status !== "number");
+      if (noAnswer) {
+        if (err?.inconclusive) {
+          await db.update(withdrawalsTable).set({ status: "needs_review" }).where(eq(withdrawalsTable.id, withdrawal.id));
+        }
+        req.log.error(
+          { err: err.message, grossAmount, walletAddress, chainKey, direct, withdrawalId: withdrawal.id },
+          direct ? "[withdraw] No response from Circle — left for idempotent replay" : "[withdraw] No response from Gateway — held for review",
+        );
+        res.status(202).json({
+          status:  direct ? "processing" : "needs_review",
+          message: "Your withdrawal is being confirmed. It will arrive shortly, or be returned to your balance if it can't be completed.",
+        });
+        return;
+      }
+
       await atomicRestore(user.userId, grossAmount);
       await db
         .update(withdrawalsTable)

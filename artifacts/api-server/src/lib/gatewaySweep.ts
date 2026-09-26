@@ -623,11 +623,19 @@ export async function gatewayWithdrawal(opts: {
       `  body: ${JSON.stringify(requestBody, null, 2)}`,
     );
 
-    const res = await fetch(url, {
-      method:  "POST",
-      headers: circleHeaders(),
-      body:    JSON.stringify(requestBody),
-    });
+    // A lost response (network error / timeout) is not a rejection: Gateway may
+    // have accepted the burn. Flag it so nothing retries on another chain or refunds.
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method:  "POST",
+        headers: circleHeaders(),
+        body:    JSON.stringify(requestBody),
+        signal:  AbortSignal.timeout(60_000),
+      });
+    } catch (err: any) {
+      throw Object.assign(new Error(`Gateway transfer request got no response: ${err?.message ?? err}`), { inconclusive: true });
+    }
 
     const rawText = await res.text();
     let json: any;
@@ -680,6 +688,7 @@ export async function gatewayWithdrawal(opts: {
       );
       return { transferId };
     } catch (err: any) {
+      if (err?.inconclusive) throw err;
       const msg = String(err?.message ?? err);
       chainErrors.push(`${sourceChain}: ${msg}`);
       console.warn(`[GatewayWithdrawal] ${sourceChain}: ${msg} — trying next chain`);
@@ -730,6 +739,7 @@ export async function gatewayWithdrawal(opts: {
       console.info(`[GatewayWithdrawal] Multi-intent submitted (${sources}): ${transferId}`);
       return { transferId };
     } catch (err: any) {
+      if (err?.inconclusive) throw err;
       const sources = intents.map(i => i.sourceChain).join("+");
       chainErrors.push(`multi-intent(${sources}): ${err?.message}`);
     }

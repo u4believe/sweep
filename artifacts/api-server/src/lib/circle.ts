@@ -506,7 +506,9 @@ export async function directWalletTransfer(
     return txId;
   } catch (e: any) {
     const msg = e?.response?.data?.message ?? e?.errors?.[0]?.message ?? e?.message ?? "Transfer failed";
-    throw new Error(`Circle directWalletTransfer error: ${msg}`);
+    // Keep Circle's HTTP status so callers can tell a rejection from a network failure
+    const status = e?.response?.status ?? (typeof e?.status === "number" ? e.status : undefined);
+    throw Object.assign(new Error(`Circle directWalletTransfer error: ${msg}`), { status });
   }
 }
 

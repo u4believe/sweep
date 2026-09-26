@@ -11,8 +11,8 @@
 
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { db, usersTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { db, usersTable, withdrawalsTable } from "@workspace/db";
+import { and, desc, eq, sql } from "drizzle-orm";
 import {
   circleTransferUsdc,
   getDcwClient,
@@ -25,6 +25,7 @@ import {
 } from "../lib/circle.js";
 import { getBlockedIps, getIpStats, unblockIp } from "../lib/threatMonitor.js";
 import { provisionGatewayDelegate, arcTestnetSweep, getGatewayUnifiedBalance, arcTreasuryDepositFor } from "../lib/gatewaySweep.js";
+import { refundWithdrawal } from "../lib/withdrawalReconciliationWorker.js";
 
 const router: IRouter = Router();
 
@@ -386,6 +387,43 @@ router.post("/sweep-wallet", requireAdmin, async (req, res) => {
     req.log.error({ err: err.message }, "[admin] sweep-wallet failed");
     res.status(502).json({ error: "Sweep failed", message: err.message });
   }
+});
+
+// ─── Withdrawals held for review ─────────────────────────────────────────────
+// Withdrawals whose outcome couldn't be determined automatically (the server
+// stopped, or Gateway gave no answer, mid-submission). Check the destination
+// address on the block explorer / Circle console, then resolve:
+//   POST /api/admin/withdrawals/:id/resolve  { "outcome": "delivered", "txHash"?: "0x…" }
+//   POST /api/admin/withdrawals/:id/resolve  { "outcome": "refund" }
+
+router.get("/withdrawals/review", requireAdmin, async (_req, res) => {
+  const rows = await db.select().from(withdrawalsTable)
+    .where(eq(withdrawalsTable.status, "needs_review"))
+    .orderBy(desc(withdrawalsTable.createdAt));
+  res.json({ count: rows.length, withdrawals: rows });
+});
+
+router.post("/withdrawals/:id/resolve", requireAdmin, async (req, res) => {
+  const id = parseInt(String(req.params["id"]), 10);
+  const { outcome, txHash } = req.body as { outcome?: unknown; txHash?: unknown };
+  if (isNaN(id) || (outcome !== "delivered" && outcome !== "refund")) {
+    res.status(400).json({ error: "Validation error", message: 'outcome must be "delivered" or "refund"' });
+    return;
+  }
+  const [w] = await db.select().from(withdrawalsTable).where(eq(withdrawalsTable.id, id)).limit(1);
+  if (!w || w.status !== "needs_review") {
+    res.status(404).json({ error: "Not found", message: "No withdrawal awaiting review with that ID" });
+    return;
+  }
+  if (outcome === "refund") {
+    const done = await refundWithdrawal(w, ["needs_review"], "refunded", "resolved by admin");
+    res.json({ success: done, id, status: "refunded", refunded: w.amount });
+    return;
+  }
+  await db.update(withdrawalsTable)
+    .set({ status: "completed", completedAt: new Date(), ...(typeof txHash === "string" && txHash ? { txHash } : {}) })
+    .where(and(eq(withdrawalsTable.id, id), eq(withdrawalsTable.status, "needs_review")));
+  res.json({ success: true, id, status: "completed" });
 });
 
 export default router;

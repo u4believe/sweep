@@ -9,12 +9,13 @@ export const withdrawalsTable = pgTable("withdrawals", {
   type: text("type").notNull(), // crypto, fiat
   destination: text("destination").notNull(), // wallet address or bank account
   // status lifecycle: processing → completed | failed
-  //                   processing → delivering → completed | refunded   (Gateway)
+  //                   processing → submitting_gateway → delivering → completed | refunded   (Gateway)
+  //                   needs_review: outcome unknown after a crash or lost response — resolved by an admin
   // "processing" is written before the Circle call; the reconciliation worker
   // uses it to detect and recover from server crashes mid-withdrawal.
   // "delivering": Gateway accepted the burn intent; the gateway delivery worker
   // waits for the destination-chain mint, or refunds the user if it fails.
-  status: text("status").notNull().default("pending"), // pending, processing, delivering, completed, failed, refunded
+  status: text("status").notNull().default("pending"), // pending, processing, submitting_gateway, delivering, completed, failed, refunded, needs_review
   txHash: text("tx_hash"),
   circleTransferId: text("circle_transfer_id"),
   // Stored before calling Circle so the reconciliation worker can replay the
