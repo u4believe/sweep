@@ -57,7 +57,12 @@ export const nightField =
  * v5 log-in layout: a navy panel (faint grid, blue glow) with the pitch and a sample
  * "Swept" receipt, beside a light form panel. Stacked on phones.
  */
-export function NightAuthShell({ children, footer }: { children: ReactNode; footer?: ReactNode }) {
+export function NightAuthShell({ children, footer, hero }: {
+  children: ReactNode;
+  footer?: ReactNode;
+  /** Replaces the default log-in pitch in the navy panel. */
+  hero?: ReactNode;
+}) {
   return (
     <div className="sweep-ui min-h-[100dvh] grid grid-cols-1 lg:grid-cols-2">
       <section aria-label="Sweep" className="relative overflow-hidden bg-(--sw-navy) text-white px-6 sm:px-12 pt-9 pb-10 lg:py-9 flex flex-col justify-between gap-10 lg:min-h-[100dvh]">
@@ -67,21 +72,23 @@ export function NightAuthShell({ children, footer }: { children: ReactNode; foot
           <img src="/sweep-mark-white.svg" alt="" className="w-[22px]" />
           <span className="font-extrabold text-xl tracking-[-0.02em]">Sweep</span>
         </Link>
-        <div className="relative flex flex-col gap-[18px] max-w-[480px]">
-          <h2 className="font-extrabold text-[40px] sm:text-[48px] lg:text-[clamp(40px,4.6vw,64px)] leading-none tracking-[-0.05em]">Money that moves like email.</h2>
-          <p className="text-[17px] leading-[1.55] text-(--sw-on-navy)">
-            Log in to send by payment ID, withdraw USDC to eight networks, and manage recurring payments.
-          </p>
-          <div aria-hidden className="mt-2.5 bg-white text-(--sw-ink) rounded-[18px] px-4 py-3.5 flex items-center gap-3 max-w-[320px]">
-            <span className="w-10 h-10 rounded-xl bg-(--sw-blue) grid place-items-center shrink-0">
-              <img src="/sweep-mark-white.svg" alt="" className="w-[15px]" />
-            </span>
-            <span className="flex flex-col min-w-0">
-              <span className="font-extrabold text-[15px]">Swept. $25.00</span>
-              <span className="text-xs text-(--sw-muted) truncate">to tunde@example.com · now</span>
-            </span>
+        {hero ?? (
+          <div className="relative flex flex-col gap-[18px] max-w-[480px]">
+            <h2 className="font-extrabold text-[40px] sm:text-[48px] lg:text-[clamp(40px,4.6vw,64px)] leading-none tracking-[-0.05em]">Money that moves like email.</h2>
+            <p className="text-[17px] leading-[1.55] text-(--sw-on-navy)">
+              Log in to send by payment ID, withdraw USDC to eight networks, and manage recurring payments.
+            </p>
+            <div aria-hidden className="mt-2.5 bg-white text-(--sw-ink) rounded-[18px] px-4 py-3.5 flex items-center gap-3 max-w-[320px]">
+              <span className="w-10 h-10 rounded-xl bg-(--sw-blue) grid place-items-center shrink-0">
+                <img src="/sweep-mark-white.svg" alt="" className="w-[15px]" />
+              </span>
+              <span className="flex flex-col min-w-0">
+                <span className="font-extrabold text-[15px]">Swept. $25.00</span>
+                <span className="text-xs text-(--sw-muted) truncate">to tunde@example.com · now</span>
+              </span>
+            </div>
           </div>
-        </div>
+        )}
         <span className="relative text-[13px] text-(--sw-faint)">Testnet · USDC by Circle · Gas sponsored</span>
       </section>
 
