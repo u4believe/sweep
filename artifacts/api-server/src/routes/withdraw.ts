@@ -15,6 +15,8 @@ import {
   directTreasuryTransfer,
   getTreasuryChainBalance,
   GATEWAY_SUPPORTED_CHAINS,
+  isTreasuryBusy,
+  markTreasuryBusy,
 } from "../lib/gatewaySweep.js";
 import {
   getChain,
@@ -229,8 +231,10 @@ router.post("/crypto", requireAuth, requireEmailVerified, withdrawalLimiter, asy
     let transferId: string;
     let direct = false;
     try {
-      const chainBalance = await getTreasuryChainBalance(chainKey as ChainKey);
+      // Skip the direct path while the treasury sweep is moving this chain's balance
+      const chainBalance = isTreasuryBusy(chainKey as ChainKey) ? 0 : await getTreasuryChainBalance(chainKey as ChainKey);
       direct = chainBalance >= netAmount;
+      if (direct) markTreasuryBusy(chainKey as ChainKey, 3 * 60_000); // keep the sweep off until this transfer settles
 
       if (direct) {
         transferId = await directTreasuryTransfer({

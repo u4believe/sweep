@@ -1,17 +1,19 @@
 // ─── Sweep & Withdrawal Logic ─────────────────────────────────────────────────
 // All deposit sweeps: user wallet → platform treasury wallet (Circle DCW SDK).
-// USDC stays in the treasury wallet so directTreasuryTransfer can send it to
-// users on withdrawal using the same SDK path.
+// EVM deposits then go straight into the Gateway Unified Balance; the treasury
+// sweep worker (treasurySweepWorker.ts) moves anything else above a small float
+// — Arc, Solana, leftovers — into the Unified Balance too.
 //
 // Cross-chain withdrawals use the Gateway Forwarding Service via SignedBurnIntent
 // (gatewayWithdrawal) when the treasury has no on-chain balance on the destination.
 
 import { randomUUID, randomBytes } from "node:crypto";
-import { PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey, Transaction, TransactionInstruction, SystemProgram } from "@solana/web3.js";
 import {
   GATEWAY_WALLET_ADDRESS_EVM,
   GATEWAY_MINTER_ADDRESS_EVM,
   SOLANA_GATEWAY_MINTER_PROGRAM,
+  SOLANA_GATEWAY_WALLET_PROGRAM,
   GATEWAY_API_BASE,
   ABI_APPROVE,
   ABI_DEPOSIT_FOR,
@@ -38,11 +40,31 @@ const GATEWAY_SIGNER_ADDRESS   = process.env.CIRCLE_GATEWAY_SIGNER_ADDRESS   ?? 
 const TREASURY_SOL_WALLET_ID = process.env.CIRCLE_PLATFORM_WALLET_ID_SOL ?? "";
 const TREASURY_SOL_ADDRESS   = process.env.CIRCLE_PLATFORM_WALLET_ADDRESS_SOL ?? "";
 
+// ─── Treasury busy windows ───────────────────────────────────────────────────
+// A treasury wallet is "busy" while a deposit sweep, a direct withdrawal or a
+// Unified Balance deposit is moving its USDC. The treasury sweep worker skips
+// busy chains, and withdrawals avoid a direct transfer from a chain being swept,
+// so two flows never spend the same balance.
+
+const treasuryBusyUntil = new Map<ChainKey, number>();
+
+export function markTreasuryBusy(chainKey: ChainKey, ms: number): void {
+  treasuryBusyUntil.set(chainKey, Math.max(treasuryBusyUntil.get(chainKey) ?? 0, Date.now() + ms));
+}
+
+export function clearTreasuryBusy(chainKey: ChainKey): void {
+  treasuryBusyUntil.delete(chainKey);
+}
+
+export function isTreasuryBusy(chainKey: ChainKey): boolean {
+  return (treasuryBusyUntil.get(chainKey) ?? 0) > Date.now();
+}
+
 // ─── Per-chain treasury wallet ID resolution ──────────────────────────────────
 // Each EVM chain needs its own Circle wallet ID for the platform treasury SCA.
 // Set CIRCLE_PLATFORM_WALLET_IDS_JSON as a JSON map, or individual per-chain vars.
 
-function getTreasuryWalletIdForChain(chainKey: ChainKey): string | null {
+export function getTreasuryWalletIdForChain(chainKey: ChainKey): string | null {
   // Try the JSON map first (covers all chains in one env var)
   const jsonMap = process.env.CIRCLE_PLATFORM_WALLET_IDS_JSON;
   if (jsonMap) {
@@ -103,6 +125,23 @@ export async function evmGatewaySweep(opts: {
     `[GatewaySweep] EVM sweep: wallet=${userWalletId} chain=${chainKey} amount=${amount}`,
   );
 
+  // Keep the treasury sweep worker off this chain until the depositFor lands
+  markTreasuryBusy(chainKey, 15 * 60_000);
+  try {
+    return await evmGatewaySweepSteps(userWalletId, chainKey, chainCfg, amount);
+  } finally {
+    // Leave a short tail so the worker's balance read sees the settled state
+    clearTreasuryBusy(chainKey);
+    markTreasuryBusy(chainKey, 2 * 60_000);
+  }
+}
+
+async function evmGatewaySweepSteps(
+  userWalletId: string,
+  chainKey:     ChainKey,
+  chainCfg:     ReturnType<typeof getChain>,
+  amount:       string,
+): Promise<{ sweepTxId: string; approveTxId: string; depositForTxId: string }> {
   // ── Step 1: user SCA → treasury ──────────────────────────────────────────
   const sweepTxId = await sweepUsdcToPlatformWallet(userWalletId, amount, chainKey);
   console.info(`[GatewaySweep] Step 1/3 sweep submitted: ${sweepTxId} — waiting for confirmation`);
@@ -118,9 +157,8 @@ export async function evmGatewaySweep(opts: {
   console.info(`[GatewaySweep] Step 1/3 sweep confirmed: ${sweepTxId}`);
 
   // ── Steps 2 & 3: treasury → Gateway Unified Balance (approve + depositFor) ─
-  // Skip for chains whose USDC can't be deposited into the Gateway (e.g. ARC-TESTNET
-  // uses a precompile at 0x3600... that doesn't support ERC-20 approve/transferFrom).
-  // USDC on those chains stays in the treasury wallet for directTreasuryTransfer.
+  // Skip for chains the Gateway doesn't support; that USDC stays in the treasury
+  // wallet (the treasury sweep worker picks up any supported chain's balance).
   if (!GATEWAY_SUPPORTED_CHAINS.has(chainKey)) {
     console.info(
       `[GatewaySweep] ${chainKey} is not Gateway-compatible — USDC stays in treasury wallet`,
@@ -189,8 +227,9 @@ export async function evmGatewaySweep(opts: {
 // internal registry which lags behind listTransactions after a fresh deposit.
 // This avoids "insufficient asset" errors caused by Circle's sync delay.
 //
-// The depositFor step (treasury → Gateway Unified Balance) is NOT done here.
-// Use POST /api/admin/arc-depositfor when needed.
+// The depositFor step (treasury → Gateway Unified Balance) is NOT done here:
+// the treasury sweep worker moves the Arc treasury's balance above its float
+// into the Unified Balance. POST /api/admin/arc-depositfor still works manually.
 
 export async function arcTestnetSweep(opts: {
   userWalletId:  string;
@@ -234,6 +273,8 @@ export async function arcTestnetSweep(opts: {
 // ─── Solana Sweep ────────────────────────────────────────────────────────────
 // Transfers USDC from a user's Solana EOA to the treasury Solana EOA via the
 // Circle DCW SDK (handles entity secret automatically, no raw fetch needed).
+// The treasury sweep worker later deposits it into the Unified Balance
+// (solanaTreasuryDeposit).
 
 export async function solanaSweep(opts: {
   userSolanaWalletId: string;
@@ -760,24 +801,28 @@ function _getArcTreasuryOnChainBalance(): Promise<number> {
   return getArcOnChainUsdcBalance(TREASURY_ADDRESS);
 }
 
-// ─── Arc treasury → Unified Balance (approve + depositFor only) ──────────────
-// Used when USDC is already in the Arc treasury wallet (e.g. from an old sweep
-// that only did step 1) and needs to be pushed into the Gateway Unified Balance.
-// Skips step 1 (user→treasury transfer) — treasury already holds the USDC.
+// ─── Treasury → Unified Balance (approve + depositFor) ───────────────────────
+// Pushes USDC already sitting in an EVM treasury wallet into the Gateway
+// Unified Balance. Used by the treasury sweep worker and the admin route.
+// Arc's USDC (the 0x3600… precompile) supports approve/transferFrom like ERC-20.
 
-export async function arcTreasuryDepositFor(amount: string): Promise<{
-  approveTxId:    string;
-  depositForTxId: string;
-}> {
-  const usdcAddress     = process.env.ARC_USDC_ADDRESS ?? "0x3600000000000000000000000000000000000000";
-  const amountBaseUnits = toBaseUnits(amount);
-  const treasuryWalletId = getTreasuryWalletIdForChain("ARC-TESTNET");
-  if (!treasuryWalletId) throw new Error("[ArcDepositFor] CIRCLE_PLATFORM_WALLET_ID_ARC_TESTNET not configured");
+export async function treasuryDepositFor(
+  chainKey: ChainKey,
+  amount:   string,
+  opts: { waitForDeposit?: boolean } = {},
+): Promise<{ approveTxId: string; depositForTxId: string; confirmed: boolean }> {
+  const tag              = `[TreasuryDeposit:${chainKey}]`;
+  const usdcAddress      = chainKey === "ARC-TESTNET"
+    ? (process.env.ARC_USDC_ADDRESS ?? getChain(chainKey).usdcAddress)
+    : getChain(chainKey).usdcAddress;
+  const amountBaseUnits  = toBaseUnits(amount);
+  const treasuryWalletId = getTreasuryWalletIdForChain(chainKey);
+  if (!treasuryWalletId) throw new Error(`${tag} no treasury wallet ID configured`);
 
   const client = getDcwClient();
-  if (!client) throw new Error("[ArcDepositFor] Circle DCW client not configured");
+  if (!client) throw new Error(`${tag} Circle DCW client not configured`);
 
-  console.info(`[ArcDepositFor] approve + depositFor ${amount} USDC from Arc treasury ${treasuryWalletId}`);
+  console.info(`${tag} approve + depositFor ${amount} USDC from treasury ${treasuryWalletId}`);
 
   const approveRes = await (client as any).createContractExecutionTransaction({
     walletId:             treasuryWalletId,
@@ -789,12 +834,12 @@ export async function arcTreasuryDepositFor(amount: string): Promise<{
   });
   const approveBody: any    = approveRes.data ?? approveRes;
   const approveTxId: string = approveBody?.data?.id ?? approveBody?.transaction?.id ?? approveBody?.id ?? "";
-  if (!approveTxId) throw new Error("[ArcDepositFor] approve tx returned no ID");
-  console.info(`[ArcDepositFor] approve submitted: ${approveTxId} — waiting for confirmation`);
+  if (!approveTxId) throw new Error(`${tag} approve tx returned no ID`);
+  console.info(`${tag} approve submitted: ${approveTxId} — waiting for confirmation`);
 
   const approveConfirmed = await waitForTransactionComplete(approveTxId);
-  if (!approveConfirmed) throw new Error(`[ArcDepositFor] approve ${approveTxId} did not confirm`);
-  console.info(`[ArcDepositFor] approve confirmed: ${approveTxId}`);
+  if (!approveConfirmed) throw new Error(`${tag} approve ${approveTxId} did not confirm`);
+  console.info(`${tag} approve confirmed: ${approveTxId}`);
 
   const depositForRes = await (client as any).createContractExecutionTransaction({
     walletId:             treasuryWalletId,
@@ -806,11 +851,102 @@ export async function arcTreasuryDepositFor(amount: string): Promise<{
   });
   const depositBody: any       = depositForRes.data ?? depositForRes;
   const depositForTxId: string = depositBody?.data?.id ?? depositBody?.transaction?.id ?? depositBody?.id ?? "";
-  if (!depositForTxId) throw new Error("[ArcDepositFor] depositFor tx returned no ID");
-  console.info(`[ArcDepositFor] depositFor submitted: ${depositForTxId}`);
-  void _pollTransferStatus(depositForTxId, "ArcDepositFor");
+  if (!depositForTxId) throw new Error(`${tag} depositFor tx returned no ID`);
+  console.info(`${tag} depositFor submitted: ${depositForTxId}`);
 
+  if (!opts.waitForDeposit) {
+    void _pollTransferStatus(depositForTxId, `TreasuryDeposit:${chainKey}`);
+    return { approveTxId, depositForTxId, confirmed: false };
+  }
+  const confirmed = await waitForTransactionComplete(depositForTxId);
+  console.info(`${tag} depositFor ${confirmed ? "confirmed" : "did not confirm"}: ${depositForTxId}`);
+  return { approveTxId, depositForTxId, confirmed };
+}
+
+/** Admin recovery route: Arc treasury → Unified Balance. */
+export async function arcTreasuryDepositFor(amount: string): Promise<{
+  approveTxId:    string;
+  depositForTxId: string;
+}> {
+  const { approveTxId, depositForTxId } = await treasuryDepositFor("ARC-TESTNET", amount);
   return { approveTxId, depositForTxId };
+}
+
+// ─── Solana treasury → Unified Balance ───────────────────────────────────────
+// Gateway Wallet program `deposit` instruction, per Circle's Solana quickstart
+// (Circle Wallets tab): discriminator [22, 0] + amount (u64 LE), accounts in IDL
+// order. Circle signs the transaction (signTransaction); we broadcast it, so the
+// treasury pays the SOL fee itself — Gas Station does not cover it.
+
+const SOL_MIN_FEE_LAMPORTS = 10_000_000; // 0.01 SOL — enough for fees + deposit PDA rent
+
+export async function solanaTreasuryDeposit(amount: string): Promise<{ signature: string }> {
+  const tag = "[TreasuryDeposit:SOL-DEVNET]";
+  if (!TREASURY_SOL_WALLET_ID || !TREASURY_SOL_ADDRESS) throw new Error(`${tag} Solana treasury wallet not configured`);
+  const client = getDcwClient();
+  if (!client) throw new Error(`${tag} Circle DCW client not configured`);
+
+  const conn      = new Connection(SOL_RPC_URL, "confirmed");
+  const programId = new PublicKey(SOLANA_GATEWAY_WALLET_PROGRAM);
+  const usdcMint  = new PublicKey(getChain("SOL-DEVNET").usdcAddress);
+  const owner     = new PublicKey(TREASURY_SOL_ADDRESS);
+
+  const lamports = await conn.getBalance(owner);
+  if (lamports < SOL_MIN_FEE_LAMPORTS) {
+    throw new Error(`${tag} treasury has ${lamports / 1e9} SOL — needs at least ${SOL_MIN_FEE_LAMPORTS / 1e9} SOL for fees`);
+  }
+
+  // The treasury's USDC may sit in a raw (non-ATA) token account; use the one holding the most.
+  const accounts = await conn.getParsedTokenAccountsByOwner(owner, { mint: usdcMint });
+  const source = accounts.value
+    .map((a) => ({ pubkey: a.pubkey, amount: BigInt(a.account.data.parsed?.info?.tokenAmount?.amount ?? "0") }))
+    .sort((x, y) => (y.amount > x.amount ? 1 : -1))[0];
+  const baseUnits = BigInt(toBaseUnits(amount));
+  if (!source || source.amount < baseUnits) throw new Error(`${tag} treasury token account holds less than ${amount} USDC`);
+
+  const pda = (...seeds: Buffer[]) => PublicKey.findProgramAddressSync(seeds, programId)[0];
+  const gatewayWallet  = pda(Buffer.from("gateway_wallet"));
+  const custody        = pda(Buffer.from("gateway_wallet_custody"), usdcMint.toBuffer());
+  const depositPda     = pda(Buffer.from("gateway_deposit"), usdcMint.toBuffer(), owner.toBuffer());
+  const denylist       = pda(Buffer.from("denylist"), owner.toBuffer());
+  const eventAuthority = pda(Buffer.from("__event_authority"));
+
+  const data = Buffer.alloc(10);
+  data.set([22, 0], 0);
+  data.writeBigUInt64LE(baseUnits, 2);
+
+  const ix = new TransactionInstruction({
+    programId,
+    data,
+    keys: [
+      { pubkey: owner,                   isSigner: true,  isWritable: true  }, // payer
+      { pubkey: owner,                   isSigner: true,  isWritable: false }, // owner
+      { pubkey: gatewayWallet,           isSigner: false, isWritable: false },
+      { pubkey: source.pubkey,           isSigner: false, isWritable: true  }, // ownerTokenAccount
+      { pubkey: custody,                 isSigner: false, isWritable: true  },
+      { pubkey: depositPda,              isSigner: false, isWritable: true  },
+      { pubkey: denylist,                isSigner: false, isWritable: false },
+      { pubkey: SOL_TOKEN_PROGRAM_ID,    isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: eventAuthority,          isSigner: false, isWritable: false },
+      { pubkey: programId,               isSigner: false, isWritable: false },
+    ],
+  });
+
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash();
+  const tx = new Transaction({ feePayer: owner, recentBlockhash: blockhash }).add(ix);
+  const rawTransaction = tx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64");
+
+  console.info(`${tag} deposit ${amount} USDC from ${source.pubkey.toBase58()} — requesting Circle signature`);
+  const signed: any = await (client as any).signTransaction({ walletId: TREASURY_SOL_WALLET_ID, rawTransaction });
+  const signedTx: string = signed?.data?.signedTransaction ?? signed?.signedTransaction ?? "";
+  if (!signedTx) throw new Error(`${tag} signTransaction returned no signed transaction`);
+
+  const signature = await conn.sendRawTransaction(Buffer.from(signedTx, "base64"));
+  const result = await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+  if (result.value.err) throw new Error(`${tag} deposit ${signature} failed: ${JSON.stringify(result.value.err)}`);
+  console.info(`${tag} ✅ deposit confirmed: ${signature}`);
+  return { signature };
 }
 
 // ─── Gateway Unified Balance check ───────────────────────────────────────────
