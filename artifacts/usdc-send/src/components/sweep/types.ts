@@ -12,6 +12,8 @@ export interface DashboardShellProps {
   onLogout: () => void;
   /** Payment ID from a /send/<id> QR link, opened straight into Send. */
   initialPayTo?: string | null;
+  /** Open Add money on arrival (sign-up's "Add money to get started"). */
+  initialFund?: boolean;
   /** Existing dashboard tabs, rendered inside the shell unchanged. */
   slots: {
     settings: ReactNode;

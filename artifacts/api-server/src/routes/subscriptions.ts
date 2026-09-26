@@ -58,6 +58,7 @@ import {
   SelfPaymentError,
 } from "../lib/ledger.js";
 import { logger } from "../lib/logger.js";
+import { issueOtp, otpErrorResponse, verifyOtp } from "../lib/otp.js";
 
 const router: IRouter = Router();
 
@@ -66,7 +67,6 @@ const router: IRouter = Router();
 const MERCHANT_ID_CHARSET    = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const CONFIRMATION_CHARSET   = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const CODE_EXPIRY_DAYS       = 7;
-const OTP_EXPIRY_MS          = 10 * 60 * 1000;
 const VALID_INTERVALS        = ["weekly", "monthly", "yearly"] as const;
 type  Interval               = typeof VALID_INTERVALS[number];
 
@@ -91,37 +91,6 @@ function hashCode(code: string): string {
 }
 
 class CodeAlreadyUsedError extends Error {}
-
-function generateOtp(): string {
-  return String(crypto.randomInt(100000, 1000000));
-}
-
-async function issueOtp(userId: number, type: string): Promise<string> {
-  const code      = generateOtp();
-  const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
-  await db.insert(otpCodesTable).values({ userId, code, type, expiresAt });
-  return code;
-}
-
-async function verifyOtp(userId: number, code: string, type: string): Promise<boolean> {
-  const [otp] = await db
-    .select()
-    .from(otpCodesTable)
-    .where(
-      and(
-        eq(otpCodesTable.userId, userId),
-        eq(otpCodesTable.code, code.trim()),
-        eq(otpCodesTable.type, type),
-        eq(otpCodesTable.used, false),
-        gt(otpCodesTable.expiresAt, new Date()),
-      ),
-    )
-    .limit(1);
-
-  if (!otp) return false;
-  await db.update(otpCodesTable).set({ used: true }).where(eq(otpCodesTable.id, otp.id));
-  return true;
-}
 
 /** Advance a date by one billing interval. */
 function advanceBillingDate(from: Date, interval: Interval): Date {
@@ -522,6 +491,7 @@ router.post("/confirmation-code/request-otp", requireAuth, requireEmailVerified,
 
     res.json({ message: "OTP sent to your registered email" });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err: err.message }, "[subscriptions] Request OTP error");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -654,6 +624,7 @@ router.post("/confirmation-code/generate", requireAuth, requireEmailVerified, as
     logger.info({ userId: user.userId, merchantId, planInterval }, "[subscriptions] Confirmation code generated");
     res.json({ message: "Confirmation code sent to your email. Enter it on the subscription page to activate." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err: err.message }, "[subscriptions] Generate code error");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }

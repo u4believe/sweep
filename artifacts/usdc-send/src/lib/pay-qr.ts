@@ -6,6 +6,8 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const EMAIL_RE       = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const MERCHANT_ID_RE = /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
 const PAY_TO_KEY     = "sweep.payTo";
+/** Set by sign-up's "Add money to get started": the dashboard opens Add money once. */
+export const OPEN_FUND_KEY = "sweep.openFund";
 
 export type ScannedCode =
   | { kind: "user"; paymentId: string }
@@ -31,6 +33,14 @@ export function parseScannedCode(raw: string): ScannedCode | null {
 /** Hand a payment ID from a /send/<id> link to the dashboard, across the login redirect if needed. */
 export function stashPayTo(paymentId: string) {
   try { sessionStorage.setItem(PAY_TO_KEY, paymentId); } catch { /* storage unavailable */ }
+}
+
+export function takeOpenFund(): boolean {
+  try {
+    const v = sessionStorage.getItem(OPEN_FUND_KEY) === "1";
+    sessionStorage.removeItem(OPEN_FUND_KEY);
+    return v;
+  } catch { return false; }
 }
 
 export function takePayTo(): string | null {

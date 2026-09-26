@@ -9,8 +9,9 @@ import { isTotpConfigured } from "../lib/totp.js";
 import { hashEmail } from "../lib/escrow.js";
 import { claimPendingEscrows } from "../lib/ledger.js";
 import { createUserCircleWallet, ensureAllChainWallets } from "../lib/circle.js";
-import { sendOtpEmail, sendVerificationEmail, sendPasswordResetEmail } from "../lib/email.js";
-import { randomUUID, randomInt } from "node:crypto";
+import { sendOtpEmail, sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from "../lib/email.js";
+import { randomUUID } from "node:crypto";
+import { codeStatus, consumeOtp, findOtp, issueAndSendOtp, issueOtp, otpErrorResponse } from "../lib/otp.js";
 import {
   RegisterUserBody,
   LoginUserBody,
@@ -50,20 +51,10 @@ async function verifyTurnstile(token: string | undefined): Promise<boolean> {
 }
 
 
-function generateOtp(): string {
-  return String(randomInt(100000, 1000000));
-}
-
-async function issueOtp(userId: number, type: "register" | "login"): Promise<string> {
-  const code = generateOtp();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-  await db.insert(otpCodesTable).values({ userId, code, type, expiresAt });
-  return code;
-}
-
 // ─── POST /api/auth/register ──────────────────────────────────────────────────
-// Creates user account and sends an email verification link.
-// The user must click the link before they can perform any transactions.
+// Creates an unverified account and emails a 6-digit code. The account can't
+// sign in until POST /verify-otp { type: "register" } proves the inbox, which
+// also signs the user in.
 router.post("/register", async (req, res) => {
   try {
     const parsed = RegisterUserBody.safeParse(req.body);
@@ -79,73 +70,47 @@ router.post("/register", async (req, res) => {
       return;
     }
     const normalizedEmail = email.toLowerCase().trim();
+    const passwordHash = await bcrypt.hash(password, 10);
 
     const [existing] = await db.select().from(usersTable).where(eq(usersTable.email, normalizedEmail)).limit(1);
 
+    let userId: number;
     if (existing) {
       if ((existing as any).emailVerified) {
-        // Verified account — this email is taken.
         res.status(409).json({ error: "Conflict", message: "Email already registered" });
         return;
       }
-
-      // Unverified account — treat as if they never finished registering.
-      // Re-issue a fresh 72-hour verification link and return the same response
-      // as a new registration so they can complete verification.
-      const verificationToken = randomUUID();
-      const tokenExpiry = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 h
+      // Unverified account — whoever proves the inbox with the code owns it, so the
+      // newest registration's name and password replace the pending ones.
       await db.update(usersTable)
-        .set({
-          emailVerificationToken:          verificationToken,
-          emailVerificationTokenExpiresAt: tokenExpiry,
-        } as any)
+        .set({ name, passwordHash, emailVerificationToken: null, emailVerificationTokenExpiresAt: null } as any)
         .where(eq(usersTable.id, existing.id));
-
-      const appUrl = process.env.APP_URL?.replace(/\/$/, "") || `http://localhost:${process.env.PORT || 3001}`;
-      const verificationUrl = `${appUrl}/api/auth/verify-email?token=${verificationToken}`;
-      await sendVerificationEmail(normalizedEmail, verificationUrl);
-
-      res.status(200).json({
-        requiresEmailVerification: true,
-        resent: true,
+      userId = existing.id;
+    } else {
+      const [user] = await db.insert(usersTable).values({
         email: normalizedEmail,
-        message: "A new verification link has been sent to your email.",
-      });
-      return;
+        emailHash: hashEmail(normalizedEmail),
+        passwordHash,
+        name,
+        emailVerified: false,
+      } as any).returning();
+      userId = user!.id;
+
+      // Provision Circle wallet in background
+      (async () => {
+        try {
+          const { walletId, address, walletIdsJson, walletAddressesJson } = await createUserCircleWallet(userId);
+          await db.update(usersTable)
+            .set({ circleWalletId: walletId, circleWalletAddress: address, circleWalletIdsJson: walletIdsJson, circleWalletAddressesJson: walletAddressesJson } as any)
+            .where(eq(usersTable.id, userId));
+        } catch (e: any) {
+          console.warn(`[Circle] Wallet provisioning failed for user ${userId}:`, e?.message || e);
+        }
+      })();
     }
 
-    const emailHash = hashEmail(normalizedEmail);
-    const passwordHash = await bcrypt.hash(password, 10);
-    const verificationToken = randomUUID();
-    const tokenExpiry = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 h
-
-    const [user] = await db.insert(usersTable).values({
-      email: normalizedEmail,
-      emailHash,
-      passwordHash,
-      name,
-      emailVerified: false,
-      emailVerificationToken:          verificationToken,
-      emailVerificationTokenExpiresAt: tokenExpiry,
-    } as any).returning();
-
-    // Provision Circle wallet in background
-    (async () => {
-      try {
-        const { walletId, address, walletIdsJson, walletAddressesJson } = await createUserCircleWallet(user.id);
-        await db.update(usersTable)
-          .set({ circleWalletId: walletId, circleWalletAddress: address, circleWalletIdsJson: walletIdsJson, circleWalletAddressesJson: walletAddressesJson } as any)
-          .where(eq(usersTable.id, user.id));
-      } catch (e: any) {
-        console.warn(`[Circle] Wallet provisioning failed for user ${user.id}:`, e?.message || e);
-      }
-    })();
-
-    const appUrl = process.env.APP_URL?.replace(/\/$/, "") || `http://localhost:${process.env.PORT || 3001}`;
-    const verificationUrl = `${appUrl}/api/auth/verify-email?token=${verificationToken}`;
-
-    await sendVerificationEmail(normalizedEmail, verificationUrl);
-    res.status(201).json({ requiresEmailVerification: true, email: normalizedEmail });
+    const sent = await issueAndSendOtp(userId, "register", (code) => sendOtpEmail(normalizedEmail, code, "register"));
+    res.status(existing ? 200 : 201).json({ requiresOtp: true, userId, email: normalizedEmail, ...codeStatus(sent) });
   } catch (error: any) {
     req.log.error({ err: error }, "Registration error");
     res.status(500).json({ error: "Internal server error", message: error.message });
@@ -188,9 +153,12 @@ router.get("/verify-email", async (req, res) => {
       return;
     }
 
-    await db.update(usersTable)
+    // Only the request that flips the account to verified sends the welcome email
+    const verified = await db.update(usersTable)
       .set({ emailVerified: true, emailVerificationToken: null, emailVerificationTokenExpiresAt: null } as any)
-      .where(eq(usersTable.id, user.id));
+      .where(and(eq(usersTable.id, user.id), eq((usersTable as any).emailVerified, false)))
+      .returning({ id: usersTable.id });
+    if (verified.length) void sendWelcomeEmail(user.email, user.name).catch(() => {});
 
     req.log.info({ userId: user.id }, "[auth] Email verified");
     res.redirect(`${frontendUrl}/login?verified=true`);
@@ -300,12 +268,16 @@ router.post("/login", async (req, res) => {
         .where(eq(usersTable.id, user.id));
     }
 
-    // Only fully-registered (verified) users may log in.
+    // Only verified users may log in. The password was right, so email a sign-up
+    // code and let the client finish verification in place.
     if (!(user as any).emailVerified) {
+      const sent = await issueAndSendOtp(user.id, "register", (code) => sendOtpEmail(normalizedEmail, code, "register"));
       res.status(403).json({
+        ...codeStatus(sent),
         error: "Email not verified",
-        message: "Please verify your email address before logging in. Check your inbox for the verification link.",
+        message: "Verify your email to finish creating your account. We've sent you a 6-digit code.",
         code: "EMAIL_NOT_VERIFIED",
+        userId: user.id,
       });
       return;
     }
@@ -346,9 +318,8 @@ router.post("/login", async (req, res) => {
       })();
     }
 
-    const code = await issueOtp(user.id, "login");
-    await sendOtpEmail(normalizedEmail, code, "login");
-    res.json({ requiresOtp: true, requiresTotp: hasTotp(user), userId: user.id });
+    const sent = await issueAndSendOtp(user.id, "login", (code) => sendOtpEmail(normalizedEmail, code, "login"));
+    res.json({ requiresOtp: true, requiresTotp: hasTotp(user), userId: user.id, ...codeStatus(sent) });
   } catch (error: any) {
     req.log.error({ err: error }, "Login error");
     res.status(500).json({ error: "Internal server error", message: error.message });
@@ -367,27 +338,20 @@ router.post("/verify-otp", async (req, res) => {
     }
 
     const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-    if (!user) {
+    // A sign-up code only signs in accounts that are still unverified — for an
+    // existing account it would skip the password and authenticator checks.
+    if (!user || (type === "register" && (user as any).emailVerified)) {
       res.status(401).json({ error: "Invalid code", message: "Incorrect verification code or it has expired. Please try again." });
       return;
     }
-
-    const now = new Date();
-    const [otp] = await db
-      .select()
-      .from(otpCodesTable)
-      .where(
-        and(
-          eq(otpCodesTable.userId, userId),
-          eq(otpCodesTable.code, code.trim()),
-          eq(otpCodesTable.type, type),
-          eq(otpCodesTable.used, false),
-          gt(otpCodesTable.expiresAt, now),
-        )
-      )
-      .limit(1);
-
-    if (!otp) {
+    let otpId: number | null;
+    try {
+      otpId = await findOtp(userId, code, type);
+    } catch (err) {
+      if (otpErrorResponse(res, err)) return;
+      throw err;
+    }
+    if (otpId === null) {
       res.status(401).json({ error: "Invalid code", message: "Incorrect verification code or it has expired. Please try again." });
       return;
     }
@@ -406,13 +370,18 @@ router.post("/verify-otp", async (req, res) => {
       }
     }
 
-    const consumed = await db.update(otpCodesTable)
-      .set({ used: true })
-      .where(and(eq(otpCodesTable.id, otp.id), eq(otpCodesTable.used, false)))
-      .returning({ id: otpCodesTable.id });
-    if (consumed.length === 0) {
+    if (!(await consumeOtp(otpId))) {
       res.status(401).json({ error: "Invalid code", message: "Incorrect verification code or it has expired. Please try again." });
       return;
+    }
+
+    // Sign-up code proves the inbox: verify the account (once) and welcome them
+    if (type === "register") {
+      const verified = await db.update(usersTable)
+        .set({ emailVerified: true, emailVerificationToken: null, emailVerificationTokenExpiresAt: null } as any)
+        .where(and(eq(usersTable.id, user.id), eq((usersTable as any).emailVerified, false)))
+        .returning({ id: usersTable.id });
+      if (verified.length) void sendWelcomeEmail(user.email, user.name).catch(() => {});
     }
 
     // Auto-credit any pending escrows sent to this email before they registered
@@ -509,7 +478,8 @@ router.post("/google", async (req, res) => {
         // registered it didn't prove they own the inbox — Google just did — so their
         // password is discarded rather than left working on a now-verified account.
         const link: Partial<typeof usersTable.$inferInsert> = { googleSub: identity.sub };
-        if (!(byEmail as any).emailVerified) {
+        const firstVerification = !(byEmail as any).emailVerified;
+        if (firstVerification) {
           Object.assign(link, {
             emailVerified: true,
             emailVerificationToken: null,
@@ -518,6 +488,7 @@ router.post("/google", async (req, res) => {
           });
         }
         [user] = await db.update(usersTable).set(link as any).where(eq(usersTable.id, byEmail.id)).returning();
+        if (firstVerification) void sendWelcomeEmail(user!.email, user!.name).catch(() => {});
       } else {
         try {
           [user] = await db.insert(usersTable).values({
@@ -533,6 +504,7 @@ router.post("/google", async (req, res) => {
           return;
         }
         isNewUser = true;
+        void sendWelcomeEmail(user!.email, user!.name).catch(() => {});
 
         (async () => {
           try {
@@ -611,8 +583,18 @@ router.post("/resend-otp", async (req, res) => {
       res.status(404).json({ error: "Not found", message: "User not found" });
       return;
     }
+    if (type === "register" && (user as any).emailVerified) {
+      res.status(400).json({ error: "Already verified", message: "This email is already verified — log in instead." });
+      return;
+    }
 
-    const code = await issueOtp(userId, type);
+    let code: string;
+    try {
+      code = await issueOtp(userId, type);
+    } catch (err) {
+      if (otpErrorResponse(res, err)) return;
+      throw err;
+    }
     await sendOtpEmail(user.email, code, type);
     res.json({ success: true, message: "A new verification code has been sent to your email." });
   } catch (error: any) {

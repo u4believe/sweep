@@ -41,6 +41,7 @@ import { sendSecurityOtpEmail } from "../lib/email.js";
 import { logger } from "../lib/logger.js";
 import { encryptSecret, decryptSecret, generateTotpSecret, isTotpConfigured, otpauthUrl, verifyTotp } from "../lib/totp.js";
 import { checkUserTotp, hasTotp } from "../lib/two-factor.js";
+import { consumeOtp, findOtp, issueOtp, otpErrorResponse, verifyOtp } from "../lib/otp.js";
 
 const router: IRouter = Router();
 
@@ -52,49 +53,6 @@ const PAK_LENGTH    = 40;
 const BCRYPT_ROUNDS = 10;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-function generateOtp(): string {
-  return String(crypto.randomInt(100000, 1000000));
-}
-
-async function issueOtp(userId: number, type: string): Promise<string> {
-  const code      = generateOtp();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-  await db.insert(otpCodesTable).values({ userId, code, type, expiresAt });
-  return code;
-}
-
-async function findOtp(userId: number, code: string, type: string): Promise<number | null> {
-  const [otp] = await db
-    .select()
-    .from(otpCodesTable)
-    .where(
-      and(
-        eq(otpCodesTable.userId, userId),
-        eq(otpCodesTable.code, code.trim()),
-        eq(otpCodesTable.type, type),
-        eq(otpCodesTable.used, false),
-        gt(otpCodesTable.expiresAt, new Date()),
-      ),
-    )
-    .limit(1);
-
-  return otp?.id ?? null;
-}
-
-/** Marks an OTP used; false if another request already used it. */
-async function consumeOtp(id: number): Promise<boolean> {
-  const rows = await db.update(otpCodesTable)
-    .set({ used: true })
-    .where(and(eq(otpCodesTable.id, id), eq(otpCodesTable.used, false)))
-    .returning({ id: otpCodesTable.id });
-  return rows.length === 1;
-}
-
-async function verifyOtp(userId: number, code: string, type: string): Promise<boolean> {
-  const id = await findOtp(userId, code, type);
-  return id !== null && consumeOtp(id);
-}
 
 function generatePak(): string {
   const bytes = crypto.randomBytes(PAK_LENGTH);
@@ -143,6 +101,7 @@ router.get("/status", requireAuth, async (req, res) => {
       twoFactorEnabled: hasTotp(user),
     });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/status]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -157,6 +116,7 @@ router.post("/txn-password/request-otp", requireAuth, async (req, res) => {
     await sendSecurityOtpEmail(email, code, "txn-pwd");
     res.json({ sent: true, message: "Verification code sent to your email." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/txn-password/request-otp]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -164,9 +124,8 @@ router.post("/txn-password/request-otp", requireAuth, async (req, res) => {
 
 // ── POST /api/security/txn-password/set ──────────────────────────────────────
 
-// First-time transaction password setup — no OTP required.
-// PAK must exist first (users set PAK before transaction password during onboarding).
-// To CHANGE an existing transaction password, use /change-txn-password which requires OTP.
+// First-time transaction password setup — no OTP required (sign-up sets it
+// straight after the email code). To CHANGE it, use /change-txn-password.
 router.post("/txn-password/set", requireAuth, requireEmailVerified, async (req, res) => {
   try {
     const { userId } = (req as any).user;
@@ -180,12 +139,6 @@ router.post("/txn-password/set", requireAuth, requireEmailVerified, async (req, 
     const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
     if (!user) { res.status(404).json({ error: "Not found", message: "User not found" }); return; }
 
-    // Enforce that PAK is generated before transaction password
-    if (!user.pakHash) {
-      res.status(409).json({ error: "PAK required", message: "Generate your PAK before setting a transaction password." });
-      return;
-    }
-
     // Only allowed when no transaction password exists — use /change-txn-password to update
     if (user.transactionPasswordHash) {
       res.status(409).json({ error: "Conflict", message: "Transaction password already set. Use change-txn-password to update it." });
@@ -197,6 +150,7 @@ router.post("/txn-password/set", requireAuth, requireEmailVerified, async (req, 
 
     res.json({ success: true, message: "Transaction password set successfully." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/txn-password/set]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -228,6 +182,7 @@ router.post("/pak/request-otp", requireAuth, async (req, res) => {
     await sendSecurityOtpEmail(email, code, "pak-gen");
     res.json({ sent: true, message: "Verification code sent to your email." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/pak/request-otp]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -264,6 +219,7 @@ router.post("/pak/generate-first", requireAuth, requireEmailVerified, async (req
       message: "PAK generated. Copy it now — it will not be shown again.",
     });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/pak/generate-first]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -306,6 +262,7 @@ router.post("/pak/generate", requireAuth, requireEmailVerified, async (req, res)
       message: "PAK generated. Copy it now — it will not be shown again.",
     });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/pak/generate]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -326,6 +283,7 @@ router.post("/pak/confirm-copied", requireAuth, async (req, res) => {
     await db.update(usersTable).set({ pakCopiedAt: new Date() }).where(eq(usersTable.id, userId));
     res.json({ success: true, message: "PAK confirmed. The full key is now permanently hidden." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/pak/confirm-copied]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -360,6 +318,7 @@ router.post("/change-login-password/request-otp", requireAuth, async (req, res) 
     await sendSecurityOtpEmail(email, code, "chg-login");
     res.json({ sent: true, message: "Verification code sent to your email." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/change-login-password/request-otp]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -405,6 +364,7 @@ router.post("/change-login-password/confirm", requireAuth, async (req, res) => {
 
     res.json({ success: true, message: "Login password updated successfully." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/change-login-password/confirm]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -444,6 +404,7 @@ router.post("/change-txn-password/request-otp", requireAuth, async (req, res) =>
     await sendSecurityOtpEmail(email, code, "chg-txn-pwd");
     res.json({ sent: true, message: "Verification code sent to your email." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/change-txn-password/request-otp]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -510,6 +471,7 @@ router.post("/change-txn-password/confirm", requireAuth, async (req, res) => {
 
     res.json({ success: true, message: "Transaction password updated successfully." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/change-txn-password/confirm]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -546,6 +508,7 @@ router.post("/delete-account/request-otp", requireAuth, async (req, res) => {
     await sendSecurityOtpEmail(email, code, "del-account");
     res.json({ sent: true, message: "Verification code sent to your email." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/delete-account/request-otp]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -606,6 +569,7 @@ router.post("/delete-account/confirm", requireAuth, async (req, res) => {
     logger.info({ userId }, "[security/delete-account] Account permanently deleted");
     res.json({ success: true, message: "Your account has been permanently deleted." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/delete-account/confirm]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -633,6 +597,7 @@ router.post("/2fa/setup", requireAuth, requireEmailVerified, async (req, res) =>
     await db.update(usersTable).set({ totpPendingSecretEnc: encryptSecret(secret) }).where(eq(usersTable.id, userId));
     res.json({ secret, otpauthUrl: otpauthUrl(secret, email) });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/2fa/setup]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -670,6 +635,7 @@ router.post("/2fa/enable", requireAuth, requireEmailVerified, async (req, res) =
     logger.info({ userId }, "[security] Authenticator 2FA enabled");
     res.json({ success: true, message: "Two-factor authentication is on." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/2fa/enable]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -689,6 +655,7 @@ router.post("/2fa/disable/request-otp", requireAuth, async (req, res) => {
     await sendSecurityOtpEmail(email, code, "disable-2fa");
     res.json({ sent: true, message: "Verification code sent to your email." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/2fa/disable/request-otp]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
@@ -742,6 +709,7 @@ router.post("/2fa/disable", requireAuth, async (req, res) => {
     logger.info({ userId }, "[security] Authenticator 2FA disabled");
     res.json({ success: true, message: "Two-factor authentication is off." });
   } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/2fa/disable]");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }

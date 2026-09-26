@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, Send, ShieldCheck, RefreshCw, Smartphone } from "lucide-react";
+import { Loader2, ShieldCheck, RefreshCw, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 import { API_BASE } from "@/lib/api";
-import { finishSignIn, TWO_FACTOR_CHALLENGE_KEY } from "@/lib/auth-session";
+import { finishSignIn, TWO_FACTOR_CHALLENGE_KEY, codeAlreadySentMessage, SPAM_HINT } from "@/lib/auth-session";
 import { GoogleSignInButton, useAuthConfig, type GoogleAuthResult } from "@/components/auth/google-sign-in";
 import { TotpInput } from "@/components/auth/totp-input";
 import {
@@ -34,8 +34,9 @@ export default function Login() {
   const [userId, setUserId]           = useState<number | null>(null);
   const [sentEmail, setSentEmail]     = useState("");
   const [isPending, setIsPending]     = useState(false);
+  // Set when no new code was emailed because one went out moments ago
+  const [codeNotice, setCodeNotice]   = useState("");
   const [error, setError]             = useState("");
-  const [resentVerification, setResentVerification] = useState(false);
 
   const searchParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
   const verifiedParam = searchParams.get("verified");
@@ -107,8 +108,13 @@ export default function Login() {
       });
       const json = await res.json();
       if (res.status === 403 && json.code === "EMAIL_NOT_VERIFIED") {
+        // The server emailed a sign-up code — verify the email right here
+        setUserId(json.userId ?? null);
+        setCodeNotice(json.codeAlreadySent ? codeAlreadySentMessage(json.retryAfterSec) : "");
         setSentEmail(email.toLowerCase().trim());
+        setOtp(["", "", "", "", "", ""]);
         setStep("unverified");
+        setTimeout(() => otpRefs.current[0]?.focus(), 50);
         return;
       }
       if (!res.ok) throw new Error(json.message ?? "Login failed");
@@ -117,7 +123,12 @@ export default function Login() {
       setTotp("");
       setSentEmail(email.toLowerCase().trim());
       setStep("otp");
-      toast.success(`Verification code sent to ${email.toLowerCase().trim()}`, { style: { fontWeight: "bold", color: "#16a34a" } });
+      if (json.codeAlreadySent) {
+        setCodeNotice(codeAlreadySentMessage(json.retryAfterSec));
+      } else {
+        setCodeNotice("");
+        toast.success(`Verification code sent to ${email.toLowerCase().trim()}`, { style: { fontWeight: "bold", color: "#16a34a" } });
+      }
     } catch (err: any) {
       setError(err.message ?? "Failed to log in. Please check your credentials.");
     } finally {
@@ -148,6 +159,9 @@ export default function Login() {
     otpRefs.current[Math.min(text.length, 5)]?.focus();
   };
 
+  // The unverified step uses the sign-up code; everything else is a login code
+  const codeType = step === "unverified" ? "register" : "login";
+
   const handleVerifyOtp = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     const code = otp.join("");
@@ -159,7 +173,7 @@ export default function Login() {
       const res  = await fetch(`${API_BASE}/api/auth/verify-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, code, type: "login", ...(requiresTotp ? { totp } : {}) }),
+        body: JSON.stringify({ userId, code, type: codeType, ...(requiresTotp && codeType === "login" ? { totp } : {}) }),
       });
       const json = await res.json();
       if (json.code === "TOTP_REQUIRED") setRequiresTotp(true);
@@ -173,22 +187,6 @@ export default function Login() {
     }
   };
 
-  const handleResendVerification = async () => {
-    setIsPending(true);
-    setResentVerification(false);
-    try {
-      await fetch(`${API_BASE}/api/auth/resend-verification`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: sentEmail }),
-      });
-      setResentVerification(true);
-      toast.success(`Verification email sent to ${sentEmail}`, { style: { fontWeight: "bold", color: "#16a34a" } });
-    } finally {
-      setIsPending(false);
-    }
-  };
-
   const handleResend = async () => {
     if (!userId) return;
     setError("");
@@ -197,12 +195,13 @@ export default function Login() {
       const res  = await fetch(`${API_BASE}/api/auth/resend-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, type: "login" }),
+        body: JSON.stringify({ userId, type: codeType }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Failed to resend");
       setOtp(["", "", "", "", "", ""]);
       setTimeout(() => otpRefs.current[0]?.focus(), 50);
+      setCodeNotice("");
       toast.success("A new verification code has been sent to your email", { style: { fontWeight: "bold", color: "#16a34a" } });
     } catch (err: any) {
       setError(err.message ?? "Failed to resend code.");
@@ -215,7 +214,7 @@ export default function Login() {
   const notice =
     verifiedParam === "true"    ? { tone: "ok",   text: "Email verified! You can now log in." } :
     verifiedParam === "already" ? { tone: "ok",   text: "Your email is already verified — log in below." } :
-    errorParam === "link-expired"  ? { tone: "warn", text: "Your verification link has expired. Log in below and we'll send you a new one." } :
+    errorParam === "link-expired"  ? { tone: "warn", text: "That verification link has expired. Log in below and we'll email you a code instead." } :
     errorParam === "invalid-token" ? { tone: "warn", text: "That verification link isn't valid. Log in below and we'll send you a new one." } :
     errorParam === "missing-token" ? { tone: "warn", text: "That verification link is incomplete. Log in below and we'll send you a new one." } :
     errorParam === "server-error"  ? { tone: "bad",  text: "We couldn't verify your email just now. Please try the link again." } :
@@ -270,22 +269,12 @@ export default function Login() {
             </>
           )}
 
-          {step === "unverified" && (
-            <>
-              <NightTitle title="Verify your email" sub={<>
-                We need to verify <strong className="text-(--sw-ink)">{sentEmail}</strong> before you can log in. Check your inbox for a verification link — it's valid for 72 hours.
-              </>} />
-              {resentVerification && <AuthNotice tone="ok">Verification email resent — check your inbox.</AuthNotice>}
-              <button type="button" onClick={handleResendVerification} disabled={isPending} className={cn(authPrimary, "mt-2")}>
-                {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Send className="w-5 h-5" /> Resend verification email</>}
-              </button>
-              {back}
-            </>
-          )}
-
-          {step === "otp" && (
+          {(step === "otp" || step === "unverified") && (
             <form onSubmit={handleVerifyOtp} className="flex flex-col gap-3">
-              <NightTitle title="Check your email" sub={<>We sent a 6-digit code to <strong className="text-(--sw-ink)">{sentEmail}</strong>.</>} />
+              {step === "unverified"
+                ? <NightTitle title="Verify your email" sub={<>Your account isn't verified yet. Enter the 6-digit code we just sent to <strong className="text-(--sw-ink)">{sentEmail}</strong>.</>} />
+                : <NightTitle title="Check your email" sub={<>We sent a 6-digit code to <strong className="text-(--sw-ink)">{sentEmail}</strong>.</>} />}
+              {codeNotice && <AuthNotice tone="warn">{codeNotice}</AuthNotice>}
               {errorBox}
               <fieldset className="mt-1">
                 <legend className="text-[13px] font-bold text-(--sw-label) mb-2">Email code</legend>
@@ -318,12 +307,13 @@ export default function Login() {
                 </div>
               )}
               <button type="submit" disabled={isPending || otp.join("").length < 6 || (requiresTotp && totp.length < 6)} className={cn(authPrimary, "mt-2")}>
-                {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ShieldCheck className="w-5 h-5" /> Verify &amp; log in</>}
+                {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ShieldCheck className="w-5 h-5" /> {step === "unverified" ? "Verify email" : "Verify & log in"}</>}
               </button>
               <button type="button" onClick={handleResend} disabled={isPending}
                 className="self-center flex items-center gap-1.5 text-sm font-semibold text-(--sw-blue) disabled:opacity-50">
                 <RefreshCw className="w-3.5 h-3.5" /> Resend email code
               </button>
+              <p className="text-xs text-(--sw-muted) text-center">{SPAM_HINT}</p>
               {back}
             </form>
           )}

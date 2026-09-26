@@ -13,3 +13,12 @@ export function finishSignIn(token: string, queryClient: QueryClient) {
   const next = new URLSearchParams(window.location.search).get("next");
   window.location.href = next?.startsWith("/") && !next.startsWith("//") ? base + next : base || "/";
 }
+
+/** Shown when the server didn't email a new code because one went out moments ago. */
+export function codeAlreadySentMessage(retryAfterSec: number | undefined): string {
+  const s = Math.max(1, Math.round(retryAfterSec ?? 30));
+  const wait = s < 60 ? `${s} second${s === 1 ? "" : "s"}` : `${Math.ceil(s / 60)} minute${Math.ceil(s / 60) === 1 ? "" : "s"}`;
+  return `We already sent you a code a moment ago — use that one. You can request a new code in ${wait}.`;
+}
+
+export const SPAM_HINT = "Can't find it? Check your spam or junk folder.";

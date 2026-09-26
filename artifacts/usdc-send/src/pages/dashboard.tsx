@@ -24,7 +24,7 @@ import { TotpInput } from "@/components/auth/totp-input";
 import { useAuthConfig } from "@/components/auth/google-sign-in";
 import { fadeUp, staggerContainer } from "@/lib/motion";
 import type { FullBalance } from "@/lib/wallet";
-import { takePayTo } from "@/lib/pay-qr";
+import { takeOpenFund, takePayTo } from "@/lib/pay-qr";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -154,6 +154,7 @@ export default function Dashboard() {
   const isDesktop = useMediaQuery("(min-width: 1024px)");
   // Set when the user arrived through someone's payment QR code (/send/<payment ID>)
   const [initialPayTo] = useState(() => takePayTo());
+  const [initialFund]  = useState(() => takeOpenFund());
 
   const { data: user, isLoading: isUserLoading, isError: isUserError } =
     useGetCurrentUser({ query: { retry: false } as any });
@@ -222,6 +223,7 @@ export default function Dashboard() {
     depositAddresses,
     withdraw: withdrawCryptoMutation,
     initialPayTo,
+    initialFund,
     onBalanceChanged: () => { refetchBalance(); invalidateHistory(); },
     onLogout: () => {
       localStorage.removeItem("token");

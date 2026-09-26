@@ -20,10 +20,10 @@ type Page = "dash" | "history" | "recurring" | "subs" | "settings" | "support";
 
 const SIDEBAR_KEY = "sweep.sidebarHidden";
 
-export function WebDashboard({ user, balance, depositAddresses, withdraw, onBalanceChanged, onLogout, slots, initialPayTo }: DashboardShellProps) {
+export function WebDashboard({ user, balance, depositAddresses, withdraw, onBalanceChanged, onLogout, slots, initialPayTo, initialFund }: DashboardShellProps) {
   const [page,     setPage]     = useState<Page>("dash");
   const [payTo,    setPayTo]    = useState(initialPayTo ? { id: initialPayTo, n: 1 } : null);
-  const [fundOpen, setFundOpen] = useState(false);
+  const [fundOpen, setFundOpen] = useState(!!initialFund);
   const [sidebarHidden, setSidebarHidden] = useState(() => {
     try { return localStorage.getItem(SIDEBAR_KEY) === "1"; } catch { return false; }
   });

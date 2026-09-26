@@ -26,8 +26,8 @@ const TAB_OF: Record<Screen, Tab> = {
 
 type MobileDashboardProps = DashboardShellProps;
 
-export function MobileDashboard({ user, balance, depositAddresses, withdraw, onBalanceChanged, onLogout, slots, initialPayTo }: MobileDashboardProps) {
-  const [screen,   setScreen]   = useState<Screen>(initialPayTo ? "send" : "home");
+export function MobileDashboard({ user, balance, depositAddresses, withdraw, onBalanceChanged, onLogout, slots, initialPayTo, initialFund }: MobileDashboardProps) {
+  const [screen,   setScreen]   = useState<Screen>(initialPayTo ? "send" : initialFund ? "fund" : "home");
   const [backTo,   setBackTo]   = useState<Screen>("home");
   const [sendStep, setSendStep] = useState<SendStep>("form");
   const [payTo,    setPayTo]    = useState(initialPayTo ? { id: initialPayTo, n: 1 } : null);

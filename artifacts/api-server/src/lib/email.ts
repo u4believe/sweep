@@ -9,7 +9,8 @@
 // exhausted, auth error, service outage) the next is attempted automatically.
 
 import nodemailer from "nodemailer";
-import { APP_URL, SECURITY_FOOTER, avatarHeader, badge, bigAmount, blueHero, buttons, callout, checklist, codeBlock, codeBoxes, emailPage, esc, infoBox, link, longDate, para, ref, rows, small, stats, steps, strong, title, usd } from "./emailLayout.js";
+import { OTP_TTL_MINUTES } from "./otp.js";
+import { APP_URL, SECURITY_FOOTER, avatarHeader, badge, bigAmount, blueHero, buttons, callout, checklist, codeBlock, codeBoxes, darkHero, emailPage, esc, infoBox, link, longDate, numbered, para, ref, rows, small, stats, steps, strong, title, usd } from "./emailLayout.js";
 
 type MailOpts = { from?: string; to: string; subject: string; html: string };
 
@@ -303,7 +304,7 @@ export async function sendOtpEmail(to: string, code: string, type: "register" | 
     label: "Security",
     blocks: [
       title(type === "register" ? "Verify your email" : "Confirm it's you"),
-      para(`Use this code to ${esc(action)}. It expires in ${strong("10 minutes")} and can only be used once.`),
+      para(`Use this code to ${esc(action)}. It expires in ${strong(`${OTP_TTL_MINUTES} minutes`)} and can only be used once.`),
       codeBoxes(code),
       small(type === "register"
         ? "Didn't create a Sweep account? You can ignore this email."
@@ -429,7 +430,7 @@ export async function sendSecurityOtpEmail(to: string, code: string, actionType:
     label: "Security",
     blocks: [
       title(meta.heading),
-      para(`Use this code ${esc(meta.desc)}. It expires in ${strong("10 minutes")} and can only be used once.`),
+      para(`Use this code ${esc(meta.desc)}. It expires in ${strong(`${OTP_TTL_MINUTES} minutes`)} and can only be used once.`),
       codeBoxes(code),
       small(`Didn't start this? ${link("Secure your account", APP_URL)} — your account may be at risk. Never share this code.`),
     ],
@@ -439,7 +440,7 @@ export async function sendSecurityOtpEmail(to: string, code: string, actionType:
   // Always log the OTP to server console as a fallback (visible in server logs)
   console.log(`\n──────────────────────────────────────────────`);
   console.log(`  SECURITY OTP for ${to}  [${actionType}]`);
-  console.log(`  Code: ${code}  (expires in 10 minutes)`);
+  console.log(`  Code: ${code}  (expires in ${OTP_TTL_MINUTES} minutes)`);
   console.log(`──────────────────────────────────────────────\n`);
 
   const transporter = getTransporter();
@@ -462,7 +463,7 @@ export async function sendSubscriptionOtpEmail(to: string, code: string): Promis
     label: "Security",
     blocks: [
       title("Confirm it's you"),
-      para(`Enter this code to continue your subscription. It expires in ${strong("10 minutes")}.`),
+      para(`Enter this code to continue your subscription. It expires in ${strong(`${OTP_TTL_MINUTES} minutes`)}.`),
       codeBoxes(code),
       small("Didn't request this? You can ignore this email."),
     ],
@@ -471,7 +472,7 @@ export async function sendSubscriptionOtpEmail(to: string, code: string): Promis
 
   console.log(`\n──────────────────────────────────────────────`);
   console.log(`  SUBSCRIPTION OTP for ${to}`);
-  console.log(`  Code: ${code}  (expires in 10 minutes)`);
+  console.log(`  Code: ${code}  (expires in ${OTP_TTL_MINUTES} minutes)`);
   console.log(`──────────────────────────────────────────────\n`);
 
   const transporter = getTransporter();
@@ -1016,4 +1017,29 @@ export async function sendDevPasswordResetEmail(to: string, resetUrl: string): P
   }).catch((err: any) => {
     console.error(`[dev-reset-email] Failed to send to ${to}: ${err?.message}`);
   });
+}
+
+// ─── Welcome (sent once, when an account is first verified) ───────────────────
+export async function sendWelcomeEmail(to: string, name: string): Promise<void> {
+  const firstName = (name || "").trim().split(/\s+/)[0] || "there";
+  const html = emailPage({
+    preheader: "Your email is now your Sweep payment ID. Here's how to get started.",
+    hero: darkHero({ heading: `You're in, ${firstName}.`, chipLabel: "PAYMENT ID", chipValue: to }),
+    blocks: [
+      numbered([
+        { title: "Add money", sub: "Deposit USDC from Arc, Base, Solana and more." },
+        { title: "Send to any email", sub: "Free and instant, with gas sponsored." },
+        { title: "Finish your security setup", sub: "Your transaction password approves every send; keep your authorization key somewhere safe." },
+      ]),
+      buttons([{ label: "Add money", href: APP_URL }]),
+    ],
+    footer: ["Testnet preview — balances have no real-world value."],
+  });
+
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.log(`[email] Welcome email for ${to}`);
+    return;
+  }
+  transporter.sendMail({ from: FROM, to, subject: `Welcome to Sweep, ${firstName}`, html }).catch(() => {});
 }
