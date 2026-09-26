@@ -14,7 +14,6 @@ export interface DashboardShellProps {
   initialPayTo?: string | null;
   /** Existing dashboard tabs, rendered inside the shell unchanged. */
   slots: {
-    recurring: ReactNode;
     settings: ReactNode;
     support: ReactNode;
   };

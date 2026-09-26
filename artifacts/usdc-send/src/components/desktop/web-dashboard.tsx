@@ -14,6 +14,7 @@ import type { DashboardShellProps } from "@/components/sweep/types";
 import { SendPanel } from "./send-panel";
 import { QrIconButton, usePayQr } from "@/components/sweep/qr";
 import { SubscriptionsSection } from "@/components/subscriptions/subscriptions-section";
+import { RecurringSection } from "@/components/recurring/recurring-section";
 
 type Page = "dash" | "history" | "recurring" | "subs" | "settings" | "support";
 
@@ -172,7 +173,9 @@ export function WebDashboard({ user, balance, depositAddresses, withdraw, onBala
             hasMore={!!history.hasNextPage} loadingMore={history.isFetchingNextPage} onLoadMore={() => history.fetchNextPage()} />
         )}
 
-        {page === "recurring" && <Card className="p-6 max-w-4xl">{slots.recurring}</Card>}
+        {page === "recurring" && (
+          <RecurringSection userEmail={user.email} available={available} hasTransactionPassword={user.hasTransactionPassword} />
+        )}
 
         {page === "subs" && (
           <SubscriptionsSection user={user} available={available} onScan={qr.openScan} onAddMoney={() => setFundOpen(true)} />

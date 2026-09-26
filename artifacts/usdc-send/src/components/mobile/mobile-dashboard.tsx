@@ -14,6 +14,7 @@ import type { DashboardShellProps } from "@/components/sweep/types";
 import { MobileSend } from "./send";
 import { usePayQr } from "@/components/sweep/qr";
 import { SubscriptionsSection } from "@/components/subscriptions/subscriptions-section";
+import { RecurringSection } from "@/components/recurring/recurring-section";
 
 type Screen = "home" | "history" | "send" | "fund" | "me" | "recurring" | "subs" | "settings" | "support";
 type Tab = "home" | "send" | "fund" | "me";
@@ -102,7 +103,9 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
           )}
 
           {screen === "recurring" && (
-            <SubScreen title="Recurring transfers" onBack={() => setScreen(backTo)}>{slots.recurring}</SubScreen>
+            <SubScreen title="Recurring transfers" onBack={() => setScreen(backTo)} bare>
+              <RecurringSection userEmail={user.email} available={available} hasTransactionPassword={user.hasTransactionPassword} />
+            </SubScreen>
           )}
 
           {screen === "subs" && (
