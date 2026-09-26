@@ -9,6 +9,7 @@
 // exhausted, auth error, service outage) the next is attempted automatically.
 
 import nodemailer from "nodemailer";
+import { APP_URL, SECURITY_FOOTER, avatarHeader, badge, bigAmount, blueHero, buttons, callout, checklist, codeBlock, codeBoxes, emailPage, esc, infoBox, link, longDate, para, ref, rows, small, stats, steps, strong, title, usd } from "./emailLayout.js";
 
 type MailOpts = { from?: string; to: string; subject: string; html: string };
 
@@ -211,76 +212,22 @@ export async function sendRecurringSuccessEmail(
   newBalance: string,
   nextRunAt: Date,
 ): Promise<void> {
-  const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;">
-    <tr><td align="center">
-      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-
-        <!-- Logo -->
-        <tr><td align="center" style="padding-bottom:24px;">
-          <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-          </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-        </td></tr>
-
-        <!-- Card -->
-        <tr><td style="background:#fff;border-radius:20px;padding:40px 36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-          <!-- Status badge -->
-          <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dcfce7;margin-bottom:20px;">
-            <span style="width:8px;height:8px;border-radius:50%;background:#16a34a;display:inline-block;"></span>
-            <span style="font-size:12px;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:0.5px;">Transfer Successful</span>
-          </div>
-
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Recurring transfer sent</p>
-          <p style="margin:0 0 28px;color:#64748b;font-size:15px;line-height:1.6;">
-            Your scheduled transfer was processed successfully.
-          </p>
-
-          <!-- Amount block -->
-          <div style="background:#f1f5f9;border-radius:14px;padding:20px 24px;margin-bottom:24px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-              <span style="color:#64748b;font-size:13px;">Amount sent</span>
-              <span style="font-size:20px;font-weight:800;color:#0f172a;">$${parseFloat(amount).toFixed(2)} USD</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-              <span style="color:#64748b;font-size:13px;">Recipient</span>
-              <span style="font-size:13px;font-weight:600;color:#1e293b;">${recipientEmail}</span>
-            </div>
-            <div style="height:1px;background:#e2e8f0;margin:10px 0;"></div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-              <span style="color:#64748b;font-size:13px;">New balance</span>
-              <span style="font-size:13px;font-weight:600;color:#1e293b;">$${parseFloat(newBalance).toFixed(2)} USD</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <span style="color:#64748b;font-size:13px;">Next transfer</span>
-              <span style="font-size:13px;font-weight:600;color:#1e293b;">${nextRunAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
-            </div>
-          </div>
-
-          <p style="margin:0;color:#94a3b8;font-size:13px;line-height:1.6;">
-            The recipient will be notified and can claim the funds from their SweepUSDC account.<br>
-            You can manage or cancel your recurring transfers from your dashboard.
-          </p>
-        </td></tr>
-
-        <!-- Footer -->
-        <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-        </td></tr>
-
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
+  const html = emailPage({
+    preheader: `${usd(amount)} sent to ${recipientEmail} on schedule`,
+    label: "Recurring transfer",
+    blocks: [
+      bigAmount({ kicker: "SWEPT.", amount: usd(amount), sub: `to ${recipientEmail}` }),
+      rows([
+        { k: "Method", v: "Recurring email transfer" },
+        { k: "Amount", v: usd(amount) },
+        { k: "Fee", v: "Free", ok: true },
+        { k: "New balance", v: usd(newBalance) },
+      ], { k: "Next transfer", v: longDate(nextRunAt) }),
+      buttons([{ label: "Manage schedules", href: APP_URL }]),
+      small(`Don't recognise this schedule? ${link("Review it in Sweep", APP_URL)} and cancel it.`),
+    ],
+    footer: ["Keep this receipt for your records."],
+  });
 
   const transporter = getTransporter();
 
@@ -309,76 +256,20 @@ export async function sendRecurringFailureEmail(
   currentBalance: string,
   nextRunAt: Date,
 ): Promise<void> {
-  const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;">
-    <tr><td align="center">
-      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-
-        <!-- Logo -->
-        <tr><td align="center" style="padding-bottom:24px;">
-          <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-          </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-        </td></tr>
-
-        <!-- Card -->
-        <tr><td style="background:#fff;border-radius:20px;padding:40px 36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-          <!-- Status badge -->
-          <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#fef3c7;margin-bottom:20px;">
-            <span style="width:8px;height:8px;border-radius:50%;background:#d97706;display:inline-block;"></span>
-            <span style="font-size:12px;font-weight:700;color:#d97706;text-transform:uppercase;letter-spacing:0.5px;">Transfer Skipped</span>
-          </div>
-
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Insufficient balance</p>
-          <p style="margin:0 0 28px;color:#64748b;font-size:15px;line-height:1.6;">
-            Your recurring transfer was skipped because your balance is too low. We'll try again at the next scheduled interval.
-          </p>
-
-          <!-- Amount block -->
-          <div style="background:#fef9f0;border:1px solid #fde68a;border-radius:14px;padding:20px 24px;margin-bottom:24px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-              <span style="color:#92400e;font-size:13px;">Required amount</span>
-              <span style="font-size:20px;font-weight:800;color:#0f172a;">$${parseFloat(amount).toFixed(2)} USD</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-              <span style="color:#92400e;font-size:13px;">Your balance</span>
-              <span style="font-size:13px;font-weight:600;color:#dc2626;">$${parseFloat(currentBalance).toFixed(2)} USD</span>
-            </div>
-            <div style="height:1px;background:#fde68a;margin:10px 0;"></div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-              <span style="color:#92400e;font-size:13px;">Recipient</span>
-              <span style="font-size:13px;font-weight:600;color:#1e293b;">${recipientEmail}</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <span style="color:#92400e;font-size:13px;">Next attempt</span>
-              <span style="font-size:13px;font-weight:600;color:#1e293b;">${nextRunAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
-            </div>
-          </div>
-
-          <p style="margin:0;color:#94a3b8;font-size:13px;line-height:1.6;">
-            To ensure future transfers succeed, please top up your balance before ${nextRunAt.toLocaleDateString("en-US", { month: "short", day: "numeric" })}.<br>
-            You can also cancel this recurring transfer from your dashboard if you no longer need it.
-          </p>
-        </td></tr>
-
-        <!-- Footer -->
-        <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-        </td></tr>
-
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
+  const html = emailPage({
+    preheader: `Your ${usd(amount)} transfer to ${recipientEmail} was skipped — balance too low`,
+    label: badge("ACTION NEEDED"),
+    blocks: [
+      title(`Your transfer to ${recipientEmail} was skipped`),
+      stats([
+        { label: "Scheduled", value: usd(amount) },
+        { label: "Balance", value: usd(currentBalance), color: "#b54708" },
+        { label: "Next try", value: nextRunAt.toLocaleDateString("en-US", { month: "short", day: "numeric" }) },
+      ]),
+      para(`Add at least ${strong(usd(Math.max(0, parseFloat(amount) - parseFloat(currentBalance))))} before the next run and it will go through automatically.`),
+      buttons([{ label: "Add money", href: APP_URL }, { label: "Manage schedules", href: APP_URL }]),
+    ],
+  });
 
   const transporter = getTransporter();
 
@@ -407,58 +298,19 @@ export async function sendOtpEmail(to: string, code: string, type: "register" | 
 
   const action = type === "register" ? "create your account" : "sign in";
 
-  const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;">
-    <tr><td align="center">
-      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-
-        <!-- Logo -->
-        <tr><td align="center" style="padding-bottom:24px;">
-          <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-          </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-        </td></tr>
-
-        <!-- Card -->
-        <tr><td style="background:#fff;border-radius:20px;padding:40px 36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">
-            ${type === "register" ? "Verify your email" : "Your sign-in code"}
-          </p>
-          <p style="margin:0 0 32px;color:#64748b;font-size:15px;line-height:1.6;">
-            Use the code below to ${action}. It expires in <strong>10 minutes</strong>.
-          </p>
-
-          <!-- OTP code -->
-          <div style="background:#f1f5f9;border-radius:14px;padding:24px;text-align:center;margin-bottom:32px;">
-            <span style="font-family:'Courier New',monospace;font-size:40px;font-weight:800;letter-spacing:12px;color:#1e293b;">${code}</span>
-          </div>
-
-          <p style="margin:0;color:#94a3b8;font-size:13px;line-height:1.6;">
-            If you didn't request this, you can safely ignore this email.<br>
-            Never share this code with anyone.
-          </p>
-        </td></tr>
-
-        <!-- Footer -->
-        <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">
-            &copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.
-          </p>
-        </td></tr>
-
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
+  const html = emailPage({
+    preheader: `${code} is your Sweep ${type === "register" ? "verification" : "sign-in"} code`,
+    label: "Security",
+    blocks: [
+      title(type === "register" ? "Verify your email" : "Confirm it's you"),
+      para(`Use this code to ${esc(action)}. It expires in ${strong("10 minutes")} and can only be used once.`),
+      codeBoxes(code),
+      small(type === "register"
+        ? "Didn't create a Sweep account? You can ignore this email."
+        : `Didn't request this? ${link("Secure your account", APP_URL)} — someone may know your password.`),
+    ],
+    footer: [SECURITY_FOOTER],
+  });
 
   // Always log OTP — visible in server output if SMTP fails or isn't configured
   console.log(`\n──────────────────────────────────────────────`);
@@ -491,51 +343,18 @@ export async function sendOtpEmail(to: string, code: string, type: "register" | 
 }
 
 export async function sendVerificationEmail(to: string, verificationUrl: string): Promise<void> {
-  const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;">
-    <tr><td align="center">
-      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-        <tr><td align="center" style="padding-bottom:24px;">
-          <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-          </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-        </td></tr>
-        <tr><td style="background:#fff;border-radius:20px;padding:40px 36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Confirm your email address</p>
-          <p style="margin:0 0 32px;color:#64748b;font-size:15px;line-height:1.6;">
-            Click the button below to verify your email and activate your account.
-            This link expires in <strong>72 hours</strong>.
-          </p>
-          <div style="text-align:center;margin-bottom:32px;">
-            <a href="${verificationUrl}"
-               style="display:inline-block;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;font-weight:700;font-size:15px;padding:14px 36px;border-radius:12px;text-decoration:none;">
-              Verify my email
-            </a>
-          </div>
-          <p style="margin:0;color:#94a3b8;font-size:13px;line-height:1.6;">
-            Or copy this link into your browser:<br>
-            <a href="${verificationUrl}" style="color:#2563eb;word-break:break-all;">${verificationUrl}</a>
-          </p>
-          <p style="margin:16px 0 0;color:#94a3b8;font-size:13px;">
-            If you didn't create an account, you can safely ignore this email.
-          </p>
-        </td></tr>
-        <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-        </td></tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
+  const html = emailPage({
+    preheader: "Confirm your email to activate your Sweep account",
+    label: "Security",
+    blocks: [
+      title("Confirm your email"),
+      para(`Tap the button to verify your email and activate your account. The link expires in ${strong("72 hours")}.`),
+      buttons([{ label: "Verify email", href: verificationUrl }]),
+      small(`Button not working? Paste this link into your browser:<br><span style="word-break:break-all;color:#98a2b3;">${esc(verificationUrl)}</span>`),
+      small("Didn't create a Sweep account? You can ignore this email."),
+    ],
+    footer: [SECURITY_FOOTER],
+  });
 
   const transporter = getTransporter();
   if (!transporter) {
@@ -557,56 +376,18 @@ export async function sendVerificationEmail(to: string, verificationUrl: string)
 }
 
 export async function sendPasswordResetEmail(to: string, resetUrl: string): Promise<void> {
-  const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;">
-    <tr><td align="center">
-      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-        <tr><td align="center" style="padding-bottom:24px;">
-          <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-          </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-        </td></tr>
-        <tr><td style="background:#fff;border-radius:20px;padding:40px 36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-          <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#fef9c3;margin-bottom:20px;">
-            <span style="width:8px;height:8px;border-radius:50%;background:#ca8a04;display:inline-block;"></span>
-            <span style="font-size:12px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.5px;">Security Alert</span>
-          </div>
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Reset your password</p>
-          <p style="margin:0 0 32px;color:#64748b;font-size:15px;line-height:1.6;">
-            We received a request to reset the password on your SweepUSDC account.
-            Click the button below to choose a new password. This link expires in <strong>1 hour</strong>.
-          </p>
-          <div style="text-align:center;margin-bottom:32px;">
-            <a href="${resetUrl}"
-               style="display:inline-block;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;font-weight:700;font-size:15px;padding:14px 36px;border-radius:12px;text-decoration:none;">
-              Reset my password
-            </a>
-          </div>
-          <p style="margin:0;color:#94a3b8;font-size:13px;line-height:1.6;">
-            Or copy this link into your browser:<br>
-            <a href="${resetUrl}" style="color:#2563eb;word-break:break-all;">${resetUrl}</a>
-          </p>
-          <p style="margin:16px 0 0;color:#94a3b8;font-size:13px;">
-            If you did not request a password reset, you can safely ignore this email.
-            Your password will not change unless you click the link above.
-          </p>
-        </td></tr>
-        <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-        </td></tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
+  const html = emailPage({
+    preheader: "Reset your Sweep password — link expires in 1 hour",
+    label: "Security",
+    blocks: [
+      title("Reset your password"),
+      para(`We got a request to reset your Sweep password. The link expires in ${strong("1 hour")}.`),
+      buttons([{ label: "Choose a new password", href: resetUrl }]),
+      small(`Button not working? Paste this link into your browser:<br><span style="word-break:break-all;color:#98a2b3;">${esc(resetUrl)}</span>`),
+      small("Didn't ask for this? Ignore this email — your password won't change."),
+    ],
+    footer: [SECURITY_FOOTER],
+  });
 
   const transporter = getTransporter();
   if (!transporter) {
@@ -643,66 +424,17 @@ export async function sendSecurityOtpEmail(to: string, code: string, actionType:
     desc: "to complete this action",
   };
 
-  const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;">
-    <tr><td align="center">
-      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-
-        <!-- Logo -->
-        <tr><td align="center" style="padding-bottom:24px;">
-          <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-          </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-        </td></tr>
-
-        <!-- Card -->
-        <tr><td style="background:#fff;border-radius:20px;padding:40px 36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-          <!-- Security badge -->
-          <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#ede9fe;margin-bottom:20px;">
-            <span style="font-size:12px;">🔒</span>
-            <span style="font-size:12px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:0.5px;">Security Action</span>
-          </div>
-
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">${meta.heading}</p>
-          <p style="margin:0 0 32px;color:#64748b;font-size:15px;line-height:1.6;">
-            Use the code below ${meta.desc}. It expires in <strong>10 minutes</strong>.
-          </p>
-
-          <!-- OTP code -->
-          <div style="background:#f1f5f9;border-radius:14px;padding:24px;text-align:center;margin-bottom:32px;">
-            <span style="font-family:'Courier New',monospace;font-size:40px;font-weight:800;letter-spacing:12px;color:#1e293b;">${code}</span>
-          </div>
-
-          <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:12px;padding:16px;margin-bottom:24px;">
-            <p style="margin:0;color:#92400e;font-size:13px;line-height:1.6;">
-              <strong>⚠ Security notice:</strong> If you did not initiate this action, your account may be at risk. Do not share this code with anyone — SweepUSDC will never ask for it.
-            </p>
-          </div>
-
-          <p style="margin:0;color:#94a3b8;font-size:13px;line-height:1.6;">
-            This code was requested for your SweepUSDC account.<br>
-            If you didn't request this, you can safely ignore this email.
-          </p>
-        </td></tr>
-
-        <!-- Footer -->
-        <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-        </td></tr>
-
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
+  const html = emailPage({
+    preheader: `${code} is your Sweep security code`,
+    label: "Security",
+    blocks: [
+      title(meta.heading),
+      para(`Use this code ${esc(meta.desc)}. It expires in ${strong("10 minutes")} and can only be used once.`),
+      codeBoxes(code),
+      small(`Didn't start this? ${link("Secure your account", APP_URL)} — your account may be at risk. Never share this code.`),
+    ],
+    footer: [SECURITY_FOOTER],
+  });
 
   // Always log the OTP to server console as a fallback (visible in server logs)
   console.log(`\n──────────────────────────────────────────────`);
@@ -725,42 +457,17 @@ export async function sendSecurityOtpEmail(to: string, code: string, actionType:
 // ─── Subscription: OTP email ───────────────────────────────────────────────────
 
 export async function sendSubscriptionOtpEmail(to: string, code: string): Promise<void> {
-  const html = `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;">
-    <tr><td align="center">
-      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-        <tr><td align="center" style="padding-bottom:24px;">
-          <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-          </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-        </td></tr>
-        <tr><td style="background:#fff;border-radius:20px;padding:40px 36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-          <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dbeafe;margin-bottom:20px;">
-            <span style="font-size:12px;">💳</span>
-            <span style="font-size:12px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:0.5px;">Subscription</span>
-          </div>
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Confirm your identity</p>
-          <p style="margin:0 0 32px;color:#64748b;font-size:15px;line-height:1.6;">
-            Enter this code to generate your subscription confirmation code. It expires in <strong>10 minutes</strong>.
-          </p>
-          <div style="background:#f1f5f9;border-radius:14px;padding:24px;text-align:center;margin-bottom:32px;">
-            <span style="font-family:'Courier New',monospace;font-size:40px;font-weight:800;letter-spacing:12px;color:#1e293b;">${code}</span>
-          </div>
-          <p style="margin:0;color:#94a3b8;font-size:13px;">If you didn't request this, you can safely ignore this email.</p>
-        </td></tr>
-        <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-        </td></tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
+  const html = emailPage({
+    preheader: `${code} is your Sweep subscription code`,
+    label: "Security",
+    blocks: [
+      title("Confirm it's you"),
+      para(`Enter this code to continue your subscription. It expires in ${strong("10 minutes")}.`),
+      codeBoxes(code),
+      small("Didn't request this? You can ignore this email."),
+    ],
+    footer: [SECURITY_FOOTER],
+  });
 
   console.log(`\n──────────────────────────────────────────────`);
   console.log(`  SUBSCRIPTION OTP for ${to}`);
@@ -798,50 +505,17 @@ export async function sendSubscriptionConfirmationCodeEmail(
   interval: string,
   amount: string,
 ): Promise<void> {
-  const html = `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;">
-    <tr><td align="center">
-      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-        <tr><td align="center" style="padding-bottom:24px;">
-          <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-          </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-        </td></tr>
-        <tr><td style="background:#fff;border-radius:20px;padding:40px 36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-          <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dcfce7;margin-bottom:20px;">
-            <span style="font-size:12px;">✅</span>
-            <span style="font-size:12px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;">Confirmation Code Ready</span>
-          </div>
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Your subscription code</p>
-          <p style="margin:0 0 24px;color:#64748b;font-size:15px;line-height:1.6;">
-            Enter this code on the subscription page to activate your <strong>${planTitle}</strong> plan
-            (<strong>$${amount} / ${interval}</strong>).
-          </p>
-          <div style="background:#f1f5f9;border-radius:14px;padding:28px;text-align:center;margin-bottom:28px;">
-            <p style="margin:0 0 8px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:1px;">Confirmation Code</p>
-            <span style="font-family:'Courier New',monospace;font-size:36px;font-weight:800;letter-spacing:8px;color:#1e293b;">${confirmationCode}</span>
-          </div>
-          <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:12px;padding:16px;margin-bottom:24px;">
-            <p style="margin:0;color:#92400e;font-size:13px;line-height:1.6;">
-              ⚠ This code expires in <strong>7 days</strong> and is single-use.
-              Do not share it — it authorizes a payment from your account.
-            </p>
-          </div>
-          <p style="margin:0;color:#94a3b8;font-size:13px;">If you didn't request this, contact support immediately.</p>
-        </td></tr>
-        <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-        </td></tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
+  const html = emailPage({
+    preheader: `Your confirmation code for ${planTitle}`,
+    label: "Subscriptions",
+    blocks: [
+      title("Your subscription code"),
+      para(`Enter this code on the subscription page to activate ${strong(planTitle)} (${esc(usd(amount))} / ${esc(interval)}).`),
+      codeBlock(confirmationCode),
+      small("The code is case-sensitive, single-use and expires in 7 days."),
+    ],
+    footer: [SECURITY_FOOTER],
+  });
 
   console.log(`\n══════════════════════════════════════════════`);
   console.log(`  SUBSCRIPTION CONFIRMATION CODE for ${to}`);
@@ -867,22 +541,19 @@ export async function sendSubscriptionBillingSuccessEmail(
   nextBillingAt: Date,
 ): Promise<void> {
   const nextDate = nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <p style="margin:0 0 4px;font-size:20px;font-weight:700;color:#0f172a;">✅ Subscription payment successful</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:14px;">${planTitle}</p>
-        <div style="background:#f1f5f9;border-radius:12px;padding:20px;margin-bottom:20px;">
-          <p style="margin:0;font-size:28px;font-weight:800;color:#1e293b;">$${amount} <span style="font-size:14px;font-weight:500;color:#64748b;">/ ${interval}</span></p>
-        </div>
-        <p style="margin:0;color:#64748b;font-size:14px;">Next billing date: <strong>${nextDate}</strong></p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: `${usd(amount)} paid for ${planTitle}`,
+    label: "Subscriptions",
+    blocks: [
+      bigAmount({ kicker: "PAID.", amount: usd(amount), sub: `for ${planTitle}` }),
+      rows([
+        { k: "Plan", v: `${planTitle} · ${interval}` },
+        { k: "Paid from", v: "Sweep balance" },
+      ], { k: "Next charge", v: nextDate }),
+      buttons([{ label: "Manage subscription", href: APP_URL }]),
+    ],
+    footer: ["Keep this receipt for your records."],
+  });
 
   const transporter = getTransporter();
   if (!transporter) return;
@@ -896,25 +567,22 @@ export async function sendSubscriptionBillingFailureEmail(
   retryCount: number,
 ): Promise<void> {
   const retriesLeft = 7 - retryCount;
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <p style="margin:0 0 4px;font-size:20px;font-weight:700;color:#dc2626;">⚠ Subscription payment failed</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:14px;">${planTitle} — $${amount}</p>
-        <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:16px;margin-bottom:20px;">
-          <p style="margin:0;color:#991b1b;font-size:14px;line-height:1.6;">
-            We couldn't charge your account (insufficient balance).
-            ${retriesLeft > 0 ? `We'll retry automatically. <strong>${retriesLeft} attempt${retriesLeft !== 1 ? "s" : ""} remaining.</strong>` : "All retry attempts exhausted — your subscription has been cancelled."}
-          </p>
-        </div>
-        <p style="margin:0;color:#64748b;font-size:14px;">Please top up your balance to avoid cancellation.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: `Your ${planTitle} payment didn't go through`,
+    label: badge("ACTION NEEDED"),
+    blocks: [
+      title(`Your ${planTitle} payment didn't go through`),
+      stats([
+        { label: "Due", value: usd(amount) },
+        { label: "Attempts left", value: String(Math.max(0, retriesLeft)), color: retriesLeft > 0 ? undefined : "#b42318" },
+      ]),
+      para(retriesLeft > 0
+        ? `Your balance was too low. We'll retry once a day — add money before then to keep your subscription.`
+        : `All retry attempts are used, so the subscription has been cancelled. You can resubscribe any time.`),
+      buttons([{ label: "Add money", href: APP_URL }, { label: "Manage subscription", href: APP_URL }]),
+    ],
+    footer: [`Attempt ${retryCount} of 7.`],
+  });
 
   const transporter = getTransporter();
   if (!transporter) return;
@@ -930,28 +598,15 @@ export async function sendCreatorNewSubscriberEmail(
   interval: string,
   activeCount: number,
 ): Promise<void> {
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dcfce7;margin-bottom:20px;">
-          <span style="font-size:12px;">🎉</span>
-          <span style="font-size:12px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;">New Subscriber</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#0f172a;">You have a new subscriber!</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:14px;line-height:1.6;">
-          <strong>${subscriberEmail}</strong> just subscribed to <strong>${planTitle}</strong> on the <strong>${interval}</strong> plan.
-        </p>
-        <div style="background:#f1f5f9;border-radius:12px;padding:16px;margin-bottom:20px;">
-          <p style="margin:0;color:#64748b;font-size:14px;">You now have <strong style="color:#0f172a;">${activeCount} active subscriber${activeCount !== 1 ? "s" : ""}</strong>.</p>
-        </div>
-        <p style="margin:0;color:#94a3b8;font-size:13px;">Log in to your dashboard to view subscriber details.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: `${subscriberEmail} subscribed to ${planTitle}`,
+    label: "Your plans",
+    blocks: [
+      avatarHeader({ initial: subscriberEmail, heading: "New subscriber", sub: `${subscriberEmail} · ${interval}` }),
+      callout({ title: planTitle, sub: "Active subscribers", value: String(activeCount) }),
+      buttons([{ label: "View your plans", href: APP_URL }]),
+    ],
+  });
 
   const transporter = getTransporter();
   if (!transporter) return;
@@ -965,27 +620,14 @@ export async function sendCreatorRenewalEmail(
   amount: string,
   interval: string,
 ): Promise<void> {
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dcfce7;margin-bottom:20px;">
-          <span style="font-size:12px;">✅</span>
-          <span style="font-size:12px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;">Payment Received</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#0f172a;">Subscription renewed</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:14px;line-height:1.6;">
-          <strong>${subscriberEmail}</strong>'s <strong>${interval}</strong> subscription to <strong>${planTitle}</strong> has renewed.
-        </p>
-        <div style="background:#f1f5f9;border-radius:12px;padding:16px;">
-          <p style="margin:0;font-size:22px;font-weight:800;color:#0f172a;">$${parseFloat(amount).toFixed(2)} received</p>
-        </div>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: `${usd(amount)} renewal from ${subscriberEmail}`,
+    hero: blueHero({ label: "Renewal received", amount: `+${usd(amount)}`, person: { name: subscriberEmail }, note: `${planTitle} · ${interval}` }),
+    blocks: [
+      para("It's already in your balance."),
+      buttons([{ label: "Open Sweep", href: APP_URL }]),
+    ],
+  });
 
   const transporter = getTransporter();
   if (!transporter) return;
@@ -997,26 +639,15 @@ export async function sendCreatorPaymentFailedEmail(
   subscriberEmail: string,
   planTitle: string,
 ): Promise<void> {
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#fef3c7;margin-bottom:20px;">
-          <span style="font-size:12px;">⚠</span>
-          <span style="font-size:12px;font-weight:700;color:#d97706;text-transform:uppercase;letter-spacing:0.5px;">Payment Failed</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#0f172a;">Subscriber payment failed</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:14px;line-height:1.6;">
-          Payment failed for <strong>${subscriberEmail}</strong>'s subscription to <strong>${planTitle}</strong>.
-          The system will retry daily for up to 7 days.
-        </p>
-        <p style="margin:0;color:#94a3b8;font-size:13px;">No action is needed from you. If retries are exhausted, the subscription will be cancelled automatically.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: `A payment for ${planTitle} failed`,
+    label: badge("HEADS UP", "info"),
+    blocks: [
+      title("A subscriber's payment failed"),
+      infoBox([["Subscriber", subscriberEmail], ["Plan", planTitle]]),
+      para("Nothing to do on your side. We retry daily; if every retry fails, the subscription is cancelled automatically."),
+    ],
+  });
 
   const transporter = getTransporter();
   if (!transporter) return;
@@ -1030,28 +661,19 @@ export async function sendCreatorCancelledEmail(
   reason: string,
   activeCount: number,
 ): Promise<void> {
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#f1f5f9;margin-bottom:20px;">
-          <span style="font-size:12px;">❌</span>
-          <span style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">Subscription Cancelled</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#0f172a;">Subscription cancelled</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:14px;line-height:1.6;">
-          <strong>${subscriberEmail}</strong>'s subscription to <strong>${planTitle}</strong> has been cancelled.
-          Reason: <strong>${reason}</strong>.
-        </p>
-        <div style="background:#f1f5f9;border-radius:12px;padding:16px;">
-          <p style="margin:0;color:#64748b;font-size:14px;">You now have <strong style="color:#0f172a;">${activeCount} active subscriber${activeCount !== 1 ? "s" : ""}</strong>.</p>
-        </div>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: `${subscriberEmail} cancelled ${planTitle}`,
+    label: "Your plans",
+    blocks: [
+      title("Subscription cancelled"),
+      rows([
+        { k: "Subscriber", v: subscriberEmail },
+        { k: "Plan", v: planTitle },
+        { k: "Reason", v: reason },
+      ], { k: "Active subscribers", v: String(activeCount) }),
+      buttons([{ label: "View your plans", href: APP_URL }]),
+    ],
+  });
 
   const transporter = getTransporter();
   if (!transporter) return;
@@ -1073,60 +695,19 @@ export async function sendSubscriptionActivatedEmail(
     ? trialEndsAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
     : nextBillingAt?.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) ?? "—";
 
-  const accentColor = isTrialing ? "#7c3aed" : "#1D9E75";
-  const badgeBg     = isTrialing ? "#ede9fe"  : "#E1F5EE";
-  const badgeColor  = isTrialing ? "#5b21b6"  : "#085041";
-  const badgeLabel  = isTrialing ? "Free Trial Started" : "Subscription Active";
 
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td align="center" style="padding-bottom:24px;">
-        <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-        </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-      </td></tr>
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:99px;background:${badgeBg};margin-bottom:20px;">
-          <span style="width:7px;height:7px;border-radius:50%;background:${accentColor};display:inline-block;"></span>
-          <span style="font-size:12px;font-weight:700;color:${badgeColor};text-transform:uppercase;letter-spacing:0.5px;">${badgeLabel}</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">
-          ${isTrialing ? "Your free trial is active!" : "Subscription confirmed!"}
-        </p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:15px;line-height:1.6;">
-          ${isTrialing
-            ? `Your free trial for <strong>${planTitle}</strong> has started. Your first payment will be due when the trial ends.`
-            : `You're now subscribed to <strong>${planTitle}</strong>.`}
-        </p>
-        <div style="background:#f1f5f9;border-radius:14px;padding:20px 24px;margin-bottom:24px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">Plan</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;">${planTitle}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">Amount</span>
-            <span style="font-size:16px;font-weight:800;color:#0f172a;">$${parseFloat(amount).toFixed(2)} / ${interval}</span>
-          </div>
-          <div style="height:1px;background:#e2e8f0;margin:10px 0;"></div>
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:#64748b;font-size:13px;">${isTrialing ? "First billing date" : "Next billing date"}</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;">${dateStr}</span>
-          </div>
-        </div>
-        <p style="margin:0;color:#94a3b8;font-size:13px;line-height:1.6;">
-          You can view or cancel this subscription anytime from your dashboard.
-        </p>
-      </td></tr>
-      <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: isTrialing ? `Your free trial for ${planTitle} has started` : `You're subscribed to ${planTitle}`,
+    label: "Subscriptions",
+    blocks: [
+      avatarHeader({ initial: planTitle, heading: isTrialing ? "Free trial started" : "You're subscribed", sub: `${planTitle} · ${usd(amount)} / ${interval}` }),
+      isTrialing
+        ? callout({ title: "Free trial active", sub: `First charge of ${usd(amount)} on ${dateStr}`, value: usd(0) })
+        : callout({ title: "Paid today", sub: `Renews on ${dateStr}`, value: usd(amount) }),
+      buttons([{ label: "Manage subscription", href: APP_URL }]),
+    ],
+    footer: [isTrialing ? `Cancel before ${dateStr} and you won't be charged.` : "Paid from your Sweep balance. Cancel anytime."],
+  });
 
   const transporter = getTransporter();
   if (!transporter) return;
@@ -1139,35 +720,16 @@ export async function sendSubscriptionCancelledEmail(
   to: string,
   planTitle: string,
 ): Promise<void> {
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td align="center" style="padding-bottom:24px;">
-        <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-        </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-      </td></tr>
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:99px;background:#f1f5f9;margin-bottom:20px;">
-          <span style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">Subscription Cancelled</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Subscription cancelled</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:15px;line-height:1.6;">
-          Your subscription to <strong>${planTitle}</strong> has been cancelled. You won't be charged again.
-        </p>
-        <p style="margin:0;color:#94a3b8;font-size:13px;line-height:1.6;">
-          If you cancelled by mistake, you can re-subscribe anytime from the subscription page.
-        </p>
-      </td></tr>
-      <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: `Your ${planTitle} subscription is cancelled`,
+    label: "Subscriptions",
+    blocks: [
+      title("Subscription cancelled"),
+      para(`Your subscription to ${strong(planTitle)} is cancelled. You won't be charged again.`),
+      buttons([{ label: "Open Sweep", href: APP_URL }]),
+    ],
+    footer: ["Changed your mind? Resubscribe from Subscriptions in Sweep."],
+  });
 
   const transporter = getTransporter();
   if (!transporter) return;
@@ -1184,56 +746,19 @@ export async function sendSubscriptionTrialEndingSoonEmail(
   trialEndsAt: Date,
 ): Promise<void> {
   const endDateStr = trialEndsAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td align="center" style="padding-bottom:24px;">
-        <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-        </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-      </td></tr>
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:99px;background:#ede9fe;margin-bottom:20px;">
-          <span style="font-size:12px;font-weight:700;color:#5b21b6;text-transform:uppercase;letter-spacing:0.5px;">Trial Ending Soon</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Your free trial ends in 3 days</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:15px;line-height:1.6;">
-          Your free trial for <strong>${planTitle}</strong> ends on <strong>${endDateStr}</strong>.
-          Make sure your account has sufficient balance to continue.
-        </p>
-        <div style="background:#f1f5f9;border-radius:14px;padding:20px 24px;margin-bottom:24px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">Plan</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;">${planTitle}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">Amount due</span>
-            <span style="font-size:16px;font-weight:800;color:#0f172a;">$${parseFloat(amount).toFixed(2)} / ${interval}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:#64748b;font-size:13px;">First billing</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;">${endDateStr}</span>
-          </div>
-        </div>
-        <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:12px;padding:16px;margin-bottom:24px;">
-          <p style="margin:0;color:#92400e;font-size:13px;line-height:1.6;">
-            If your balance is insufficient on <strong>${endDateStr}</strong>, your subscription will enter a grace period and we'll retry for up to 7 days before cancelling.
-          </p>
-        </div>
-        <p style="margin:0;color:#94a3b8;font-size:13px;line-height:1.6;">
-          Top up your balance from the dashboard to ensure uninterrupted access.<br>
-          You can also cancel before the trial ends if you no longer wish to continue.
-        </p>
-      </td></tr>
-      <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: `Your free trial for ${planTitle} ends in 3 days`,
+    label: badge("TRIAL ENDING", "info"),
+    blocks: [
+      title("Your free trial ends in 3 days"),
+      stats([
+        { label: "First charge", value: usd(amount) },
+        { label: "On", value: endDateStr },
+      ]),
+      para(`Keep at least ${strong(usd(amount))} in your balance for ${strong(planTitle)} (${esc(interval)}). If it's too low, we retry daily for up to 7 days before cancelling.`),
+      buttons([{ label: "Add money", href: APP_URL }, { label: "Manage subscription", href: APP_URL }]),
+    ],
+  });
 
   const transporter = getTransporter();
   if (!transporter) return;
@@ -1248,47 +773,23 @@ export async function sendTransferSentEmail(
   amount: string,
   newBalance: string,
 ): Promise<void> {
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td align="center" style="padding-bottom:24px;">
-        <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-        </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-      </td></tr>
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dcfce7;margin-bottom:20px;">
-          <span style="width:8px;height:8px;border-radius:50%;background:#16a34a;display:inline-block;"></span>
-          <span style="font-size:12px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;">Transfer Sent</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Money sent successfully</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:15px;line-height:1.6;">Your transfer has been processed.</p>
-        <div style="background:#f1f5f9;border-radius:14px;padding:20px 24px;margin-bottom:24px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">Amount sent</span>
-            <span style="font-size:20px;font-weight:800;color:#0f172a;">$${parseFloat(amount).toFixed(2)} USD</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">To</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;">${recipientEmail}</span>
-          </div>
-          <div style="height:1px;background:#e2e8f0;margin:10px 0;"></div>
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:#64748b;font-size:13px;">Remaining balance</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;">$${parseFloat(newBalance).toFixed(2)} USD</span>
-          </div>
-        </div>
-        <p style="margin:0;color:#94a3b8;font-size:13px;">If you didn't authorize this transfer, contact support immediately.</p>
-      </td></tr>
-      <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const receiptRef = ref();
+  const html = emailPage({
+    preheader: `Receipt: ${usd(amount)} to ${recipientEmail}`,
+    label: `Receipt #${receiptRef}`,
+    blocks: [
+      bigAmount({ kicker: "SWEPT.", amount: usd(amount), sub: `to ${recipientEmail}` }),
+      steps([{ label: "Authorized" }, { label: "Sent" }, { label: "Delivered" }]),
+      rows([
+        { k: "Method", v: "Email transfer" },
+        { k: "Amount", v: usd(amount) },
+        { k: "Fee", v: "Free", ok: true },
+        { k: "New balance", v: usd(newBalance) },
+      ], { k: "Total", v: usd(amount) }),
+      small(`Don't recognise this? ${link("Secure your account", APP_URL)} and change your passwords.`),
+    ],
+    footer: [`Keep this receipt for your records. ${esc(longDate(new Date()))}`],
+  });
 
   const transporter = getTransporter();
   if (!transporter) {
@@ -1306,47 +807,16 @@ export async function sendTransferReceivedEmail(
   amount: string,
   newBalance: string,
 ): Promise<void> {
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td align="center" style="padding-bottom:24px;">
-        <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-        </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-      </td></tr>
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dbeafe;margin-bottom:20px;">
-          <span style="width:8px;height:8px;border-radius:50%;background:#2563eb;display:inline-block;"></span>
-          <span style="font-size:12px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:0.5px;">Funds Received</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">You've received money!</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:15px;line-height:1.6;">A transfer has been credited to your account.</p>
-        <div style="background:#f1f5f9;border-radius:14px;padding:20px 24px;margin-bottom:24px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">Amount received</span>
-            <span style="font-size:20px;font-weight:800;color:#16a34a;">+$${parseFloat(amount).toFixed(2)} USD</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">From</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;">${senderEmail}</span>
-          </div>
-          <div style="height:1px;background:#e2e8f0;margin:10px 0;"></div>
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:#64748b;font-size:13px;">New balance</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;">$${parseFloat(newBalance).toFixed(2)} USD</span>
-          </div>
-        </div>
-        <p style="margin:0;color:#94a3b8;font-size:13px;">Funds are available immediately in your SweepUSDC balance.</p>
-      </td></tr>
-      <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: `${senderEmail} sent you ${usd(amount)}`,
+    hero: blueHero({ label: "Payment received", amount: `+${usd(amount)}`, person: { name: senderEmail } }),
+    blocks: [
+      para("It's already in your balance — nothing to claim."),
+      stats([{ label: "New balance", value: usd(newBalance) }, { label: "Reference", value: ref() }]),
+      buttons([{ label: "Open Sweep", href: APP_URL }]),
+    ],
+    footer: [`You got this because ${esc(to)} is a Sweep payment ID.`],
+  });
 
   const transporter = getTransporter();
   if (!transporter) {
@@ -1363,40 +833,15 @@ export async function sendEscrowClaimedEmail(
   totalAmount: string,
   claimedCount: number,
 ): Promise<void> {
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td align="center" style="padding-bottom:24px;">
-        <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-        </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-      </td></tr>
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dcfce7;margin-bottom:20px;">
-          <span style="width:8px;height:8px;border-radius:50%;background:#16a34a;display:inline-block;"></span>
-          <span style="font-size:12px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;">Funds Claimed</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Pending funds claimed</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:15px;line-height:1.6;">
-          You've successfully claimed ${claimedCount} pending transfer${claimedCount !== 1 ? "s" : ""}.
-        </p>
-        <div style="background:#f1f5f9;border-radius:14px;padding:20px 24px;margin-bottom:24px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:#64748b;font-size:13px;">Total claimed</span>
-            <span style="font-size:20px;font-weight:800;color:#16a34a;">+$${parseFloat(totalAmount).toFixed(2)} USD</span>
-          </div>
-        </div>
-        <p style="margin:0;color:#94a3b8;font-size:13px;">These funds are now available in your SweepUSDC balance.</p>
-      </td></tr>
-      <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: `${usd(totalAmount)} in pending transfers is now in your balance`,
+    hero: blueHero({ label: "Pending funds claimed", amount: `+${usd(totalAmount)}`, note: `${claimedCount} transfer${claimedCount !== 1 ? "s" : ""} waiting for you` }),
+    blocks: [
+      para("Money people sent you before you joined is now in your balance."),
+      buttons([{ label: "Open Sweep", href: APP_URL }]),
+    ],
+    footer: [`You got this because ${esc(to)} is a Sweep payment ID.`],
+  });
 
   const transporter = getTransporter();
   if (!transporter) {
@@ -1415,48 +860,17 @@ export async function sendDepositConfirmedEmail(
   source: string,
 ): Promise<void> {
   const isCrypto = type === "crypto";
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td align="center" style="padding-bottom:24px;">
-        <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-        </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-      </td></tr>
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dcfce7;margin-bottom:20px;">
-          <span style="width:8px;height:8px;border-radius:50%;background:#16a34a;display:inline-block;"></span>
-          <span style="font-size:12px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;">Deposit Confirmed</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Your deposit has arrived</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:15px;line-height:1.6;">
-          ${isCrypto ? "Your USDC deposit has been confirmed on-chain and credited to your account." : "Your wire transfer has been received and credited to your account."}
-        </p>
-        <div style="background:#f1f5f9;border-radius:14px;padding:20px 24px;margin-bottom:24px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">Amount credited</span>
-            <span style="font-size:20px;font-weight:800;color:#16a34a;">+$${parseFloat(amount).toFixed(2)} USD</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">Type</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;">${isCrypto ? "Crypto (USDC)" : "Bank Wire"}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:#64748b;font-size:13px;">Source</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;">${source}</span>
-          </div>
-        </div>
-        <p style="margin:0;color:#94a3b8;font-size:13px;">Your balance has been updated and is available for use immediately.</p>
-      </td></tr>
-      <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: `${usd(amount)} deposit is in your balance`,
+    hero: blueHero({ label: "Deposit received", amount: `+${usd(amount)}`, note: isCrypto ? `USDC · ${source}` : `Wire · ${source}` }),
+    blocks: [
+      para(isCrypto
+        ? "Your USDC deposit is confirmed on-chain and ready to send."
+        : "Your wire transfer has arrived and is ready to send."),
+      stats([{ label: "Method", value: isCrypto ? "USDC deposit" : "Wire transfer" }, { label: "Reference", value: ref() }]),
+      buttons([{ label: "Open Sweep", href: APP_URL }]),
+    ],
+  });
 
   const transporter = getTransporter();
   if (!transporter) {
@@ -1474,47 +888,21 @@ export async function sendWithdrawalCryptoEmail(
   fee: string,
   destination: string,
 ): Promise<void> {
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td align="center" style="padding-bottom:24px;">
-        <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-        </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-      </td></tr>
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dbeafe;margin-bottom:20px;">
-          <span style="width:8px;height:8px;border-radius:50%;background:#2563eb;display:inline-block;"></span>
-          <span style="font-size:12px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:0.5px;">Withdrawal Processed</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">USDC withdrawal confirmed</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:15px;line-height:1.6;">Your USDC has been sent to the destination wallet.</p>
-        <div style="background:#f1f5f9;border-radius:14px;padding:20px 24px;margin-bottom:24px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">Amount withdrawn</span>
-            <span style="font-size:20px;font-weight:800;color:#0f172a;">$${parseFloat(amount).toFixed(2)} USDC</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">Network fee</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;">$${parseFloat(fee).toFixed(2)}</span>
-          </div>
-          <div style="height:1px;background:#e2e8f0;margin:10px 0;"></div>
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:#64748b;font-size:13px;">To wallet</span>
-            <span style="font-size:12px;font-weight:600;color:#1e293b;font-family:'Courier New',monospace;word-break:break-all;">${destination}</span>
-          </div>
-        </div>
-        <p style="margin:0;color:#94a3b8;font-size:13px;">If you didn't authorize this withdrawal, contact support immediately.</p>
-      </td></tr>
-      <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const receiptRef = ref();
+  const html = emailPage({
+    preheader: `${usd(amount)} USDC is on its way to your wallet`,
+    label: `Receipt #${receiptRef}`,
+    blocks: [
+      bigAmount({ kicker: "WITHDRAWN.", amount: `${parseFloat(amount).toFixed(2)} USDC`, sub: "to your wallet" }),
+      rows([
+        { k: "Destination", v: destination, mono: true },
+        { k: "Amount", v: `${parseFloat(amount).toFixed(2)} USDC` },
+        { k: "Network fee", v: usd(fee) },
+      ]),
+      small(`Don't recognise this? ${link("Secure your account", APP_URL)} straight away.`),
+    ],
+    footer: ["Keep this receipt for your records."],
+  });
 
   const transporter = getTransporter();
   if (!transporter) {
@@ -1531,47 +919,20 @@ export async function sendWithdrawalFiatEmail(
   amount: string,
   destination: string,
 ): Promise<void> {
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td align="center" style="padding-bottom:24px;">
-        <div style="width:48px;height:48px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-          <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-        </div>
-        <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#0f172a;">SweepUSDC</p>
-      </td></tr>
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dbeafe;margin-bottom:20px;">
-          <span style="width:8px;height:8px;border-radius:50%;background:#2563eb;display:inline-block;"></span>
-          <span style="font-size:12px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:0.5px;">Wire Initiated</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Wire transfer initiated</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:15px;line-height:1.6;">Your withdrawal is on its way. Wire transfers typically arrive within 1–3 business days.</p>
-        <div style="background:#f1f5f9;border-radius:14px;padding:20px 24px;margin-bottom:24px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">Amount</span>
-            <span style="font-size:20px;font-weight:800;color:#0f172a;">$${parseFloat(amount).toFixed(2)} USD</span>
-          </div>
-          <div style="height:1px;background:#e2e8f0;margin:10px 0;"></div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span style="color:#64748b;font-size:13px;">Destination</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;">${destination}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:#64748b;font-size:13px;">Estimated arrival</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;">1–3 business days</span>
-          </div>
-        </div>
-        <p style="margin:0;color:#94a3b8;font-size:13px;">If you didn't authorize this withdrawal, contact support immediately.</p>
-      </td></tr>
-      <tr><td style="padding:24px 0;text-align:center;">
-        <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; ${new Date().getFullYear()} SweepUSDC. All rights reserved.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const receiptRef = ref();
+  const html = emailPage({
+    preheader: `${usd(amount)} wire transfer is on its way`,
+    label: `Receipt #${receiptRef}`,
+    blocks: [
+      bigAmount({ kicker: "WIRE SENT.", amount: usd(amount), sub: "Usually arrives in 1–3 business days" }),
+      rows([
+        { k: "Destination", v: destination },
+        { k: "Amount", v: usd(amount) },
+      ]),
+      small(`Don't recognise this? ${link("Secure your account", APP_URL)} straight away.`),
+    ],
+    footer: ["Keep this receipt for your records."],
+  });
 
   const transporter = getTransporter();
   if (!transporter) {
@@ -1582,34 +943,16 @@ export async function sendWithdrawalFiatEmail(
 }
 
 export async function sendPassportCreatedEmail(to: string): Promise<void> {
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#dbeafe;margin-bottom:20px;">
-          <span style="font-size:12px;">🪪</span>
-          <span style="font-size:12px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:0.5px;">Subscription Passport</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#0f172a;">Your Subscription Passport is ready</p>
-        <p style="margin:0 0 20px;color:#64748b;font-size:14px;line-height:1.6;">
-          You've been issued a Subscription Passport. Next time you subscribe to a plan on SweepUSDC,
-          you can activate in one click — no confirmation code needed.
-        </p>
-        <div style="background:#f1f5f9;border-radius:12px;padding:16px;margin-bottom:20px;">
-          <p style="margin:0;color:#64748b;font-size:14px;"><strong>What this means:</strong></p>
-          <ul style="margin:8px 0 0;padding-left:20px;color:#64748b;font-size:14px;line-height:1.8;">
-            <li>Instant subscription activation on future plans</li>
-            <li>Your identity is already verified</li>
-            <li>You can revoke your passport anytime from your dashboard</li>
-          </ul>
-        </div>
-        <p style="margin:0;color:#94a3b8;font-size:13px;">If you didn't expect this, log in and review your account settings.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: "Your Sweep Subscription Passport is ready",
+    label: "Subscriptions",
+    blocks: [
+      title("Your Subscription Passport is ready"),
+      para("Your identity is verified, so partner checkouts can activate your subscriptions in one step."),
+      checklist(["Faster checkout with partner merchants", "Your identity is already verified", "Revoke it anytime from Subscriptions"], "WHAT THIS MEANS"),
+      small(`Didn't expect this? ${link("Review your account", APP_URL)}.`),
+    ],
+  });
 
   const transporter = getTransporter();
   if (!transporter) return;
@@ -1623,26 +966,18 @@ export async function sendCreatorTrialEndingSoonEmail(
   trialEndDate: Date,
 ): Promise<void> {
   const endDateStr = trialEndDate.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;"><tr><td align="center">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-      <tr><td style="background:#fff;border-radius:20px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:#ede9fe;margin-bottom:20px;">
-          <span style="font-size:12px;">⏳</span>
-          <span style="font-size:12px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:0.5px;">Trial Ending Soon</span>
-        </div>
-        <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#0f172a;">Trial ending in 3 days</p>
-        <p style="margin:0 0 24px;color:#64748b;font-size:14px;line-height:1.6;">
-          <strong>${subscriberEmail}</strong>'s free trial for <strong>${planTitle}</strong> ends in 3 days.
-          First billing will be attempted on <strong>${endDateStr}</strong>.
-        </p>
-        <p style="margin:0;color:#94a3b8;font-size:13px;">If their account has sufficient balance, billing will proceed automatically.</p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
+  const html = emailPage({
+    preheader: `A free trial for ${planTitle} ends in 3 days`,
+    label: "Your plans",
+    blocks: [
+      title("A trial ends in 3 days"),
+      rows([
+        { k: "Subscriber", v: subscriberEmail },
+        { k: "Plan", v: planTitle },
+      ], { k: "First charge", v: endDateStr }),
+      para("If their balance covers it, billing happens automatically."),
+    ],
+  });
 
   const transporter = getTransporter();
   if (!transporter) return;
@@ -1652,66 +987,18 @@ export async function sendCreatorTrialEndingSoonEmail(
 // ─── Developer: password reset ─────────────────────────────────────────────────
 
 export async function sendDevPasswordResetEmail(to: string, resetUrl: string): Promise<void> {
-  const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;background:#060912;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;">
-    <tr><td align="center">
-      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
-
-        <tr><td align="center" style="padding-bottom:28px;">
-          <div style="width:48px;height:48px;background:linear-gradient(135deg,#4f46e5,#7c3aed);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
-            <span style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-1px;">S</span>
-          </div>
-          <p style="margin:8px 0 0;font-weight:700;font-size:18px;color:#fff;">Sweep Developer Portal</p>
-        </td></tr>
-
-        <tr><td style="background:#0f1623;border:1px solid rgba(255,255,255,0.08);border-radius:20px;padding:40px 36px;">
-          <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:rgba(79,70,229,0.15);border:1px solid rgba(79,70,229,0.3);margin-bottom:20px;">
-            <span style="font-size:12px;">🔑</span>
-            <span style="font-size:12px;font-weight:700;color:#818cf8;text-transform:uppercase;letter-spacing:0.5px;">Password Reset</span>
-          </div>
-
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#fff;">Reset your password</p>
-          <p style="margin:0 0 32px;color:#94a3b8;font-size:15px;line-height:1.6;">
-            We received a request to reset the password for your developer account.
-            Click the button below to set a new password. This link expires in <strong style="color:#e2e8f0;">30 minutes</strong>.
-          </p>
-
-          <div style="text-align:center;margin-bottom:32px;">
-            <a href="${resetUrl}"
-               style="display:inline-block;background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;font-weight:700;font-size:15px;padding:14px 36px;border-radius:12px;text-decoration:none;">
-              Reset my password
-            </a>
-          </div>
-
-          <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">
-            Or copy this link into your browser:<br>
-            <a href="${resetUrl}" style="color:#818cf8;word-break:break-all;">${resetUrl}</a>
-          </p>
-
-          <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:12px;padding:16px;">
-            <p style="margin:0;color:#fca5a5;font-size:13px;line-height:1.6;">
-              <strong>⚠ If you did not request this,</strong> you can safely ignore this email.
-              Your password will not change unless you click the link above.
-            </p>
-          </div>
-        </td></tr>
-
-        <tr><td style="padding:24px 0;text-align:center;">
-          <p style="margin:0;color:#334155;font-size:12px;">&copy; ${new Date().getFullYear()} Sweep. All rights reserved.</p>
-        </td></tr>
-
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
+  const html = emailPage({
+    preheader: "Reset your Sweep Developer Portal password",
+    label: "Developer portal",
+    blocks: [
+      title("Reset your password"),
+      para(`We got a request to reset your developer account password. The link expires in ${strong("30 minutes")}.`),
+      buttons([{ label: "Choose a new password", href: resetUrl }]),
+      small(`Button not working? Paste this link into your browser:<br><span style="word-break:break-all;color:#98a2b3;">${esc(resetUrl)}</span>`),
+      small("Didn't ask for this? Ignore this email — your password won't change."),
+    ],
+    footer: [SECURITY_FOOTER],
+  });
 
   console.log(`\n──────────────────────────────────────────────`);
   console.log(`  DEV PASSWORD RESET for ${to}`);
