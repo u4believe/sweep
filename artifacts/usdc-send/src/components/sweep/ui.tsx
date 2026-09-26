@@ -71,7 +71,7 @@ export function txStatus(tx: Pick<UnifiedTx, "status" | "category" | "direction"
   const s = tx.status.toLowerCase();
   if (["completed", "claimed", "confirmed", "credited", "complete", "success"].includes(s)) return { label: "Completed", tone: "ok" };
   if (s === "pending" && tx.category === "escrow" && tx.direction === "out") return { label: "Awaiting signup", tone: "warn" };
-  if (["pending", "pending_transfer", "processing", "confirming", "initiated", "queued"].includes(s)) return { label: "Pending", tone: "warn" };
+  if (["pending", "pending_transfer", "processing", "delivering", "confirming", "initiated", "queued"].includes(s)) return { label: "Pending", tone: "warn" };
   if (["failed", "rejected", "error"].includes(s)) return { label: "Failed", tone: "bad" };
   if (s === "cancelled") return { label: "Cancelled", tone: "bad" };
   if (s === "refunded") return { label: "Refunded", tone: "muted" };

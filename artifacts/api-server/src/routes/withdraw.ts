@@ -308,16 +308,16 @@ router.post("/crypto", requireAuth, requireEmailVerified, withdrawalLimiter, asy
       return;
     }
 
-    // ── 4. Mark completed ─────────────────────────────────────────────────────
-    // Burn intent accepted = withdrawal submitted. The on-chain txHash is
-    // backfilled by gateway.mint.finalized webhook when the mint lands.
+    // ── 4. Record the outcome ─────────────────────────────────────────────────
+    // Direct transfers are done (a failed one is refunded by onFailure).
+    // A Gateway burn intent being accepted is not delivery: the withdrawal stays
+    // "delivering" until the gateway delivery worker (or the mint.finalized
+    // webhook) sees the mint land — or refunds the user if forwarding fails.
     await db
       .update(withdrawalsTable)
-      .set({
-        status:           "completed",
-        circleTransferId: transferId,
-        completedAt:      new Date(),
-      })
+      .set(direct
+        ? { status: "completed", circleTransferId: transferId, completedAt: new Date() }
+        : { status: "delivering", circleTransferId: transferId })
       .where(eq(withdrawalsTable.id, withdrawal.id));
 
     res.json({
@@ -328,6 +328,7 @@ router.post("/crypto", requireAuth, requireEmailVerified, withdrawalLimiter, asy
       newBalance,
       blockchain: chainKey,
       chain:      chain.label,
+      status:     direct ? "completed" : "delivering",
       message:    `Withdrawal of ${netAmount.toFixed(2)} USDC to ${walletAddress} on ${chain.label} is being processed`,
     });
   } catch (error: any) {

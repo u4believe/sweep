@@ -1004,6 +1004,31 @@ export async function getGatewayUnifiedBalance(): Promise<{
   return { perChain, total };
 }
 
+// ─── Gateway transfer status ─────────────────────────────────────────────────
+// GET /v1/transfer/{id}: pending → confirmed → finalized, or failed / expired.
+// transactionHash is the mint on the destination chain; failureReason is set
+// only when the transfer (or its forwarding) failed.
+
+export type GatewayTransferStatus = "pending" | "confirmed" | "finalized" | "failed" | "expired";
+
+export async function getGatewayTransfer(transferId: string): Promise<{
+  status:          GatewayTransferStatus | string;
+  transactionHash: string | null;
+  failureReason:   string | null;
+} | null> {
+  const res = await fetch(`${GATEWAY_API_BASE}/v1/transfer/${encodeURIComponent(transferId)}`, { headers: circleHeaders() });
+  const json: any = await res.json().catch(() => ({}));
+  // Gateway answers an unknown transfer with 400 "Transfer details are not available"
+  if (res.status === 404 || (res.status === 400 && /not available/i.test(json?.message ?? ""))) return null;
+  if (!res.ok) throw new Error(json?.message ?? `HTTP ${res.status}`);
+  const t = json?.data ?? json;
+  return {
+    status:          String(t?.status ?? "pending").toLowerCase(),
+    transactionHash: t?.transactionHash ?? null,
+    failureReason:   t?.forwardingDetails?.failureReason ?? null,
+  };
+}
+
 // ─── Direct same-chain withdrawal (no Forwarding Service) ────────────────────
 
 export async function directTreasuryTransfer(opts: {

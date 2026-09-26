@@ -243,6 +243,15 @@ async function handleMintFinalized(n: any): Promise<void> {
     console.info(`[gateway/webhook] mint.finalized: withdrawal ${withdrawal.id} already complete with txHash`);
     return;
   }
+  if (withdrawal.status === "refunded" || withdrawal.status === "failed") {
+    // The delivery worker already refunded this one; a late mint means the user was
+    // paid twice, so flag it loudly instead of silently flipping it to completed.
+    console.error(
+      `[gateway/webhook] mint.finalized for withdrawal ${withdrawal.id} which is ${withdrawal.status} — ` +
+      `user ${withdrawal.userId} may have been refunded AND paid (transferId=${transferId}, txHash=${txHash})`,
+    );
+    return;
+  }
 
   // Update txHash even for already-completed withdrawals (burn intent was submitted
   // before on-chain mint resolved; this backfills the missing on-chain hash).

@@ -12,6 +12,7 @@ import { startArcDepositWorker, stopArcDepositWorker } from "./lib/arcDepositWor
 import { probeGasStationStatus, ensureTreasurySolanaAtaSeeded } from "./lib/circle.js";
 import { provisionGatewayDelegate, GATEWAY_SUPPORTED_CHAINS } from "./lib/gatewaySweep.js";
 import { startTreasurySweepWorker } from "./lib/treasurySweepWorker.js";
+import { startGatewayDeliveryWorker } from "./lib/gatewayDeliveryWorker.js";
 import { verifySmtp } from "./lib/email.js";
 
 // ─── Required environment variable validation ─────────────────────────────────
@@ -77,6 +78,7 @@ app.listen(port, (err) => {
       startOtpCleanupWorker();
       startArcDepositWorker();
       startTreasurySweepWorker();
+      startGatewayDeliveryWorker();
       probeGasStationStatus().catch(() => {});
       ensureTreasurySolanaAtaSeeded().catch(() => {});
       // Auto-provision addDelegate for any Gateway-supported chain that hasn't
