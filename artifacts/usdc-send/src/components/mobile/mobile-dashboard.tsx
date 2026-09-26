@@ -13,10 +13,10 @@ import type { SendStep } from "@/components/sweep/use-send-flow";
 import type { DashboardShellProps } from "@/components/sweep/types";
 import { MobileSend } from "./send";
 import { usePayQr } from "@/components/sweep/qr";
+import { SubscriptionsSection } from "@/components/subscriptions/subscriptions-section";
 
 type Screen = "home" | "history" | "send" | "fund" | "me" | "recurring" | "subs" | "settings" | "support";
 type Tab = "home" | "send" | "fund" | "me";
-type SubsTab = "mine" | "plans" | "pay";
 
 const TAB_OF: Record<Screen, Tab> = {
   home: "home", history: "home", send: "send", fund: "fund",
@@ -29,7 +29,6 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
   const [screen,   setScreen]   = useState<Screen>(initialPayTo ? "send" : "home");
   const [backTo,   setBackTo]   = useState<Screen>("home");
   const [sendStep, setSendStep] = useState<SendStep>("form");
-  const [subsTab,  setSubsTab]  = useState<SubsTab>("mine");
   const [payTo,    setPayTo]    = useState(initialPayTo ? { id: initialPayTo, n: 1 } : null);
 
   const qr = usePayQr({
@@ -107,12 +106,8 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
           )}
 
           {screen === "subs" && (
-            <SubScreen title="Subscriptions" onBack={() => setScreen(backTo)}
-              toolbar={
-                <Segmented<SubsTab> value={subsTab} onChange={setSubsTab}
-                  options={[{ value: "mine", label: "Subscribed" }, { value: "plans", label: "My plans" }, { value: "pay", label: "Pay" }]} />
-              }>
-              {subsTab === "mine" ? slots.subsMine : subsTab === "plans" ? slots.subsCreate : slots.subsPay}
+            <SubScreen title="Subscriptions" onBack={() => setScreen(backTo)} bare>
+              <SubscriptionsSection user={user} available={available} onScan={qr.openScan} onAddMoney={() => setScreen("fund")} />
             </SubScreen>
           )}
 

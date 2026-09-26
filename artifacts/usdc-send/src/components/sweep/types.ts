@@ -15,9 +15,6 @@ export interface DashboardShellProps {
   /** Existing dashboard tabs, rendered inside the shell unchanged. */
   slots: {
     recurring: ReactNode;
-    subsMine: ReactNode;
-    subsCreate: ReactNode;
-    subsPay: ReactNode;
     settings: ReactNode;
     support: ReactNode;
   };

@@ -41,12 +41,14 @@ const kicker = "text-xs font-bold tracking-[0.07em] text-(--sw-faint) uppercase"
 type Me = { email: string; hasTransactionPassword: boolean; balance: number | null };
 type Done = { status: string; tier: string; amount: string; interval: string };
 
-export function Checkout({ merchantId, plan, variant, onPayAnother }: {
+export function Checkout({ merchantId, plan, variant, onPayAnother, onDone }: {
   merchantId: string;
   plan: PlanInfo;
   /** "page": the hosted split-screen checkout. "embedded": stacked, inside the dashboard. */
   variant: "page" | "embedded";
   onPayAnother?: () => void;
+  /** Called once the subscription is active (or its trial has started). */
+  onDone?: () => void;
 }) {
   const [, setLocation] = useLocation();
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -124,6 +126,7 @@ export function Checkout({ merchantId, plan, variant, onPayAnother }: {
       if (!res.ok) throw new Error(json.message ?? "Payment failed");
       setDone({ status: json.subscription?.status ?? "active", tier: tier.tierName, amount: usd(amount), interval: cycle });
       setTxPwd("");
+      onDone?.();
     } catch (e: any) {
       setError(e?.message ?? "Payment failed");
     } finally {

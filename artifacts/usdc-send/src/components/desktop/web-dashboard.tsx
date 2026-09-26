@@ -13,16 +13,15 @@ import { useDashboardData, type HistoryState } from "@/components/sweep/use-dash
 import type { DashboardShellProps } from "@/components/sweep/types";
 import { SendPanel } from "./send-panel";
 import { QrIconButton, usePayQr } from "@/components/sweep/qr";
+import { SubscriptionsSection } from "@/components/subscriptions/subscriptions-section";
 
 type Page = "dash" | "history" | "recurring" | "subs" | "settings" | "support";
-type SubsTab = "mine" | "plans" | "pay";
 
 const SIDEBAR_KEY = "sweep.sidebarHidden";
 
 export function WebDashboard({ user, balance, depositAddresses, withdraw, onBalanceChanged, onLogout, slots, initialPayTo }: DashboardShellProps) {
   const [page,     setPage]     = useState<Page>("dash");
   const [payTo,    setPayTo]    = useState(initialPayTo ? { id: initialPayTo, n: 1 } : null);
-  const [subsTab,  setSubsTab]  = useState<SubsTab>("mine");
   const [fundOpen, setFundOpen] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(() => {
     try { return localStorage.getItem(SIDEBAR_KEY) === "1"; } catch { return false; }
@@ -176,15 +175,7 @@ export function WebDashboard({ user, balance, depositAddresses, withdraw, onBala
         {page === "recurring" && <Card className="p-6 max-w-4xl">{slots.recurring}</Card>}
 
         {page === "subs" && (
-          <div className="flex flex-col gap-4">
-            <div className="max-w-xl">
-              <Segmented<SubsTab> value={subsTab} onChange={setSubsTab}
-                options={[{ value: "mine", label: "My subscriptions" }, { value: "plans", label: "Create a plan" }, { value: "pay", label: "Pay a subscription" }]} />
-            </div>
-            {subsTab === "plans"
-              ? slots.subsCreate
-              : <Card className="p-6">{subsTab === "mine" ? slots.subsMine : slots.subsPay}</Card>}
-          </div>
+          <SubscriptionsSection user={user} available={available} onScan={qr.openScan} onAddMoney={() => setFundOpen(true)} />
         )}
 
         {page === "settings" && (
