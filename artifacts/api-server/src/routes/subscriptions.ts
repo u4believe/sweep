@@ -19,7 +19,8 @@
  *   POST /api/subscriptions/activate           — enter code on hosted page
  *
  * Subscriber dashboard:
- *   GET  /api/subscriptions/my                 — list my subscriptions
+ *   GET  /api/subscriptions/my                 — list my subscriptions (with billing history)
+ *   POST /api/subscriptions/:id/retry          — pay a past-due subscription now
  *   DELETE /api/subscriptions/:id              — cancel a subscription
  */
 
@@ -34,8 +35,9 @@ import {
   subscriptionConfirmationCodesTable,
   subscriptionsTable,
   subscriptionPassportsTable,
+  subscriptionPaymentsTable,
 } from "@workspace/db";
-import { eq, and, gt, isNull, ne } from "drizzle-orm";
+import { eq, and, gt, isNull, ne, desc, inArray } from "drizzle-orm";
 import { requireAuth, requireEmailVerified } from "../lib/auth.js";
 import {
   sendSubscriptionOtpEmail,
@@ -45,6 +47,8 @@ import {
   sendPassportCreatedEmail,
   sendSubscriptionActivatedEmail,
   sendSubscriptionCancelledEmail,
+  sendSubscriptionBillingSuccessEmail,
+  sendCreatorRenewalEmail,
 } from "../lib/email.js";
 import { enqueueWebhook } from "../lib/webhookDelivery.js";
 import {
@@ -326,7 +330,7 @@ router.get("/plans", requireAuth, async (req, res) => {
 
         // Subscriber stats — exclude cancelled/failed
         const subs = await db
-          .select({ amount: subscriptionsTable.amount, status: subscriptionsTable.status })
+          .select({ amount: subscriptionsTable.amount, status: subscriptionsTable.status, planInterval: subscriptionsTable.planInterval })
           .from(subscriptionsTable)
           .where(
             and(
@@ -337,11 +341,18 @@ router.get("/plans", requireAuth, async (req, res) => {
           );
 
         const activeSubscriberCount = subs.length;
-        const totalRevenue = subs
-          .filter((s) => s.status === "active")
-          .reduce((sum, s) => sum + parseFloat(s.amount), 0);
+        const paying = subs.filter((s) => s.status === "active");
+        const totalRevenue = paying.reduce((sum, s) => sum + parseFloat(s.amount), 0);
+        // Normalised to a month so weekly and yearly subscribers add up sensibly
+        const monthlyRevenue = paying.reduce((sum, s) => {
+          const a = parseFloat(s.amount);
+          return sum + (s.planInterval === "weekly" ? (a * 52) / 12 : s.planInterval === "yearly" ? a / 12 : a);
+        }, 0);
 
-        return { ...plan, pakHash: undefined, intervals, tiers, activeSubscriberCount, totalRevenue: totalRevenue.toFixed(2) };
+        return {
+          ...plan, pakHash: undefined, intervals, tiers, activeSubscriberCount,
+          totalRevenue: totalRevenue.toFixed(2), monthlyRevenue: monthlyRevenue.toFixed(2),
+        };
       }),
     );
 
@@ -849,22 +860,123 @@ router.get("/my", requireAuth, async (req, res) => {
     const subs = await db
       .select()
       .from(subscriptionsTable)
-      .where(eq(subscriptionsTable.subscriberUserId, user.userId));
+      .where(eq(subscriptionsTable.subscriberUserId, user.userId))
+      .orderBy(desc(subscriptionsTable.startedAt));
 
-    // Attach plan titles
+    const payments = subs.length
+      ? await db
+          .select()
+          .from(subscriptionPaymentsTable)
+          .where(inArray(subscriptionPaymentsTable.subscriptionId, subs.map((x) => x.id)))
+          .orderBy(desc(subscriptionPaymentsTable.attemptedAt))
+      : [];
+
+    // Attach plan, creator and tier details plus billing history
     const result = await Promise.all(
       subs.map(async (sub) => {
         const [plan] = await db
-          .select({ planTitle: subscriptionPlansTable.planTitle, paymentEmail: subscriptionPlansTable.paymentEmail })
+          .select({ planTitle: subscriptionPlansTable.planTitle, paymentEmail: subscriptionPlansTable.paymentEmail, creatorUserId: subscriptionPlansTable.creatorUserId })
           .from(subscriptionPlansTable)
           .where(eq(subscriptionPlansTable.id, sub.planId))
           .limit(1);
-        return { ...sub, planTitle: plan?.planTitle ?? "Unknown", paymentEmail: plan?.paymentEmail ?? "" };
+        const [creator] = plan
+          ? await db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, plan.creatorUserId)).limit(1)
+          : [];
+        const [interval] = await db
+          .select({ tierId: subscriptionIntervalsTable.tierId })
+          .from(subscriptionIntervalsTable)
+          .where(eq(subscriptionIntervalsTable.id, sub.intervalId))
+          .limit(1);
+        const [tier] = interval?.tierId
+          ? await db
+              .select({ tierName: subscriptionPlanTiersTable.tierName, features: subscriptionPlanTiersTable.features })
+              .from(subscriptionPlanTiersTable)
+              .where(eq(subscriptionPlanTiersTable.id, interval.tierId))
+              .limit(1)
+          : [];
+        const history = payments
+          .filter((p) => p.subscriptionId === sub.id)
+          .map((p) => ({ id: p.id, amount: p.amount, status: p.status, attemptedAt: p.attemptedAt }));
+        const totalPaid = history.filter((p) => p.status === "succeeded").reduce((sum, p) => sum + parseFloat(p.amount), 0);
+        return {
+          ...sub,
+          planTitle:    plan?.planTitle ?? "Unknown",
+          paymentEmail: plan?.paymentEmail ?? "",
+          creatorName:  creator?.name ?? plan?.planTitle ?? "Unknown",
+          tierName:     tier?.tierName ?? null,
+          features:     tier?.features ?? [],
+          payments:     history,
+          totalPaid:    totalPaid.toFixed(2),
+        };
       }),
     );
 
     res.json({ subscriptions: result });
   } catch (err: any) {
+    res.status(500).json({ error: "Internal server error", message: err.message });
+  }
+});
+
+// ── POST /api/subscriptions/:id/retry ────────────────────────────────────────
+// Pay a past-due subscription now instead of waiting for the daily retry.
+
+router.post("/:id/retry", requireAuth, requireEmailVerified, async (req, res) => {
+  try {
+    const user = (req as any).user as { userId: number };
+    const id   = parseInt(String(req.params["id"]), 10);
+    if (isNaN(id)) {
+      res.status(400).json({ error: "Validation", message: "Invalid subscription ID" });
+      return;
+    }
+
+    const [sub] = await db
+      .select()
+      .from(subscriptionsTable)
+      .where(and(eq(subscriptionsTable.id, id), eq(subscriptionsTable.subscriberUserId, user.userId)))
+      .limit(1);
+    if (!sub) {
+      res.status(404).json({ error: "Not found", message: "Subscription not found" });
+      return;
+    }
+    if (sub.status !== "past_due") {
+      res.status(400).json({ error: "Not past due", message: "Only a past-due subscription can be retried" });
+      return;
+    }
+
+    const [plan]       = await db.select().from(subscriptionPlansTable).where(eq(subscriptionPlansTable.id, sub.planId)).limit(1);
+    const [subscriber] = await db.select().from(usersTable).where(eq(usersTable.id, user.userId)).limit(1);
+    if (!plan || !subscriber) {
+      res.status(404).json({ error: "Not found", message: "Plan not found" });
+      return;
+    }
+
+    const now           = new Date();
+    const nextBillingAt = advanceBillingDate(now, sub.planInterval as Interval);
+    try {
+      await db.transaction(async (tx) => {
+        // Guard on status so a concurrent worker retry can't charge twice
+        const claimed = await tx.update(subscriptionsTable)
+          .set({ status: "active", nextBillingAt, retryCount: 0, lastRetryAt: null, updatedAt: now })
+          .where(and(eq(subscriptionsTable.id, sub.id), eq(subscriptionsTable.status, "past_due")))
+          .returning({ id: subscriptionsTable.id });
+        if (!claimed.length) throw new Error("Subscription is no longer past due");
+
+        await chargeSubscription(tx, subscriber, plan, sub.amount, now);
+        await tx.insert(subscriptionPaymentsTable).values({
+          subscriptionId: sub.id, merchantId: sub.merchantId, amount: sub.amount, currency: "USD", status: "succeeded",
+        });
+      });
+    } catch (err) {
+      if (sendActivationError(res, err)) return;
+      throw err;
+    }
+
+    try { await sendSubscriptionBillingSuccessEmail(subscriber.email, plan.planTitle, sub.amount, sub.planInterval, nextBillingAt); } catch {}
+    try { await sendCreatorRenewalEmail(plan.paymentEmail, subscriber.email, plan.planTitle, sub.amount, sub.planInterval); } catch {}
+    logger.info({ subscriptionId: sub.id }, "[subscriptions] Past-due subscription paid by subscriber");
+    res.json({ message: "Payment successful", subscription: { id: sub.id, status: "active", nextBillingAt } });
+  } catch (err: any) {
+    logger.error({ err: err.message }, "[subscriptions] Retry error");
     res.status(500).json({ error: "Internal server error", message: err.message });
   }
 });
@@ -1011,7 +1123,7 @@ async function startSubscription(opts: {
 
     if (!trialing) await chargeSubscription(tx, subscriber, plan, amount, now);
 
-    return tx.insert(subscriptionsTable).values({
+    const rows = await tx.insert(subscriptionsTable).values({
       subscriberUserId: subscriber.id,
       planId:           plan.id,
       intervalId:       interval.id,
@@ -1025,6 +1137,14 @@ async function startSubscription(opts: {
       externalRef,
       activationMethod,
     }).returning();
+
+    // First charge goes in the billing history alongside the worker's renewals
+    if (!trialing) {
+      await tx.insert(subscriptionPaymentsTable).values({
+        subscriptionId: rows[0]!.id, merchantId, amount: amount.toFixed(6), currency: "USD", status: "succeeded",
+      });
+    }
+    return rows;
   });
 
   // Fire webhook for developer-class plans
