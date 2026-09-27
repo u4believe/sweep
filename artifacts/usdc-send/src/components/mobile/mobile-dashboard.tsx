@@ -114,7 +114,7 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
             </SubScreen>
           )}
 
-          {screen === "settings" && <SubScreen title="Settings" onBack={() => setScreen("me")}>{slots.settings}</SubScreen>}
+          {screen === "settings" && <SubScreen title="Settings" onBack={() => setScreen("me")} bare>{slots.settings}</SubScreen>}
           {screen === "support"  && <SubScreen title="Support"  onBack={() => setScreen("me")} bare>{slots.support}</SubScreen>}
         </motion.div>
       </AnimatePresence>

@@ -181,22 +181,7 @@ export function WebDashboard({ user, balance, depositAddresses, withdraw, onBala
           <SubscriptionsSection user={user} available={available} onScan={qr.openScan} onAddMoney={() => setFundOpen(true)} onOpenSettings={() => setPage("settings")} />
         )}
 
-        {page === "settings" && (
-          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,1fr)] gap-5 items-start">
-            <Section title="SECURITY"><Card className="p-6">{slots.settings}</Card></Section>
-            <Section title="ACCOUNT">
-              <Card className="rounded-[20px] overflow-hidden">
-                <AccountRow k="Name" v={user.name} />
-                <AccountRow k="Email · payment ID" v={user.email} copy />
-                {user.circleWalletAddress && <AccountRow k="Circle wallet" v={user.circleWalletAddress} copy mono />}
-                <div className="flex items-center gap-3 px-5 py-[18px] border-t border-[#f0f2f6]">
-                  <span className="font-bold text-[15px] flex-1">Session</span>
-                  <button type="button" onClick={onLogout} className="text-[13px] font-bold text-[#b42318] hover:underline">Log out</button>
-                </div>
-              </Card>
-            </Section>
-          </div>
-        )}
+        {page === "settings" && slots.settings}
 
         {page === "support" && <div className="max-w-3xl">{slots.support}</div>}
       </main>
@@ -393,25 +378,6 @@ function HistoryTable({ txs, state, hasMore, loadingMore, onLoadMore }: {
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-2 min-w-0">
-      <span className="text-xs font-bold tracking-[0.06em] text-(--sw-muted) px-1">{title}</span>
-      {children}
-    </div>
-  );
-}
-
-function AccountRow({ k, v, copy, mono }: { k: string; v: string; copy?: boolean; mono?: boolean }) {
-  return (
-    <div className="flex items-center gap-3 px-5 py-[18px] border-t border-[#f0f2f6] first:border-t-0">
-      <span className="font-bold text-[15px] shrink-0">{k}</span>
-      <span className={cn("flex-1 min-w-0 truncate text-right text-sm text-(--sw-muted)", mono && "font-mono text-xs")}>{v}</span>
-      {copy && <CopyIcon text={v} label={`Copy ${k}`} />}
-    </div>
-  );
-}
 
 // ── Add money dialog ──────────────────────────────────────────────────────────
 
