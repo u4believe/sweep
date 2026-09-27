@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
-  AlertCircle, Loader2, Copy, Check, Mail, RefreshCw, LifeBuoy,
+  AlertCircle, Loader2, Copy, Check, Mail, LifeBuoy,
 } from "lucide-react";
 import {
   useGetCurrentUser,
@@ -12,7 +12,6 @@ import {
 } from "@workspace/api-client-react";
 import { useQuery } from "@tanstack/react-query";
 import { API_BASE } from "@/lib/api";
-import { AppLayout } from "@/components/layout";
 import { MobileDashboard } from "@/components/mobile/mobile-dashboard";
 import { WebDashboard } from "@/components/desktop/web-dashboard";
 import type { DashboardShellProps } from "@/components/sweep/types";
@@ -59,48 +58,18 @@ function InlineError({ message }: { message: string }) {
 // ─── Email Verification Pending overlay ───────────────────────────────────────
 
 function EmailVerificationPending({ email }: { email: string }) {
-  const [resent, setResent] = useState(false);
-  const [sending, setSending] = useState(false);
-  const resend = async () => {
-    setSending(true);
-    try {
-      await fetch(`${API_BASE}/api/auth/resend-verification`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-      setResent(true);
-    } finally {
-      setSending(false);
-    }
-  };
-
+  // Sign-up now verifies with an emailed code; logging in sends one.
+  const relogin = () => { localStorage.removeItem("token"); window.location.href = `${BASE}/login`; };
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-blue-50/60 to-indigo-50/80 p-4">
-      <div className="w-full max-w-md bg-white rounded-3xl shadow-xl border border-border p-10 text-center space-y-6">
-        <div className="flex justify-center">
-          <div className="w-16 h-16 rounded-2xl bg-violet-100 flex items-center justify-center">
-            <Mail className="w-8 h-8 text-violet-600" />
-          </div>
-        </div>
-        <div>
-          <h2 className="text-2xl font-bold text-foreground mb-2">Verify your email</h2>
-          <p className="text-muted-foreground text-sm leading-relaxed">
-            We sent a verification link to <strong className="text-foreground">{email}</strong>.
-            Please click the link to activate your account.
-          </p>
-        </div>
-        <div className="space-y-3">
-          {resent && <p className="text-sm text-green-600 font-medium">A new verification link has been sent.</p>}
-          <button onClick={resend} disabled={sending}
-            className="w-full py-3 rounded-xl bg-primary text-white font-bold hover:bg-primary/90 transition-colors disabled:opacity-60 flex items-center justify-center gap-2">
-            {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <><RefreshCw className="w-4 h-4" /> Resend verification email</>}
-          </button>
-          <button onClick={() => { localStorage.removeItem("token"); window.location.href = "/login"; }}
-            className="w-full py-3 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-            Sign out
-          </button>
-        </div>
+    <div className="sweep-ui min-h-[100dvh] grid place-items-center px-5">
+      <div className="w-full max-w-[420px] bg-white border border-(--sw-line) rounded-[24px] p-7 flex flex-col gap-4 text-center">
+        <img src="/sweep-mark-blue.svg" alt="" className="w-7 mx-auto" />
+        <h1 className="font-extrabold text-2xl tracking-[-0.03em]">Verify your email</h1>
+        <p className="text-[15px] text-(--sw-muted) leading-relaxed">
+          <strong className="text-(--sw-ink)">{email}</strong> isn't verified yet. Log in again and we'll email you a 6-digit code to finish.
+        </p>
+        <button type="button" onClick={relogin}
+          className="h-[52px] rounded-2xl bg-(--sw-blue) text-white text-[15px] font-bold hover:bg-(--sw-blue-hover)">Log in to verify</button>
       </div>
     </div>
   );
@@ -133,6 +102,18 @@ function AccountSetupWizard({ user, onComplete }: { user: any; onComplete: () =>
           </div>
         </div>
         <SettingsSection security={user} onUpdated={onComplete} securityOnly />
+      </div>
+    </div>
+  );
+}
+
+/** Shown while the account loads — same background as the app, so no old UI flashes. */
+function AppSplash() {
+  return (
+    <div className="sweep-ui min-h-[100dvh] grid place-items-center" role="status" aria-label="Loading Sweep">
+      <div className="flex flex-col items-center gap-4">
+        <img src="/sweep-mark-blue.svg" alt="" className="w-9 animate-pulse" />
+        <Loader2 className="w-5 h-5 text-(--sw-blue) animate-spin" />
       </div>
     </div>
   );
@@ -184,20 +165,7 @@ export default function Dashboard() {
     if (!isUserLoading && isUserError) setLocation("/login");
   }, [isUserLoading, isUserError, setLocation]);
 
-  if (isUserLoading || !user) {
-    return (
-      <AppLayout>
-        <div className="flex items-center justify-center h-[calc(100vh-8rem)]">
-          <motion.div
-            animate={{ rotate: 360 }}
-            transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
-          >
-            <Loader2 className="w-10 h-10 text-primary" />
-          </motion.div>
-        </div>
-      </AppLayout>
-    );
-  }
+  if (isUserLoading || !user) return <AppSplash />;
 
   if (user && !(user as any).emailVerified) {
     return <EmailVerificationPending email={user.email} />;
