@@ -12,7 +12,7 @@ import {
   useWithdrawCrypto,
 } from "@workspace/api-client-react";
 import { useQuery } from "@tanstack/react-query";
-import { cn } from "@/lib/utils";
+import { cn, secretInputProps, secretTextProps } from "@/lib/utils";
 import { API_BASE } from "@/lib/api";
 import { AppLayout } from "@/components/layout";
 import { MobileDashboard } from "@/components/mobile/mobile-dashboard";
@@ -337,9 +337,10 @@ function PasswordInput({ label, placeholder, value, onChange, disabled }: {
       <div className="relative">
         <input
           type={show ? "text" : "password"}
+          {...secretInputProps}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder ?? "••••••••"}
+          placeholder={placeholder ?? "Enter password"}
           disabled={disabled}
           className="w-full px-4 py-2.5 pr-10 rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all outline-none text-sm disabled:opacity-60"
         />
@@ -991,7 +992,7 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
               <KeyRound className="w-4 h-4 inline mr-1.5 opacity-60" />
               Personal Authorization Key (PAK)
             </label>
-            <input value={pak} onChange={(e) => setPak(e.target.value)}
+            <input {...secretTextProps} value={pak} onChange={(e) => setPak(e.target.value)}
               placeholder="Your 40-character PAK"
               className="w-full px-4 py-2.5 rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none text-sm font-mono" />
           </div>
@@ -1039,7 +1040,7 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
               <KeyRound className="w-4 h-4 inline mr-1.5 opacity-60" />
               Personal Authorization Key (PAK)
             </label>
-            <input value={pak} onChange={(e) => setPak(e.target.value)}
+            <input {...secretTextProps} value={pak} onChange={(e) => setPak(e.target.value)}
               placeholder="Your 40-character PAK"
               className="w-full px-4 py-2.5 rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none text-sm font-mono" />
           </div>
@@ -1186,7 +1187,7 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
               <label className="block text-sm font-medium text-foreground mb-1.5">
                 <KeyRound className="w-4 h-4 inline mr-1.5 opacity-60" /> Personal Authorization Key (PAK)
               </label>
-              <input value={pak} onChange={(e) => setPak(e.target.value)} placeholder="Your 40-character PAK"
+              <input {...secretTextProps} value={pak} onChange={(e) => setPak(e.target.value)} placeholder="Your 40-character PAK"
                 className="w-full px-4 py-2.5 rounded-xl bg-white border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none text-sm font-mono" />
             </div>
           ) : (
@@ -1231,7 +1232,7 @@ function SecurityTab({ user, onSecurityUpdated }: { user: SecurityUser; onSecuri
               <KeyRound className="w-4 h-4 inline mr-1.5 opacity-60" />
               Personal Authorization Key (PAK)
             </label>
-            <input value={pak} onChange={(e) => setPak(e.target.value)}
+            <input {...secretTextProps} value={pak} onChange={(e) => setPak(e.target.value)}
               placeholder="Your 40-character PAK"
               className="w-full px-4 py-2.5 rounded-xl bg-white border-2 border-red-300 focus:border-red-500 focus:ring-4 focus:ring-red-100 outline-none text-sm font-mono" />
             <p className="text-xs text-muted-foreground mt-1.5">

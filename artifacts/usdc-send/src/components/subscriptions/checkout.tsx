@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Check, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, secretInputProps } from "@/lib/utils";
 import { API_BASE } from "@/lib/api";
 import { merchantQrUrl } from "@/lib/pay-qr";
 import { BrandedQr } from "@/components/sweep/qr";
@@ -301,7 +301,7 @@ export function Checkout({ merchantId, plan, variant, onPayAnother, onDone }: {
             <div className="flex flex-col gap-2">
               <label htmlFor="co-txpwd" className="text-[13px] font-bold text-(--sw-label)">Transaction password</label>
               <input id="co-txpwd" type="password" value={txPwd} onChange={(e) => { setTxPwd(e.target.value); setError(null); }}
-                placeholder="Authorize this subscription" autoComplete="off"
+                placeholder="Authorize this subscription" {...secretInputProps}
                 className="h-[52px] rounded-[14px] border border-(--sw-field-line) bg-white px-4 text-[15px] font-medium outline-none placeholder:text-[#9aa4b5] focus:border-(--sw-blue) focus:shadow-[0_0_0_4px_rgb(17_40_245/.1)] transition" />
             </div>
           ) : (

@@ -5,7 +5,7 @@ import {
   Loader2, CheckCircle2, AlertCircle, CreditCard,
   ArrowRight, LogIn, Wallet, Star, ShieldCheck, Eye, EyeOff,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, secretInputProps } from "@/lib/utils";
 
 import { API_BASE } from "@/lib/api";
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -553,6 +553,7 @@ export default function PayPage() {
                         <div className="relative">
                           <input
                             type={showTxPwd ? "text" : "password"}
+                            {...secretInputProps}
                             value={txPassword}
                             onChange={(e) => setTxPassword(e.target.value)}
                             placeholder="Transaction password (leave blank if not set)"

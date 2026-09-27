@@ -1,5 +1,5 @@
 import { AlertCircle } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, secretInputProps } from "@/lib/utils";
 import { WITHDRAWAL_CHAINS } from "@/lib/wallet";
 import { Card, Chip, Field, SummaryRows, fmtUsd, shortAddr } from "./ui";
 import type { SendFlow } from "./use-send-flow";
@@ -131,7 +131,7 @@ export function TxPasswordField({ flow, id }: { flow: SendFlow; id: string }) {
     <div className="space-y-2.5">
       <label htmlFor={id} className="block text-[13px] font-bold text-(--sw-label)">Transaction password</label>
       <Field id={id} type="password" value={flow.txPwd} onChange={(e) => flow.setTxPwd(e.target.value)}
-        placeholder="Enter to authorize" autoComplete="off" disabled={flow.busy} />
+        placeholder="Enter to authorize" {...secretInputProps} disabled={flow.busy} />
     </div>
   );
 }

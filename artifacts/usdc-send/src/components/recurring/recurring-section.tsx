@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Repeat } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, secretInputProps } from "@/lib/utils";
 import { API_BASE } from "@/lib/api";
 import { authHeaders } from "@/lib/wallet";
 
@@ -171,7 +171,7 @@ export function RecurringSection({ userEmail, available, hasTransactionPassword 
           <div className="flex flex-col gap-1.5">
             <label htmlFor="rec-txpwd" className={label}>Transaction password</label>
             <input id="rec-txpwd" type="password" value={txPwd} onChange={(e) => { setTxPwd(e.target.value); setError(null); }}
-              placeholder="Authorize this schedule" autoComplete="off" className={field} />
+              placeholder="Authorize this schedule" {...secretInputProps} className={field} />
           </div>
         )}
 
