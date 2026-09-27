@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 import { API_BASE } from "@/lib/api";
 import { finishSignIn, TWO_FACTOR_CHALLENGE_KEY, codeAlreadySentMessage, SPAM_HINT } from "@/lib/auth-session";
+import { BIOMETRIC_NAME, biometricError, biometricLogin } from "@/lib/biometric";
 import { GoogleSignInButton, useAuthConfig, type GoogleAuthResult } from "@/components/auth/google-sign-in";
 import { TotpInput } from "@/components/auth/totp-input";
 import {
@@ -16,7 +17,7 @@ import {
 const label = "text-[13px] font-bold text-(--sw-label)";
 const nightCodeField = "h-[54px] rounded-[14px] border border-(--sw-field-line) bg-white focus:border-(--sw-blue) focus:ring-0";
 
-type Step = "credentials" | "otp" | "unverified" | "google-2fa";
+type Step = "credentials" | "biometric" | "otp" | "unverified" | "google-2fa";
 
 const readStoredChallenge = () => {
   try { return sessionStorage.getItem(TWO_FACTOR_CHALLENGE_KEY); } catch { return null; }
@@ -36,6 +37,8 @@ export default function Login() {
   const [isPending, setIsPending]     = useState(false);
   // Set when no new code was emailed because one went out moments ago
   const [codeNotice, setCodeNotice]   = useState("");
+  // Password was right and this account has Face ID / fingerprint: finish with it
+  const [bioTicket, setBioTicket]     = useState<{ ticket: string; options: any } | null>(null);
   const [error, setError]             = useState("");
 
   const searchParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
@@ -118,6 +121,14 @@ export default function Login() {
         return;
       }
       if (!res.ok) throw new Error(json.message ?? "Login failed");
+      if (json.requiresBiometric) {
+        setUserId(json.userId);
+        setRequiresTotp(!!json.requiresTotp);
+        setSentEmail(email.toLowerCase().trim());
+        setBioTicket({ ticket: json.ticket, options: json.options });
+        setStep("biometric");
+        return;
+      }
       setUserId(json.userId);
       setRequiresTotp(!!json.requiresTotp);
       setTotp("");
@@ -157,6 +168,43 @@ export default function Login() {
     const next = [...text.split(""), ...Array(6).fill("")].slice(0, 6);
     setOtp(next);
     otpRefs.current[Math.min(text.length, 5)]?.focus();
+  };
+
+  // ── Face ID / fingerprint ─────────────────────────────────────────────────
+  const fallbackToCode = async (reason: string | null) => {
+    if (!bioTicket) return;
+    setIsPending(true);
+    try {
+      const res  = await fetch(`${API_BASE}/api/auth/login/code`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket: bioTicket.ticket }),
+      });
+      const json = await res.json().catch(() => ({}));
+      setBioTicket(null);
+      if (!res.ok) { setStep("credentials"); setError(json.message ?? "Please log in again."); return; }
+      setUserId(json.userId);
+      setRequiresTotp(!!json.requiresTotp);
+      setTotp("");
+      setOtp(["", "", "", "", "", ""]);
+      setCodeNotice(json.codeAlreadySent ? codeAlreadySentMessage(json.retryAfterSec) : "");
+      setError(reason ? `${reason} We've emailed you a code instead.` : "");
+      setStep("otp");
+      setTimeout(() => otpRefs.current[0]?.focus(), 50);
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  const handleBiometric = async () => {
+    if (!bioTicket) return;
+    setError(""); setIsPending(true);
+    try {
+      const { token } = await biometricLogin(bioTicket.ticket, bioTicket.options);
+      finishSignIn(token, queryClient);
+    } catch (err: any) {
+      setIsPending(false);
+      if (err?.code === "TICKET_EXPIRED") { setBioTicket(null); setStep("credentials"); setError(err.message); return; }
+      await fallbackToCode(err?.code === "BIOMETRIC_FAILED" ? `${BIOMETRIC_NAME} wasn't recognised.` : biometricError(err));
+    }
   };
 
   // The unverified step uses the sign-up code; everything else is a login code
@@ -240,7 +288,7 @@ export default function Login() {
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center justify-between">
                     <label htmlFor="login-password" className={label}>Password</label>
-                    <Link href="/forgot-password" className="text-[13px] font-bold text-(--sw-blue) hover:text-(--sw-blue-hover)">Forgot password?</Link>
+                    <Link href={email.trim() ? `/forgot-password?email=${encodeURIComponent(email.trim())}` : "/forgot-password"} className="text-[13px] font-bold text-(--sw-blue) hover:text-(--sw-blue-hover)">Forgot password?</Link>
                   </div>
                   <div className="relative">
                     <input id="login-password" type={showPassword ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)}
@@ -267,6 +315,19 @@ export default function Login() {
                 New to Sweep? <Link href="/register" className="font-bold text-(--sw-blue) hover:text-(--sw-blue-hover)">Open an account</Link>
               </p>
             </>
+          )}
+
+          {step === "biometric" && (
+            <div className="flex flex-col gap-[18px]">
+              <NightTitle title="Confirm it's you" sub={<>Use {BIOMETRIC_NAME} to finish signing in to <strong className="text-(--sw-ink)">{sentEmail}</strong>.</>} />
+              {errorBox}
+              <button type="button" onClick={handleBiometric} disabled={isPending} className={authPrimary} autoFocus>
+                {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : `Continue with ${BIOMETRIC_NAME}`}
+              </button>
+              <button type="button" onClick={() => fallbackToCode(null)} disabled={isPending}
+                className="self-center text-sm font-bold text-(--sw-blue) disabled:opacity-50">Use email code instead</button>
+              {back}
+            </div>
           )}
 
           {(step === "otp" || step === "unverified") && (

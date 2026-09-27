@@ -127,9 +127,25 @@ export function UnregisteredNote({ flow }: { flow: SendFlow }) {
 }
 
 export function TxPasswordField({ flow, id }: { flow: SendFlow; id: string }) {
+  if (flow.bio.active) {
+    return (
+      <div className="flex items-center justify-between gap-3">
+        <span className="min-w-0">
+          <span className="block text-[13px] font-bold text-(--sw-label)">Approve with {flow.biometricName}</span>
+          <span className="block text-xs text-(--sw-muted)">You'll be asked when you tap Sweep.</span>
+        </span>
+        <button type="button" onClick={() => flow.bio.setUsePassword(true)} className="text-[13px] font-bold text-(--sw-blue) whitespace-nowrap">Use password instead</button>
+      </div>
+    );
+  }
   return (
     <div className="space-y-2.5">
-      <label htmlFor={id} className="block text-[13px] font-bold text-(--sw-label)">Transaction password</label>
+      <div className="flex items-center justify-between gap-3">
+        <label htmlFor={id} className="block text-[13px] font-bold text-(--sw-label)">Transaction password</label>
+        {flow.bio.available && (
+          <button type="button" onClick={() => flow.bio.setUsePassword(false)} className="text-[13px] font-bold text-(--sw-blue) whitespace-nowrap">Use {flow.biometricName}</button>
+        )}
+      </div>
       <Field id={id} type="password" value={flow.txPwd} onChange={(e) => flow.setTxPwd(e.target.value)}
         placeholder="Enter to authorize" {...secretInputProps} disabled={flow.busy} />
     </div>

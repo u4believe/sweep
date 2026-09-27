@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Repeat } from "lucide-react";
-import { cn, secretInputProps } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { biometricError, getApproval, useBiometricApproval } from "@/lib/biometric";
+import { ApprovalField } from "@/components/sweep/approval-field";
 import { API_BASE } from "@/lib/api";
 import { authHeaders } from "@/lib/wallet";
 
@@ -65,6 +67,7 @@ export function RecurringSection({ userEmail, available, hasTransactionPassword 
   const [endOn,    setEndOn]    = useState(false);
   const [endDate,  setEndDate]  = useState("");
   const [txPwd,    setTxPwd]    = useState("");
+  const bio = useBiometricApproval();
   const [busy,     setBusy]     = useState(false);
   const [error,    setError]    = useState<string | null>(null);
   const [notice,   setNotice]   = useState<string | null>(null);
@@ -77,19 +80,24 @@ export function RecurringSection({ userEmail, available, hasTransactionPassword 
     !a                                   ? "Enter an amount" :
     a > available                        ? `More than your available ${usd(available)}` :
     endOn && !endDate                    ? "Pick an end date" :
-    hasTransactionPassword && !txPwd     ? "Enter your transaction password" : null;
+    hasTransactionPassword && !bio.active && !txPwd ? "Enter your transaction password" : null;
   const touched = !!(email || amount);
 
   const create = async () => {
     if (problem || busy) return;
     setBusy(true); setError(null); setNotice(null);
+    let approval: Record<string, unknown> = hasTransactionPassword ? { transactionPassword: txPwd } : {};
+    if (hasTransactionPassword && bio.active) {
+      try { approval = await getApproval(); }
+      catch (e) { bio.setUsePassword(true); setError(`${biometricError(e)} Enter your transaction password instead.`); setBusy(false); return; }
+    }
     try {
       const body: Record<string, unknown> = { recipientEmail: to, amount: a.toFixed(2), interval };
       if (interval !== "hourly") body.startHour = hour;
       if (interval === "weekly") body.startDayOfWeek = weekday;
       if (interval === "monthly") body.startDayOfMonth = monthDay;
       if (endOn && endDate) body.endDate = new Date(`${endDate}T23:59:59`).toISOString();
-      if (hasTransactionPassword) body.transactionPassword = txPwd;
+      Object.assign(body, approval);
       const res  = await fetch(`${API_BASE}/api/recurring`, { method: "POST", headers: authHeaders(true), body: JSON.stringify(body) });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.message ?? "Could not create the schedule");
@@ -168,11 +176,8 @@ export function RecurringSection({ userEmail, available, hasTransactionPassword 
         )}
 
         {hasTransactionPassword && (
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="rec-txpwd" className={label}>Transaction password</label>
-            <input id="rec-txpwd" type="password" value={txPwd} onChange={(e) => { setTxPwd(e.target.value); setError(null); }}
-              placeholder="Authorize this schedule" {...secretInputProps} className={field} />
-          </div>
+          <ApprovalField bio={bio} id="rec-txpwd" value={txPwd} onChange={(v) => { setTxPwd(v); setError(null); }}
+            placeholder="Authorize this schedule" labelClass={label} fieldClass={field} />
         )}
 
         {error && <p role="alert" className="rounded-xl bg-[#fef3f2] text-[#b42318] px-3.5 py-2.5 text-sm font-medium">{error}</p>}

@@ -8,6 +8,7 @@ import { debitBalance, creditBalance, InsufficientBalanceError } from "../lib/le
 import {
   sendEscrowClaimedEmail,
 } from "../lib/email.js";
+import { checkTransactionApproval } from "../lib/txAuth.js";
 
 const router: IRouter = Router();
 
@@ -217,17 +218,9 @@ router.post("/send/platform", requireAuth, requireEmailVerified, async (req, res
     const [sender] = await db.select().from(usersTable).where(eq(usersTable.id, user.userId)).limit(1);
     const currentBalance = parseFloat(sender?.claimedBalance ?? "0");
 
-    if (sender?.transactionPasswordHash) {
-      const txnPwd = typeof body.transactionPassword === "string" ? body.transactionPassword : "";
-      if (!txnPwd) {
-        res.status(403).json({ error: "Transaction password required", message: "Please enter your transaction password to authorize this transfer" });
-        return;
-      }
-      const txnPwdValid = await bcrypt.compare(txnPwd, sender.transactionPasswordHash);
-      if (!txnPwdValid) {
-        res.status(403).json({ error: "Invalid transaction password", message: "The transaction password you entered is incorrect" });
-        return;
-      }
+    if (sender) {
+      const denied = await checkTransactionApproval(sender, req.body, "this transfer");
+      if (denied) { res.status(403).json(denied); return; }
     }
 
     if (currentBalance < numAmount) {

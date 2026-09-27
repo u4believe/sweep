@@ -4,6 +4,7 @@ import { eq, and } from "drizzle-orm";
 import bcrypt from "bcrypt";
 import { requireAuth } from "../lib/auth.js";
 import { CreateRecurringBody, CancelRecurringBody } from "@workspace/api-zod";
+import { checkTransactionApproval } from "../lib/txAuth.js";
 
 const router: IRouter = Router();
 
@@ -55,17 +56,9 @@ router.post("/", requireAuth, async (req, res) => {
 
     // Enforce transaction password if the user has one set
     const [sender] = await db.select().from(usersTable).where(eq(usersTable.id, user.userId)).limit(1);
-    if (sender?.transactionPasswordHash) {
-      const txnPwd = typeof req.body.transactionPassword === "string" ? req.body.transactionPassword : "";
-      if (!txnPwd) {
-        res.status(403).json({ error: "Transaction password required", message: "Please enter your transaction password to authorize this recurring transfer" });
-        return;
-      }
-      const txnPwdValid = await bcrypt.compare(txnPwd, sender.transactionPasswordHash);
-      if (!txnPwdValid) {
-        res.status(403).json({ error: "Invalid transaction password", message: "The transaction password you entered is incorrect" });
-        return;
-      }
+    if (sender) {
+      const denied = await checkTransactionApproval(sender, req.body, "this recurring transfer");
+      if (denied) { res.status(403).json(denied); return; }
     }
 
     const now = new Date();

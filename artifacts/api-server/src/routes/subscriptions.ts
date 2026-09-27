@@ -62,6 +62,7 @@ import {
 import { logger } from "../lib/logger.js";
 import { consumeOtp, findOtp, issueOtp, otpErrorResponse, verifyOtp } from "../lib/otp.js";
 import { checkUserTotp, hasTotp } from "../lib/two-factor.js";
+import { checkTransactionApproval } from "../lib/txAuth.js";
 
 const router: IRouter = Router();
 
@@ -509,16 +510,9 @@ router.post("/confirmation-code/request-otp", requireAuth, requireEmailVerified,
 
     // Verify transaction password if user has one
     const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.userId)).limit(1);
-    if (dbUser?.transactionPasswordHash) {
-      if (!transactionPassword) {
-        res.status(403).json({ error: "Forbidden", message: "Transaction password required" });
-        return;
-      }
-      const valid = await bcrypt.compare(transactionPassword, dbUser.transactionPasswordHash);
-      if (!valid) {
-        res.status(403).json({ error: "Forbidden", message: "Invalid transaction password" });
-        return;
-      }
+    if (dbUser) {
+      const denied = await checkTransactionApproval(dbUser, req.body, "this subscription");
+      if (denied) { res.status(403).json(denied); return; }
     }
 
     if (isSelfSubscription({ id: user.userId, email: dbUser!.email }, plan)) {
@@ -1288,10 +1282,8 @@ router.post("/checkout", requireAuth, requireEmailVerified, async (req, res) => 
       res.status(403).json({ error: "Forbidden", message: "Set a transaction password in Settings before paying" });
       return;
     }
-    if (!transactionPassword || !(await bcrypt.compare(transactionPassword, dbUser.transactionPasswordHash))) {
-      res.status(403).json({ error: "Forbidden", message: "Invalid transaction password" });
-      return;
-    }
+    const denied = await checkTransactionApproval(dbUser, req.body, "this payment");
+    if (denied) { res.status(403).json(denied); return; }
 
     const [plan] = await db
       .select()
@@ -1383,17 +1375,8 @@ router.post("/passport/activate", requireAuth, requireEmailVerified, async (req,
       res.status(404).json({ error: "Not found", message: "User not found" });
       return;
     }
-    if (dbUser.transactionPasswordHash) {
-      if (!transactionPassword) {
-        res.status(403).json({ error: "Forbidden", message: "Transaction password required" });
-        return;
-      }
-      const valid = await bcrypt.compare(transactionPassword, dbUser.transactionPasswordHash);
-      if (!valid) {
-        res.status(403).json({ error: "Forbidden", message: "Invalid transaction password" });
-        return;
-      }
-    }
+    const denied = await checkTransactionApproval(dbUser, req.body, "this subscription");
+    if (denied) { res.status(403).json(denied); return; }
 
     // Look up plan by merchant ID
     const [plan] = await db

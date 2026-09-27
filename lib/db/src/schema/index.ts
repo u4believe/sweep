@@ -11,3 +11,4 @@ export * from "./deposits";
 export * from "./virtual_accounts";
 export * from "./subscriptions";
 export * from "./developer";
+export * from "./webauthn";

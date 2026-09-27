@@ -1,4 +1,6 @@
 import { useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { BIOMETRIC_NAME, biometricError, enrolledCredentialId, forgetIfMissing, listDevices, registerThisDevice, removeDevice, useBiometricSupported } from "@/lib/biometric";
 import QRCode from "qrcode";
 import { Loader2 } from "lucide-react";
 import { cn, secretInputProps, secretTextProps } from "@/lib/utils";
@@ -64,6 +66,32 @@ export function SettingsSection({ security, account, onUpdated, onLogout, securi
   const [revealed, setRevealed] = useState<string | null>(null);
   const [keyCopied, setKeyCopied] = useState(false);
   const [tfa, setTfa] = useState<{ secret: string; qr: string } | null>(null);
+
+  // Face ID / fingerprint: this device's passkey plus any others on the account
+  const bioSupported = useBiometricSupported();
+  const devices = useQuery({
+    queryKey: ["/api/webauthn/credentials"],
+    queryFn: async () => { const list = await listDevices(); forgetIfMissing(list.map((d) => d.credentialId)); return list; },
+  });
+  const mine = enrolledCredentialId();
+  const thisDevice = (devices.data ?? []).find((d) => d.credentialId === mine);
+  const otherDevices = (devices.data ?? []).filter((d) => d.credentialId !== mine);
+  const toggleBiometric = () => run(async () => {
+    setSuccess(null);
+    if (thisDevice) {
+      await removeDevice(thisDevice.id, thisDevice.credentialId);
+      setSuccess(`${BIOMETRIC_NAME} is off on this device.`);
+    } else {
+      try { await registerThisDevice(); } catch (e) { throw new Error(biometricError(e)); }
+      setSuccess(`${BIOMETRIC_NAME} is on. Use it to log in and approve payments on this device.`);
+    }
+    await devices.refetch();
+  });
+  const removeOthers = () => run(async () => {
+    for (const d of otherDevices) await removeDevice(d.id, d.credentialId);
+    await devices.refetch();
+    setSuccess("Removed from your other devices.");
+  });
 
   const reset = () => {
     setOtp(""); setTotp(""); setPak(""); setPwd(""); setPwd2(""); setError(null); setNotice(null);
@@ -391,6 +419,17 @@ export function SettingsSection({ security, account, onUpdated, onLogout, securi
         action={totpUnavailable && !security.twoFactorEnabled ? null
           : <Switch on={!!security.twoFactorEnabled} busy={busy} label="Two-factor authentication"
               onToggle={() => (security.twoFactorEnabled ? tfaOffStart() : tfaStart())} />} />
+      <Row title={BIOMETRIC_NAME}
+        sub={bioSupported === false
+          ? "Not available on this device or browser"
+          : thisDevice ? "On for this device — log in and approve payments without codes or passwords" : "Log in and approve payments with this device's Face ID or fingerprint"}
+        action={bioSupported ? <Switch on={!!thisDevice} busy={busy || devices.isLoading} label={BIOMETRIC_NAME} onToggle={toggleBiometric} /> : null}
+        footer={otherDevices.length > 0 && (
+          <p className="text-xs text-(--sw-faint)">
+            Also on {otherDevices.length} other device{otherDevices.length === 1 ? "" : "s"}.{" "}
+            <button type="button" onClick={removeOthers} disabled={busy} className="font-bold text-[#b42318] hover:underline">Remove {otherDevices.length === 1 ? "it" : "them"}</button>
+          </p>
+        )} />
     </Group>
   );
 

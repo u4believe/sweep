@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { API_BASE } from "@/lib/api";
 import { authHeaders, EVM_ADDR_RE, SOL_ADDR_RE, WITHDRAWAL_CHAINS, type WithdrawalChain } from "@/lib/wallet";
 import { errorMessage, fmtUsd, shortAddr } from "./ui";
+import { biometricError, getApproval, useBiometricApproval, BIOMETRIC_NAME } from "@/lib/biometric";
 
 // Send logic shared by the mobile Send screen and the desktop "Sweep money" panel:
 // form → review (recipient lookup + transaction password) → sent.
@@ -56,6 +57,7 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
   const [busy,     setBusy]     = useState(false);
   const [error,    setError]    = useState<string | null>(null);
   const [result,   setResult]   = useState<SendResult | null>(null);
+  const bio = useBiometricApproval();
 
   useEffect(() => {
     if (!prefillTo) return;
@@ -152,6 +154,18 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
   const send = async () => {
     setError(null);
     setBusy(true);
+    // Face ID / fingerprint replaces the transaction password when set up here
+    let approval: Record<string, unknown> = hasTransactionPassword ? { transactionPassword: txPwd } : {};
+    if (bio.active) {
+      try {
+        approval = await getApproval();
+      } catch (e) {
+        bio.setUsePassword(true);
+        setError(`${biometricError(e)} Enter your transaction password instead.`);
+        setBusy(false);
+        return;
+      }
+    }
     try {
       if (usd) {
         const res  = await fetch(`${API_BASE}/api/escrow/send/platform`, {
@@ -160,7 +174,7 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
           body: JSON.stringify({
             recipientEmail: to,
             amount: a.toFixed(2),
-            ...(hasTransactionPassword ? { transactionPassword: txPwd } : {}),
+            ...approval,
           }),
         });
         const json = await res.json().catch(() => ({}));
@@ -178,8 +192,8 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
             walletAddress: to,
             amount: a.toFixed(2),
             chainKey: chain.key,
-            ...(hasTransactionPassword ? { transactionPassword: txPwd } : {}),
-          },
+            ...approval,
+          } as any,
         });
         setResult({
           mode, amount: a, received: `${net.toFixed(2)} USDC`, to: shortAddr(to),
@@ -192,7 +206,9 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
       setStep("sent");
       onSent();
     } catch (e: any) {
-      setError(errorMessage(e, "Transfer failed. Please try again."));
+      const msg = errorMessage(e, "Transfer failed. Please try again.");
+      if (bio.active && /Face ID|fingerprint/i.test(msg)) bio.setUsePassword(true);
+      setError(msg);
     } finally {
       setBusy(false);
     }
@@ -211,7 +227,8 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
     step, mode, amount, email, chainKey, address, txPwd, preview, busy, error, result,
     // derived
     chain, usd, a, to, isSol, err, hint, summary, reviewRows, resultRows,
-    pwdMissing: hasTransactionPassword && !txPwd,
+    pwdMissing: hasTransactionPassword && !bio.active && !txPwd,
+    bio, biometricName: BIOMETRIC_NAME,
     // actions
     setMode, setAmount, setMax, setEmail, setChainKey, setAddress, setTxPwd,
     goReview, send, reset, backToForm,

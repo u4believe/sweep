@@ -14,6 +14,7 @@
     "@circle-fin/adapter-viem-v2": "^1.8.2",
     "@circle-fin/app-kit": "^1.0.0",
     "@circle-fin/developer-controlled-wallets": "^10.2.0",
+    "@simplewebauthn/server": "^13.3.3",
     "@solana/web3.js": "1.98.4",
     "@types/nodemailer": "^7.0.11",
     "@workspace/api-zod": "workspace:*",

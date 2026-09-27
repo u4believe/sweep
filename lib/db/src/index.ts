@@ -35,6 +35,19 @@ export async function runStartupMigrations(): Promise<void> {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_secret_enc text;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled_at timestamp;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step integer;
+
+      CREATE TABLE IF NOT EXISTS webauthn_credentials (
+        id            serial PRIMARY KEY,
+        user_id       integer NOT NULL,
+        credential_id text NOT NULL UNIQUE,
+        public_key    text NOT NULL,
+        counter       bigint NOT NULL DEFAULT 0,
+        transports    text,
+        device_name   text,
+        created_at    timestamp NOT NULL DEFAULT now(),
+        last_used_at  timestamp
+      );
+      CREATE INDEX IF NOT EXISTS webauthn_credentials_user_idx ON webauthn_credentials(user_id);
     `);
 
     await client.query(`

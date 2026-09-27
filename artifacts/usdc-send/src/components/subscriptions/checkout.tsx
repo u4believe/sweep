@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Check, Loader2 } from "lucide-react";
-import { cn, secretInputProps } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { biometricError, getApproval, useBiometricApproval } from "@/lib/biometric";
+import { ApprovalField } from "@/components/sweep/approval-field";
 import { API_BASE } from "@/lib/api";
 import { merchantQrUrl } from "@/lib/pay-qr";
 import { BrandedQr } from "@/components/sweep/qr";
@@ -64,6 +66,7 @@ export function Checkout({ merchantId, plan, variant, onPayAnother, onDone }: {
   const [me,      setMe]      = useState<Me | null>(null);
   const [meReady, setMeReady] = useState(!token);
   const [txPwd,   setTxPwd]   = useState("");
+  const bio = useBiometricApproval();
   const [agree,   setAgree]   = useState(false);
   const [busy,    setBusy]    = useState(false);
   const [error,   setError]   = useState<string | null>(null);
@@ -112,15 +115,20 @@ export function Checkout({ merchantId, plan, variant, onPayAnother, onDone }: {
   const loginHref = `/login?next=${encodeURIComponent(`/subscribe/${merchantId}`)}`;
   const switchAccount = () => { localStorage.removeItem("token"); setLocation(loginHref); };
 
-  const canPay = !!selected && !!me?.hasTransactionPassword && !!txPwd && agree && !busy && !low;
+  const canPay = !!selected && !!me?.hasTransactionPassword && (bio.active || !!txPwd) && agree && !busy && !low;
   const pay = async () => {
     if (!canPay || !selected) return;
     setError(null); setBusy(true);
+    let approval: Record<string, unknown> = { transactionPassword: txPwd };
+    if (bio.active) {
+      try { approval = await getApproval(); }
+      catch (e) { bio.setUsePassword(true); setError(`${biometricError(e)} Enter your transaction password instead.`); setBusy(false); return; }
+    }
     try {
       const res  = await fetch(`${API_BASE}/api/subscriptions/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ merchantId, intervalId: selected.intervalId, transactionPassword: txPwd }),
+        body: JSON.stringify({ merchantId, intervalId: selected.intervalId, ...approval }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.message ?? "Payment failed");
@@ -298,12 +306,9 @@ export function Checkout({ merchantId, plan, variant, onPayAnother, onDone }: {
           </div>
 
           {me.hasTransactionPassword ? (
-            <div className="flex flex-col gap-2">
-              <label htmlFor="co-txpwd" className="text-[13px] font-bold text-(--sw-label)">Transaction password</label>
-              <input id="co-txpwd" type="password" value={txPwd} onChange={(e) => { setTxPwd(e.target.value); setError(null); }}
-                placeholder="Authorize this subscription" {...secretInputProps}
-                className="h-[52px] rounded-[14px] border border-(--sw-field-line) bg-white px-4 text-[15px] font-medium outline-none placeholder:text-[#9aa4b5] focus:border-(--sw-blue) focus:shadow-[0_0_0_4px_rgb(17_40_245/.1)] transition" />
-            </div>
+            <ApprovalField bio={bio} id="co-txpwd" value={txPwd} onChange={(v) => { setTxPwd(v); setError(null); }}
+              placeholder="Authorize this subscription" labelClass="text-[13px] font-bold text-(--sw-label)"
+              fieldClass="h-[52px] rounded-[14px] border border-(--sw-field-line) bg-white px-4 text-[15px] font-medium outline-none placeholder:text-[#9aa4b5] focus:border-(--sw-blue) focus:shadow-[0_0_0_4px_rgb(17_40_245/.1)] transition" />
           ) : (
             <p className="rounded-2xl bg-[#fffaeb] text-[#b54708] px-4 py-3 text-sm font-medium">
               Set a transaction password in Settings to pay for subscriptions.

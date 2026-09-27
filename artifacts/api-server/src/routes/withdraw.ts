@@ -18,6 +18,7 @@ import {
   isTreasuryBusy,
   markTreasuryBusy,
 } from "../lib/gatewaySweep.js";
+import { checkTransactionApproval } from "../lib/txAuth.js";
 import {
   getChain,
   validateWithdrawal,
@@ -116,23 +117,9 @@ router.post("/crypto", requireAuth, requireEmailVerified, withdrawalLimiter, asy
       .where(eq(usersTable.id, user.userId))
       .limit(1);
 
-    if (dbUser?.transactionPasswordHash) {
-      const txnPwd = typeof transactionPassword === "string" ? transactionPassword : "";
-      if (!txnPwd) {
-        res.status(403).json({
-          error:   "Transaction password required",
-          message: "Please enter your transaction password to authorize this withdrawal",
-        });
-        return;
-      }
-      const match = await bcrypt.compare(txnPwd, dbUser.transactionPasswordHash);
-      if (!match) {
-        res.status(403).json({
-          error:   "Invalid transaction password",
-          message: "The transaction password you entered is incorrect",
-        });
-        return;
-      }
+    if (dbUser) {
+      const denied = await checkTransactionApproval(dbUser, req.body, "this withdrawal");
+      if (denied) { res.status(403).json(denied); return; }
     }
 
     // ── Internal transfer: destination is another platform user's SCA ─────────

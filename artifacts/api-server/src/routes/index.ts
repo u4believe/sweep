@@ -13,6 +13,7 @@ import securityRouter from "./security.js";
 import adminRouter from "./admin.js";
 import userRouter from "./user.js";
 import payRouter from "./pay.js";
+import webauthnRouter from "./webauthn.js";
 import v1Router from "./v1/index.js";
 
 const router: IRouter = Router();
@@ -30,6 +31,7 @@ router.use("/security", securityRouter);
 router.use("/admin", adminRouter);
 router.use("/user", userRouter);
 router.use("/pay", payRouter);
+router.use("/webauthn", webauthnRouter);
 
 export { v1Router };
 export default router;
