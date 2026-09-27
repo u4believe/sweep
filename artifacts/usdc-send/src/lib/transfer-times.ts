@@ -22,6 +22,7 @@ const WITHDRAWAL_MIN: Record<string, number> = {
   "MATIC-AMOY":       1,
   "AVAX-FUJI":        1,
   "UNICHAIN-SEPOLIA": 1,
+  "SOL-DEVNET":       1,
 };
 
 /** Deposits appear on the dashboard (as pending) within this many seconds. */

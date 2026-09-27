@@ -404,7 +404,8 @@ router.post("/circle/webhook", async (req, res) => {
                 source:     sourceLabel,
                 creditedAt: new Date(),
               })
-              .where(eq(depositsTable.id, existing.id))
+              // Still pending? The indexer may promote it at the same moment.
+              .where(and(eq(depositsTable.id, existing.id), eq(depositsTable.status, "pending")))
               .returning({ id: depositsTable.id });
             if (!updated.length) return false;
             await tx.update(usersTable)
@@ -443,7 +444,7 @@ router.post("/circle/webhook", async (req, res) => {
           const promoted = await db.transaction(async (tx: any) => {
             const updated = await tx.update(depositsTable)
               .set({ status: "completed", source: sourceLabel, creditedAt: new Date() })
-              .where(eq(depositsTable.id, dupByHash.id))
+              .where(and(eq(depositsTable.id, dupByHash.id), eq(depositsTable.status, "pending")))
               .returning({ id: depositsTable.id });
             if (!updated.length) return false;
             await tx.update(usersTable)

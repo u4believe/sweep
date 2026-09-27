@@ -21,7 +21,7 @@
 import {
   db, usersTable, depositsTable,
 } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { getDcwClient } from "./circle.js";
 import { arcTestnetSweep, evmGatewaySweep, solanaSweep } from "./gatewaySweep.js";
@@ -288,14 +288,23 @@ async function _handleDeposit(
         return;
       }
       // COMPLETE pass: promote the pending record directly by txHash.
-      await db.transaction(async (tx: any) => {
-        await tx.update(depositsTable)
+      // Only if it's still pending — the Circle webhook may promote it at the same
+      // moment, and only one of us may credit the balance.
+      const promoted = await db.transaction(async (tx: any) => {
+        const updated = await tx.update(depositsTable)
           .set({ status: "completed", txHash, creditedAt: new Date() })
-          .where(eq(depositsTable.id, existingByHash.id));
+          .where(and(eq(depositsTable.id, existingByHash.id), eq(depositsTable.status, "pending")))
+          .returning({ id: depositsTable.id });
+        if (!updated.length) return false;
         await tx.update(usersTable)
           .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })
           .where(eq(usersTable.id, userId));
+        return true;
       });
+      if (!promoted) {
+        logger.debug({ txHash, userId }, "[usdc-indexer] Already promoted elsewhere — skipping");
+        return;
+      }
       logger.info({ txHash, userId, amount }, "[usdc-indexer] Promoted pending→completed directly by txHash");
       promotedViaHash = true; // fall through to step 4 to trigger sweep
     }
@@ -314,19 +323,27 @@ async function _handleDeposit(
 
       if (existingByRef) {
         if (!pendingOnly && existingByRef.status === "pending") {
-          // COMPLETE pass: promote pending → completed and credit balance.
-          await db.transaction(async (tx: any) => {
-            await tx.update(depositsTable)
+          // COMPLETE pass: promote pending → completed and credit balance —
+          // only if it's still pending (see step 1).
+          const promoted = await db.transaction(async (tx: any) => {
+            const updated = await tx.update(depositsTable)
               .set({
                 status:     "completed",
                 txHash:     txHash ?? existingByRef.currentTxHash ?? null,
                 creditedAt: new Date(),
               })
-              .where(eq(depositsTable.id, existingByRef.id));
+              .where(and(eq(depositsTable.id, existingByRef.id), eq(depositsTable.status, "pending")))
+              .returning({ id: depositsTable.id });
+            if (!updated.length) return false;
             await tx.update(usersTable)
               .set({ claimedBalance: sql`${usersTable.claimedBalance} + ${parseFloat(amount)}` })
               .where(eq(usersTable.id, userId));
+            return true;
           });
+          if (!promoted) {
+            logger.debug({ txHash, depositRef, userId }, "[usdc-indexer] Already promoted elsewhere — skipping");
+            return;
+          }
           logger.info(
             { txHash, depositRef, userId, amount },
             "[usdc-indexer] Promoted pending→completed, credited balance",
