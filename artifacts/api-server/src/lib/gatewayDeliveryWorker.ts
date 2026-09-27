@@ -18,7 +18,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { getGatewayTransfer } from "./gatewaySweep.js";
 import { logger } from "./logger.js";
 
-const POLL_INTERVAL_MS = parseInt(process.env.GATEWAY_DELIVERY_POLL_MS ?? String(2 * 60_000), 10);
+const POLL_INTERVAL_MS = parseInt(process.env.GATEWAY_DELIVERY_POLL_MS ?? String(20_000), 10);
 const SLOW_AFTER_MS    = 6 * 60 * 60_000; // warn when a delivery has been pending 6h+
 
 let running = false;
@@ -63,7 +63,7 @@ export async function checkGatewayDeliveries(): Promise<void> {
 
       if (transfer.status === "confirmed" || transfer.status === "finalized") {
         await db.update(withdrawalsTable)
-          .set({ status: "completed", txHash: transfer.transactionHash ?? w.txHash, completedAt: new Date() })
+          .set({ status: "completed", txHash: transfer.transactionHash ?? w.txHash, completedAt: new Date(), deliveredAt: new Date() })
           .where(and(eq(withdrawalsTable.id, w.id), eq(withdrawalsTable.status, "delivering")));
         logger.info({ withdrawalId: w.id, txHash: transfer.transactionHash }, "[gatewayDelivery] Delivered");
       } else if (transfer.status === "failed" || transfer.status === "expired") {

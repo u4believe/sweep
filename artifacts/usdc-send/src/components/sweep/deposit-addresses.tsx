@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { WITHDRAWAL_CHAINS } from "@/lib/wallet";
+import { DEPOSIT_SHOWS_UP, depositCreditTime } from "@/lib/transfer-times";
 import { Card, Chip, OutlineButton, PrimaryButton, Segmented, useCopy } from "./ui";
 
 // Deposit networks in display order — Unichain is withdrawal-only.
@@ -19,6 +20,7 @@ export function AddMoney({ addresses, inset = false }: { addresses: Record<strin
   const label     = active ? chainLabel(active) : "";
   const address   = active ? addresses[active] : undefined;
   const { copied, copy } = useCopy(2000);
+  const creditedIn = active ? depositCreditTime(active) : null;
 
   return (
     <div className="space-y-3">
@@ -54,10 +56,11 @@ export function AddMoney({ addresses, inset = false }: { addresses: Record<strin
           <Card className="rounded-[20px] px-[18px] py-1">
             {[
               { k: "Send only", v: `USDC on ${label}` },
-              { k: "Credited",  v: "After confirmation" },
+              { k: "Shows up",  v: DEPOSIT_SHOWS_UP },
+              { k: "Credited",  v: creditedIn ?? "After confirmation" },
               { k: "Gas",       v: "Sponsored", ok: true },
-            ].map((r, i) => (
-              <div key={r.k} className={cn("flex justify-between py-3 text-sm", i < 2 && "border-b border-[#f0f2f6]")}>
+            ].map((r, i, rows) => (
+              <div key={r.k} className={cn("flex justify-between py-3 text-sm", i < rows.length - 1 && "border-b border-[#f0f2f6]")}>
                 <span className="text-(--sw-muted)">{r.k}</span>
                 <span className={cn("font-bold", r.ok && "text-[#067647]")}>{r.v}</span>
               </div>

@@ -12,6 +12,7 @@ import {
 } from "../lib/circle.js";
 import { evmGatewaySweep, solanaSweep, arcTestnetSweep } from "../lib/gatewaySweep.js";
 import { getChain, isDepositChain, type ChainKey } from "../lib/gatewayConfig.js";
+import { circleDate } from "../lib/transferTimes.js";
 
 // Map Circle blockchain identifiers → human-readable display labels.
 // These labels must match what the frontend's explorer URL matcher expects.
@@ -320,7 +321,7 @@ router.post("/circle/webhook", async (req, res) => {
     if (notificationType !== "transactions.inbound") return;
     if (!notification) return;
 
-    const { id: txId, walletId, amounts, blockchain, txHash, state, destinationAddress } = notification;
+    const { id: txId, walletId, amounts, blockchain, txHash, state, destinationAddress, createDate } = notification;
     console.info(
       `[circle/webhook] Inbound: state=${state} walletId=${walletId} address=${destinationAddress} amounts=${JSON.stringify(amounts)} txHash=${txHash} txId=${txId} chain=${blockchain}`,
     );
@@ -470,6 +471,8 @@ router.post("/circle/webhook", async (req, res) => {
         status:           "pending",
         depositReference: depositRef,
         txHash:           txHash ?? null,
+        chain:            resolvedChain ?? null,
+        detectedAt:       circleDate(createDate) ?? new Date(),
         // creditedAt intentionally null — will be set on COMPLETE
       }).onConflictDoNothing();
       console.info(`[circle/webhook] Pending deposit ${amount} USDC to user ${dbUser.id} from ${resolvedChain}`);
@@ -486,6 +489,8 @@ router.post("/circle/webhook", async (req, res) => {
         status:           "completed",
         depositReference: depositRef,
         txHash:           txHash ?? null,
+        chain:            resolvedChain ?? null,
+        detectedAt:       circleDate(createDate),
         creditedAt:       new Date(),
       }).onConflictDoNothing().returning({ id: depositsTable.id });
 

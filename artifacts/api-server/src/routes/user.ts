@@ -4,6 +4,7 @@ import { eq, desc } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import { hashEmail } from "../lib/escrow.js";
 import { resolveCircleOnChainTxHash } from "../lib/circle.js";
+import { getTransferTimes } from "../lib/transferTimes.js";
 
 const router: IRouter = Router();
 
@@ -185,6 +186,17 @@ router.get("/history", requireAuth, async (req, res) => {
   } catch (error: any) {
     req.log.error({ err: error }, "[user/history] Error");
     res.status(500).json({ error: "Internal server error", message: error.message });
+  }
+});
+
+// ─── GET /api/user/transfer-times ─────────────────────────────────────────────
+// Measured deposit / withdrawal times per chain (see lib/transferTimes.ts).
+router.get("/transfer-times", requireAuth, async (req, res) => {
+  try {
+    res.json(await getTransferTimes());
+  } catch (error: any) {
+    req.log.error({ err: error }, "Transfer times error");
+    res.status(500).json({ error: "Internal server error", message: "Couldn't load transfer times" });
   }
 });
 

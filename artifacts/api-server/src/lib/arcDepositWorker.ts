@@ -17,6 +17,7 @@ import { eq, sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { getDcwClient } from "./circle.js";
 import { arcTestnetSweep } from "./gatewaySweep.js";
+import { circleDate } from "./transferTimes.js";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -172,6 +173,8 @@ async function _processTx(userId: number, arcWalletId: string, tx: any): Promise
       status:           "completed",
       depositReference: depositRef,
       txHash,
+      chain:            "ARC-TESTNET",
+      detectedAt:       circleDate(tx.createDate),
       creditedAt:       new Date(),
     }).onConflictDoNothing().returning({ id: depositsTable.id });
 

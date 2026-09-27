@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { API_BASE } from "@/lib/api";
 import { authHeaders, EVM_ADDR_RE, SOL_ADDR_RE, WITHDRAWAL_CHAINS, type WithdrawalChain } from "@/lib/wallet";
 import { errorMessage, fmtUsd, shortAddr } from "./ui";
+import { withdrawalArriveTime } from "@/lib/transfer-times";
 import { biometricError, getApproval, useBiometricApproval, BIOMETRIC_NAME } from "@/lib/biometric";
 
 // Send logic shared by the mobile Send screen and the desktop "Sweep money" panel:
@@ -91,6 +92,10 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
   const touched = !!(amount || email || address);
   const hint    = err ? (touched ? err : "") : "Ready to sweep";
 
+  // Measured per chain (lib/transfer-times.ts); none shown where we haven't measured.
+  const arrives = usd ? null : withdrawalArriveTime(chain.key);
+  const arrivesRow = arrives ? [{ k: "Arrives", v: arrives }] : [];
+
   const summary = usd
     ? [
         { k: "Fee",      v: "Free",      tone: "ok" as const },
@@ -102,6 +107,7 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
         { k: "Minimum",     v: fmtUsd(chain.minWithdrawal) },
         { k: "Deducted",    v: a ? fmtUsd(a) : "—" },
         { k: "They get",    v: net ? `${net.toFixed(2)} USDC` : "—" },
+        ...arrivesRow,
       ];
 
   const reviewRows = usd
@@ -111,6 +117,7 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
         { k: "Address",     v: shortAddr(to) },
         { k: "Network fee", v: fmtUsd(chain.platformFee) },
         { k: "They get",    v: `${net.toFixed(2)} USDC` },
+        ...arrivesRow,
       ];
 
   const setMode = (m: SendMode) => { setModeRaw(m); setError(null); };
@@ -217,6 +224,7 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
   const resultRows = result
     ? [
         { k: "Status", v: result.status },
+        ...(result.mode === "usdc" ? arrivesRow : []),
         ...(result.mode === "usdc" ? [{ k: "Deducted", v: fmtUsd(result.amount) }] : []),
         ...(result.newBalance !== null ? [{ k: "New balance", v: fmtUsd(result.newBalance) }] : []),
       ]

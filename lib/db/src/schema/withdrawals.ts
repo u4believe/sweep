@@ -23,6 +23,10 @@ export const withdrawalsTable = pgTable("withdrawals", {
   idempotencyKey: text("idempotency_key"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   completedAt: timestamp("completed_at"),
+  // Crypto only: the destination chain key, and when the transfer actually landed
+  // on-chain there (completedAt can be earlier: direct transfers complete on submit).
+  chain: text("chain"),
+  deliveredAt: timestamp("delivered_at"),
 });
 
 export const insertWithdrawalSchema = createInsertSchema(withdrawalsTable).omit({ id: true, createdAt: true });

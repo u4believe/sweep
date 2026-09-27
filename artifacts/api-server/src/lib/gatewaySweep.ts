@@ -357,8 +357,11 @@ const GATEWAY_DOMAIN_IDS: Partial<Record<ChainKey, number>> = {
   "ARC-TESTNET":       26,
 };
 
-// Max uint256 string — used as maxBlockHeight to indicate no expiration.
+// "No expiration" for maxBlockHeight. Solana destinations use Gateway's reduced
+// attestation encoding, where maxBlockHeight must fit in a u64 — so they get the
+// u64 maximum; EVM destinations keep the uint256 maximum.
 const MAX_UINT256     = ((1n << 256n) - 1n).toString();
+const MAX_UINT64      = ((1n << 64n) - 1n).toString();
 // 0.50 USDC in base units — covers Forwarding Service fee ($0.20) with buffer.
 const GATEWAY_MAX_FEE = "500000";
 const ZERO_BYTES32    = "0x" + "00".repeat(32);
@@ -584,7 +587,7 @@ export async function gatewayWithdrawal(opts: {
     const srcDomainId = GATEWAY_DOMAIN_IDS[sourceChain]!;
     const srcChainCfg = getChain(sourceChain);
     return {
-      maxBlockHeight: MAX_UINT256,
+      maxBlockHeight: isSolanaDestination ? MAX_UINT64 : MAX_UINT256,
       maxFee:         GATEWAY_MAX_FEE,
       spec: {
         version:              1,
@@ -1047,8 +1050,10 @@ export async function directTreasuryTransfer(opts: {
   amount:             string;
   idempotencyKey:     string;
   onFailure?:         () => Promise<void>;
+  /** Called once the transfer is on-chain at the destination (CONFIRMED or COMPLETE). */
+  onDelivered?:       (at: Date) => Promise<void>;
 }): Promise<string> {
-  const { destinationAddress, chainKey, amount, idempotencyKey, onFailure } = opts;
+  const { destinationAddress, chainKey, amount, idempotencyKey, onFailure, onDelivered } = opts;
   const isSolana = chainKey === "SOL-DEVNET";
   const walletId = isSolana ? TREASURY_SOL_WALLET_ID : getTreasuryWalletIdForChain(chainKey);
 
@@ -1076,7 +1081,7 @@ export async function directTreasuryTransfer(opts: {
 
   const txId = await directWalletTransfer(walletId, destinationAddress, amount, idempotencyKey);
   console.info(`[DirectTransfer] ${amount} USDC → ${destinationAddress} on ${chainKey}: ${txId}`);
-  void _pollTransferStatus(txId, `DirectTransfer(${chainKey})`, onFailure);
+  void _pollTransferStatus(txId, `DirectTransfer(${chainKey})`, onFailure, onDelivered);
   return txId;
 }
 
@@ -1084,10 +1089,18 @@ async function _pollTransferStatus(
   txId:       string,
   label:      string,
   onFailure?: () => Promise<void>,
+  onDelivered?: (at: Date) => Promise<void>,
 ): Promise<void> {
   const client = getDcwClient();
   if (!client) return;
-  const deadline = Date.now() + 5 * 60_000;
+  // Long enough for slow-finality chains; delivery is recorded at the first on-chain sighting.
+  const deadline = Date.now() + 30 * 60_000;
+  let delivered = false;
+  const markDelivered = async () => {
+    if (delivered || !onDelivered) return;
+    delivered = true;
+    try { await onDelivered(new Date()); } catch (e: any) { console.warn(`[${label}] onDelivered error: ${e?.message}`); }
+  };
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 8_000));
     try {
@@ -1095,7 +1108,9 @@ async function _pollTransferStatus(
       const body = res.data as any;
       const tx   = body?.data ?? body?.transaction ?? body;
       const state: string = tx?.state ?? tx?.status ?? "";
+      if (state === "CONFIRMED") await markDelivered();
       if (state === "COMPLETE") {
+        await markDelivered();
         const hash = tx?.txHash ?? tx?.transactionHash ?? null;
         console.info(`[${label}] ✅ ${txId} COMPLETE — onChainTxHash=${hash ?? "not yet indexed"}`);
         return;
@@ -1119,7 +1134,7 @@ async function _pollTransferStatus(
       console.warn(`[${label}] Poll error for ${txId}: ${e?.message}`);
     }
   }
-  console.warn(`[${label}] ⚠️ ${txId} still pending after 5 min — check Circle dashboard`);
+  console.warn(`[${label}] ⚠️ ${txId} still pending after 30 min — check Circle dashboard`);
 }
 
 // ─── Gateway delegate provisioning ───────────────────────────────────────────

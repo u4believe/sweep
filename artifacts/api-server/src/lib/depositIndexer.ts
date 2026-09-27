@@ -26,6 +26,7 @@ import { logger } from "./logger.js";
 import { getDcwClient } from "./circle.js";
 import { arcTestnetSweep, evmGatewaySweep, solanaSweep } from "./gatewaySweep.js";
 import { isDepositChain, getChain, type ChainKey } from "./gatewayConfig.js";
+import { circleDate } from "./transferTimes.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -247,6 +248,7 @@ async function _processTx(tx: any, pendingOnly = false) {
     circleId,
     txChain ?? undefined,
     pendingOnly,
+    circleDate(tx.createDate),
   );
 }
 
@@ -262,6 +264,7 @@ async function _handleDeposit(
   circleId?:     string,
   txBlockchain?: string,
   pendingOnly:   boolean = false,
+  detectedAt:    Date | null = null,
 ) {
   const depositRef = circleId ? `circle-${circleId}` : (txHash ?? "");
 
@@ -354,6 +357,8 @@ async function _handleDeposit(
           status:           "pending",
           depositReference: depositRef || null,
           txHash:           txHash ?? null,
+          chain:            txBlockchain ?? null,
+          detectedAt:       detectedAt ?? new Date(),
         }).onConflictDoNothing();
         logger.info({ userId, amount, chain: txBlockchain }, "[usdc-indexer] Pending deposit recorded");
         return;
@@ -368,6 +373,8 @@ async function _handleDeposit(
           status:           "completed",
           depositReference: depositRef || null,
           txHash:           txHash ?? null,
+          chain:            txBlockchain ?? null,
+          detectedAt,
           creditedAt:       new Date(),
         }).onConflictDoNothing().returning({ id: depositsTable.id });
 

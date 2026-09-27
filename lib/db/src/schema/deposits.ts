@@ -15,6 +15,10 @@ export const depositsTable = pgTable("deposits", {
   circlePaymentId: text("circle_payment_id"),    // Circle payment ID when webhook confirms
   txHash: text("tx_hash").unique(),              // on-chain tx hash for crypto deposits
   creditedAt: timestamp("credited_at"),          // when claimedBalance was updated
+  // Crypto only: the chain key (e.g. "BASE-SEPOLIA") and when Circle first saw the
+  // inbound transfer on-chain. creditedAt − detectedAt is the real time to credit.
+  chain: text("chain"),
+  detectedAt: timestamp("detected_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

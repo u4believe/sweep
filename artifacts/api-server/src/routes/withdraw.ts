@@ -208,6 +208,7 @@ router.post("/crypto", requireAuth, requireEmailVerified, withdrawalLimiter, asy
         destination:    `${walletAddress} (${chain.label})`,
         status:         "processing",
         idempotencyKey,
+        chain:          chainKey,
       })
       .returning({ id: withdrawalsTable.id });
 
@@ -229,6 +230,9 @@ router.post("/crypto", requireAuth, requireEmailVerified, withdrawalLimiter, asy
           chainKey:           chainKey as ChainKey,
           amount:             netAmount.toFixed(6),
           idempotencyKey,
+          onDelivered: async (at) => {
+            await db.update(withdrawalsTable).set({ deliveredAt: at }).where(eq(withdrawalsTable.id, withdrawal.id));
+          },
           onFailure: async () => {
             await atomicRestore(user.userId, grossAmount);
             await db.update(withdrawalsTable)

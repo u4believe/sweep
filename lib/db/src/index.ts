@@ -37,6 +37,11 @@ export async function runStartupMigrations(): Promise<void> {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step integer;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version integer NOT NULL DEFAULT 0;
 
+      ALTER TABLE deposits ADD COLUMN IF NOT EXISTS chain text;
+      ALTER TABLE deposits ADD COLUMN IF NOT EXISTS detected_at timestamp;
+      ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS chain text;
+      ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS delivered_at timestamp;
+
       CREATE TABLE IF NOT EXISTS webauthn_credentials (
         id            serial PRIMARY KEY,
         user_id       integer NOT NULL,

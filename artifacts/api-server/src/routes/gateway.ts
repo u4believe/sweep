@@ -260,6 +260,7 @@ async function handleMintFinalized(n: any): Promise<void> {
       status:      "completed",
       txHash:      txHash ?? null,
       completedAt: new Date(),
+      deliveredAt: sql`COALESCE(${withdrawalsTable.deliveredAt}, NOW())`,
     })
     .where(eq(withdrawalsTable.id, withdrawal.id));
 
