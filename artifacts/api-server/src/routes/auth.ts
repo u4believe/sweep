@@ -9,9 +9,10 @@ import { isTotpConfigured } from "../lib/totp.js";
 import { hashEmail } from "../lib/escrow.js";
 import { claimPendingEscrows } from "../lib/ledger.js";
 import { createUserCircleWallet, ensureAllChainWallets } from "../lib/circle.js";
-import { sendOtpEmail, sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from "../lib/email.js";
+import { sendOtpEmail, sendVerificationEmail, sendSecurityOtpEmail, sendWelcomeEmail } from "../lib/email.js";
 import { randomUUID } from "node:crypto";
 import { codeStatus, consumeOtp, findOtp, issueAndSendOtp, issueOtp, otpErrorResponse } from "../lib/otp.js";
+import { authenticationOptions, issueLoginTicket, listCredentials, readLoginTicket, rpFor, verifyAuthentication } from "../lib/webauthn.js";
 import {
   RegisterUserBody,
   LoginUserBody,
@@ -318,10 +319,58 @@ router.post("/login", async (req, res) => {
       })();
     }
 
+    // Face ID / fingerprint set up? Offer it instead of the codes; the email code
+    // is only sent if the user falls back (POST /login/code).
+    const rp = rpFor(req.headers.origin);
+    if (rp && (await listCredentials(user.id)).length) {
+      const ticket  = issueLoginTicket(user.id);
+      const options = await authenticationOptions(user.id, `login:${ticket}`, rp);
+      res.json({ requiresBiometric: true, ticket, options, userId: user.id, requiresTotp: hasTotp(user) });
+      return;
+    }
+
     const sent = await issueAndSendOtp(user.id, "login", (code) => sendOtpEmail(normalizedEmail, code, "login"));
     res.json({ requiresOtp: true, requiresTotp: hasTotp(user), userId: user.id, ...codeStatus(sent) });
   } catch (error: any) {
     req.log.error({ err: error }, "Login error");
+    res.status(500).json({ error: "Internal server error", message: error.message });
+  }
+});
+
+// ─── POST /api/auth/login/biometric ──────────────────────────────────────────
+// Finishes a password login with Face ID / fingerprint: no codes needed.
+router.post("/login/biometric", async (req, res) => {
+  try {
+    const { ticket, response } = req.body ?? {};
+    const userId = readLoginTicket(ticket);
+    if (!userId) { res.status(401).json({ error: "Expired", code: "TICKET_EXPIRED", message: "This sign-in expired. Please log in again." }); return; }
+    if (!(await verifyAuthentication(userId, `login:${ticket}`, response))) {
+      res.status(401).json({ error: "Not recognised", code: "BIOMETRIC_FAILED", message: "Face ID / fingerprint wasn't recognised. Use the email code instead." });
+      return;
+    }
+    readLoginTicket(ticket, true);
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (!user) { res.status(401).json({ error: "Unauthorized", message: "Please log in again." }); return; }
+    req.log.info({ userId }, "[auth] Logged in with Face ID / fingerprint");
+    res.json(sessionResponse(user));
+  } catch (error: any) {
+    req.log.error({ err: error }, "Biometric login error");
+    res.status(500).json({ error: "Internal server error", message: error.message });
+  }
+});
+
+// ─── POST /api/auth/login/code ───────────────────────────────────────────────
+// Face ID / fingerprint failed or was skipped: email the login code instead.
+router.post("/login/code", async (req, res) => {
+  try {
+    const userId = readLoginTicket(req.body?.ticket, true);
+    if (!userId) { res.status(401).json({ error: "Expired", code: "TICKET_EXPIRED", message: "This sign-in expired. Please log in again." }); return; }
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (!user) { res.status(401).json({ error: "Unauthorized", message: "Please log in again." }); return; }
+    const sent = await issueAndSendOtp(user.id, "login", (code) => sendOtpEmail(user.email, code, "login"));
+    res.json({ requiresOtp: true, requiresTotp: hasTotp(user), userId: user.id, ...codeStatus(sent) });
+  } catch (error: any) {
+    req.log.error({ err: error }, "Login code fallback error");
     res.status(500).json({ error: "Internal server error", message: error.message });
   }
 });
@@ -603,10 +652,33 @@ router.post("/resend-otp", async (req, res) => {
   }
 });
 
-// ─── POST /api/auth/forgot-password ──────────────────────────────────────────
-// Sends a password-reset link. Always returns 200 to prevent email enumeration.
-// Token is a random UUID (128 bits), expires in 1 hour, single-use.
-// Only works for verified accounts — unverified accounts are not real users.
+// ─── Forgot password ─────────────────────────────────────────────────────────
+//   POST /forgot-password            { email }             → emails a 6-digit code
+//   POST /reset-password/verify      { email, otp, totp? } → email code (+ authenticator
+//                                                             code if 2FA is on) → resetToken
+//   POST /reset-password/verify-pak  { email, pak }        → "Try another method": the
+//                                                             authorization key alone → resetToken
+//   POST /reset-password             { token, password }   → sets the new password
+// Responses never reveal whether an email is registered.
+
+const RESET_TOKEN_TTL_MS = 10 * 60 * 1000;
+const PAK_MAX_FAILURES   = 5;
+const pakFailures = new Map<number, { n: number; since: number }>();
+
+async function issueResetToken(userId: number): Promise<string> {
+  const resetToken = randomUUID();
+  await db.update(usersTable)
+    .set({ passwordResetToken: resetToken, passwordResetTokenExpiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS) } as any)
+    .where(eq(usersTable.id, userId));
+  return resetToken;
+}
+
+async function findResettableUser(email: unknown) {
+  if (typeof email !== "string" || !email.trim()) return null;
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.email, email.toLowerCase().trim())).limit(1);
+  return user && (user as any).emailVerified ? user : null;
+}
+
 router.post("/forgot-password", async (req, res) => {
   const { email, cfToken } = req.body as { email?: unknown; cfToken?: string };
   if (typeof email !== "string" || !email.trim()) {
@@ -620,36 +692,85 @@ router.post("/forgot-password", async (req, res) => {
   }
 
   // Respond immediately — never reveal whether the email exists.
-  res.json({ success: true, message: "If that email is registered, a reset link has been sent." });
+  res.json({ success: true, message: "If that email is registered, we've sent it a 6-digit code." });
 
   // Process in background so the response time is constant (timing-safe).
   void (async () => {
     try {
-      const normalizedEmail = email.toLowerCase().trim();
-      const [user] = await db.select().from(usersTable).where(eq(usersTable.email, normalizedEmail)).limit(1);
-
-      // Only send reset emails to verified accounts.
-      if (!user || !(user as any).emailVerified) return;
-
-      const resetToken = randomUUID();
-      const expiresAt  = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
-
-      await db.update(usersTable)
-        .set({ passwordResetToken: resetToken, passwordResetTokenExpiresAt: expiresAt } as any)
-        .where(eq(usersTable.id, user.id));
-
-      const frontendUrl = (process.env.FRONTEND_URL ?? process.env.APP_URL ?? `http://localhost:5173`).replace(/\/$/, "");
-      const resetUrl    = `${frontendUrl}/reset-password?token=${resetToken}`;
-      await sendPasswordResetEmail(normalizedEmail, resetUrl);
+      const user = await findResettableUser(email);
+      if (!user) return;
+      await issueAndSendOtp(user.id, "pwd-reset", (code) => sendSecurityOtpEmail(user.email, code, "pwd-reset"));
     } catch (e: any) {
       console.error("[forgot-password] Error:", e?.message);
     }
   })();
 });
 
-// ─── POST /api/auth/reset-password ───────────────────────────────────────────
-// Verifies the reset token and sets a new password.
-// Token is invalidated immediately on use regardless of success.
+const INVALID_RESET = { error: "Invalid code", message: "The code is incorrect or has expired." };
+
+router.post("/reset-password/verify", async (req, res) => {
+  try {
+    const { email, otp, totp } = req.body as { email?: unknown; otp?: unknown; totp?: unknown };
+    const user = await findResettableUser(email);
+    if (!user || typeof otp !== "string" || !otp.trim()) { res.status(401).json(INVALID_RESET); return; }
+
+    let otpId: number | null;
+    try {
+      otpId = await findOtp(user.id, otp, "pwd-reset");
+    } catch (err) {
+      if (otpErrorResponse(res, err)) return;
+      throw err;
+    }
+    if (otpId === null) { res.status(401).json(INVALID_RESET); return; }
+
+    // Accounts with 2FA need the authenticator code too; checked before the email
+    // code is used up, so a wrong authenticator code doesn't waste it.
+    if (hasTotp(user)) {
+      if (typeof totp !== "string" || !totp.trim()) {
+        res.status(401).json({ error: "Authenticator code required", code: "TOTP_REQUIRED", message: "Enter the 6-digit code from your authenticator app." });
+        return;
+      }
+      if (!(await checkUserTotp(user, totp))) {
+        res.status(401).json({ error: "Invalid authenticator code", code: "TOTP_INVALID", message: "That authenticator code is incorrect or has already been used." });
+        return;
+      }
+    }
+    if (!(await consumeOtp(otpId))) { res.status(401).json(INVALID_RESET); return; }
+
+    res.json({ resetToken: await issueResetToken(user.id) });
+  } catch (error: any) {
+    req.log.error({ err: error }, "Reset verify error");
+    res.status(500).json({ error: "Internal server error", message: error.message });
+  }
+});
+
+router.post("/reset-password/verify-pak", async (req, res) => {
+  try {
+    const { email, pak } = req.body as { email?: unknown; pak?: unknown };
+    const user = await findResettableUser(email);
+    const INVALID = { error: "Invalid key", message: "That authorization key doesn't match this account." };
+    if (!user || typeof pak !== "string" || !pak.trim() || !user.pakHash) { res.status(401).json(INVALID); return; }
+
+    const f = pakFailures.get(user.id);
+    if (f && f.n >= PAK_MAX_FAILURES && Date.now() - f.since < 60 * 60 * 1000) {
+      res.status(429).json({ error: "Too many attempts", message: "Too many incorrect keys. Try again in an hour." });
+      return;
+    }
+    if (!(await bcrypt.compare(pak.trim().toUpperCase(), user.pakHash))) {
+      const cur = f && Date.now() - f.since < 60 * 60 * 1000 ? f : { n: 0, since: Date.now() };
+      pakFailures.set(user.id, { n: cur.n + 1, since: cur.since });
+      res.status(401).json(INVALID);
+      return;
+    }
+    pakFailures.delete(user.id);
+    res.json({ resetToken: await issueResetToken(user.id) });
+  } catch (error: any) {
+    req.log.error({ err: error }, "Reset verify-pak error");
+    res.status(500).json({ error: "Internal server error", message: error.message });
+  }
+});
+
+// ─── POST /api/auth/reset-password ────────────────────────────────────────────
 router.post("/reset-password", async (req, res) => {
   const { token, password } = req.body as { token?: unknown; password?: unknown };
 
@@ -677,8 +798,8 @@ router.post("/reset-password", async (req, res) => {
 
     if (!user) {
       res.status(400).json({
-        error: "Invalid or expired link",
-        message: "This password reset link is invalid or has expired. Please request a new one.",
+        error: "Invalid or expired",
+        message: "This reset has expired. Please start again from Forgot password.",
       });
       return;
     }
@@ -691,6 +812,8 @@ router.post("/reset-password", async (req, res) => {
         passwordHash,
         passwordResetToken:          null,
         passwordResetTokenExpiresAt: null,
+        loginAttempts:               0,
+        lockedUntil:                 null,
       } as any)
       .where(eq(usersTable.id, user.id));
 

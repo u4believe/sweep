@@ -417,6 +417,7 @@ const SECURITY_ACTION_LABELS: Record<string, { subject: string; heading: string;
   "del-account": { subject: "Confirm account deletion — SweepUSDC",  heading: "Delete your account",         desc: "to permanently delete your account" },
   "disable-2fa": { subject: "Turn off two-factor authentication",   heading: "Turn off 2FA",                desc: "to turn off authenticator-app two-factor authentication" },
   "plan-create": { subject: "Confirm your new subscription plan",    heading: "Publish your plan",           desc: "to publish your new subscription plan" },
+  "pwd-reset":   { subject: "Reset your Sweep password",             heading: "Reset your password",         desc: "to reset your login password" },
 };
 
 export async function sendSecurityOtpEmail(to: string, code: string, actionType: string): Promise<void> {
