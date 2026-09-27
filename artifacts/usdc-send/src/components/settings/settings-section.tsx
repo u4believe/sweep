@@ -164,8 +164,9 @@ export function SettingsSection({ security, account, onUpdated, onLogout, securi
     sentNotice(); setView("login-otp");
   });
   const loginConfirm = () => run(async () => {
-    await api("/change-login-password/confirm", { pak: pak.trim(), newPassword: pwd, otp });
-    done("Login password changed.");
+    const data = await api("/change-login-password/confirm", { pak: pak.trim(), newPassword: pwd, otp });
+    if (data?.token) localStorage.setItem("token", data.token);
+    done("Login password changed. You've been signed out on all your other devices.");
   });
 
   const tfaStart = () => run(async () => {

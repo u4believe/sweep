@@ -66,6 +66,9 @@ export const usersTable = pgTable("users", {
   totpEnabledAt:        timestamp("totp_enabled_at"),
   // Last accepted 30-second time step — stops a code being replayed.
   totpLastStep:         integer("totp_last_step"),
+  // Stamped into every session token; bumping it (password change / reset)
+  // signs the account out on every device.
+  sessionVersion:       integer("session_version").notNull().default(0),
 });
 
 export const insertUserSchema = createInsertSchema(usersTable).omit({ id: true, createdAt: true, claimedBalance: true });

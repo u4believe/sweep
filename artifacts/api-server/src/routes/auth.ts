@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import bcrypt from "bcrypt";
 import { db, usersTable, otpCodesTable, escrowsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
-import { generateToken, requireAuth } from "../lib/auth.js";
+import { endAllSessions, requireAuth, sessionToken } from "../lib/auth.js";
 import { googleClientId, verifyGoogleCredential } from "../lib/google.js";
 import { checkUserTotp, consumeLoginChallenge, hasTotp, issueLoginChallenge, readLoginChallenge } from "../lib/two-factor.js";
 import { isTotpConfigured } from "../lib/totp.js";
@@ -445,7 +445,7 @@ router.post("/verify-otp", async (req, res) => {
       }
     }
 
-    const token = generateToken({ userId: user.id, email: user.email });
+    const token = sessionToken(user);
 
     res.json({
       token,
@@ -472,7 +472,7 @@ router.get("/config", (_req, res) => {
 
 function sessionResponse(user: typeof usersTable.$inferSelect, extra: Record<string, unknown> = {}) {
   return {
-    token: generateToken({ userId: user.id, email: user.email }),
+    token: sessionToken(user),
     user: {
       id: user.id,
       email: user.email,
@@ -816,6 +816,7 @@ router.post("/reset-password", async (req, res) => {
         lockedUntil:                 null,
       } as any)
       .where(eq(usersTable.id, user.id));
+    await endAllSessions(user.id);
 
     res.json({ success: true, message: "Password reset successfully. You can now log in with your new password." });
   } catch (error: any) {

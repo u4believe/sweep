@@ -22,10 +22,39 @@ if (JWT_SECRET.length < 32) {
 export interface JwtPayload {
   userId: number;
   email: string;
+  /** The user's session version when the token was issued (missing = 0). */
+  sv?: number;
 }
 
 export function generateToken(payload: JwtPayload): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
+}
+
+/** A session token for this user, tied to their current session version. */
+export function sessionToken(user: { id: number; email: string; sessionVersion: number }): string {
+  return generateToken({ userId: user.id, email: user.email, sv: user.sessionVersion });
+}
+
+/**
+ * Signs the user out everywhere: every token issued before this call stops
+ * working. Returns the new version, for a fresh token on the current device.
+ */
+export async function endAllSessions(userId: number): Promise<number> {
+  const { db, usersTable } = await import("@workspace/db");
+  const { eq, sql } = await import("drizzle-orm");
+  const [row] = await db.update(usersTable)
+    .set({ sessionVersion: sql`${usersTable.sessionVersion} + 1` })
+    .where(eq(usersTable.id, userId))
+    .returning({ sessionVersion: usersTable.sessionVersion });
+  return row?.sessionVersion ?? 0;
+}
+
+async function currentSessionVersion(userId: number): Promise<number | null> {
+  const { db, usersTable } = await import("@workspace/db");
+  const { eq } = await import("drizzle-orm");
+  const [row] = await db.select({ sessionVersion: usersTable.sessionVersion })
+    .from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+  return row ? row.sessionVersion : null;
 }
 
 export function verifyToken(token: string): JwtPayload {
@@ -44,7 +73,7 @@ export function verifyScopedToken<T extends object>(scope: string, token: string
   return jwt.verify(token, scopedSecret(scope)) as T & { jti: string };
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     res.status(401).json({ error: "Unauthorized", message: "Missing or invalid authorization header" });
@@ -52,13 +81,28 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   }
 
   const token = authHeader.substring(7);
+  let payload: JwtPayload;
   try {
-    const payload = verifyToken(token);
-    (req as any).user = payload;
-    next();
+    payload = verifyToken(token);
   } catch {
-    res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
+    res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token", code: "SESSION_EXPIRED" });
+    return;
   }
+
+  // A password change or reset bumps the version, ending every older session.
+  try {
+    const version = await currentSessionVersion(payload.userId);
+    if (version === null || (payload.sv ?? 0) !== version) {
+      res.status(401).json({ error: "Unauthorized", message: "You've been signed out. Please log in again.", code: "SESSION_ENDED" });
+      return;
+    }
+  } catch (err) {
+    next(err);
+    return;
+  }
+
+  (req as any).user = payload;
+  next();
 }
 
 /**

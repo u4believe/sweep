@@ -260,6 +260,8 @@ export default function Login() {
 
   // Messages for the redirects from the email-verification link (/api/auth/verify-email).
   const notice =
+    searchParams.get("signedOut") === "password" ? { tone: "warn", text: "You've been signed out because your password was changed. Log in with your new password." } :
+    searchParams.get("signedOut") === "expired"  ? { tone: "warn", text: "Your session has ended. Please log in again." } :
     verifiedParam === "true"    ? { tone: "ok",   text: "Email verified! You can now log in." } :
     verifiedParam === "already" ? { tone: "ok",   text: "Your email is already verified — log in below." } :
     errorParam === "link-expired"  ? { tone: "warn", text: "That verification link has expired. Log in below and we'll email you a code instead." } :

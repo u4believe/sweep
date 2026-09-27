@@ -36,7 +36,7 @@ import crypto from "crypto";
 import { db, usersTable, otpCodesTable, subscriptionPassportsTable } from "@workspace/db";
 import { hashEmail } from "../lib/escrow.js";
 import { eq, and, gt, ne, sql } from "drizzle-orm";
-import { requireAuth, requireEmailVerified } from "../lib/auth.js";
+import { endAllSessions, requireAuth, requireEmailVerified, sessionToken } from "../lib/auth.js";
 import { sendSecurityOtpEmail } from "../lib/email.js";
 import { logger } from "../lib/logger.js";
 import { encryptSecret, decryptSecret, generateTotpSecret, isTotpConfigured, otpauthUrl, verifyTotp } from "../lib/totp.js";
@@ -361,8 +361,10 @@ router.post("/change-login-password/confirm", requireAuth, async (req, res) => {
 
     const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
     await db.update(usersTable).set({ passwordHash }).where(eq(usersTable.id, userId));
+    // Sign out every device; this one gets a fresh token and stays signed in.
+    const sessionVersion = await endAllSessions(userId);
 
-    res.json({ success: true, message: "Login password updated successfully." });
+    res.json({ success: true, message: "Login password updated successfully.", token: sessionToken({ id: userId, email: user.email, sessionVersion }) });
   } catch (err: any) {
     if (otpErrorResponse(res, err)) return;
     logger.error({ err }, "[security/change-login-password/confirm]");
