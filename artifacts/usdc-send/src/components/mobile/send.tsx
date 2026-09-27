@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Loader2, ScanLine } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Card, OutlineButton, PrimaryButton, ScreenHeader, Segmented, SummaryRows, fmtUsd } from "@/components/sweep/ui";
 import {
   AmountInput, ErrorLine, RecipientFields, ResultRows, ReviewCard, SendHint, SentHero, TxPasswordField, UnregisteredNote,
@@ -44,7 +44,9 @@ export function MobileSend({ contacts, circleWallet, onDone, onStepChange, onSca
           <ReviewCard flow={flow} />
           <UnregisteredNote flow={flow} />
           {opts.hasTransactionPassword && (
-            <Card className="rounded-[20px] p-4"><TxPasswordField flow={flow} id="m-txpwd" /></Card>
+            flow.bio.active
+              ? <TxPasswordField flow={flow} id="m-txpwd" />
+              : <Card className="rounded-[20px] p-4"><TxPasswordField flow={flow} id="m-txpwd" /></Card>
           )}
           {flow.error && <ErrorLine message={flow.error} />}
         </div>
@@ -60,12 +62,7 @@ export function MobileSend({ contacts, circleWallet, onDone, onStepChange, onSca
   // ── Form ────────────────────────────────────────────────────────────────────
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <ScreenHeader title="Send money" right={
-        <button type="button" onClick={onScan}
-          className="h-10 px-3.5 rounded-xl border border-(--sw-line) bg-white flex items-center gap-1.5 text-[13px] font-bold text-(--sw-blue) hover:bg-(--sw-tint)">
-          <ScanLine className="w-4 h-4" /> Scan
-        </button>
-      } />
+      <ScreenHeader title="Send money" />
       <div className="px-4">
         <Segmented<SendMode> value={flow.mode} onChange={flow.setMode}
           options={[{ value: "usd", label: "Email · USD" }, { value: "usdc", label: "Wallet · USDC" }]} />
@@ -75,7 +72,7 @@ export function MobileSend({ contacts, circleWallet, onDone, onStepChange, onSca
           <AmountInput flow={flow} available={opts.available} id="m-amount" />
         </div>
         <Card className="rounded-[20px] p-4 space-y-3">
-          <RecipientFields flow={flow} contacts={contacts} circleWallet={circleWallet} idPrefix="m" />
+          <RecipientFields flow={flow} contacts={contacts} circleWallet={circleWallet} idPrefix="m" onScan={onScan} />
           <SummaryRows rows={flow.summary} className="border-t border-[#f0f2f6] pt-1" />
         </Card>
         {flow.error && <div className="mt-3"><ErrorLine message={flow.error} /></div>}

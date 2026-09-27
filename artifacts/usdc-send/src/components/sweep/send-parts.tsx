@@ -1,4 +1,4 @@
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, ScanLine } from "lucide-react";
 import { cn, secretInputProps } from "@/lib/utils";
 import { WITHDRAWAL_CHAINS } from "@/lib/wallet";
 import { Card, Chip, Field, SummaryRows, fmtUsd, shortAddr } from "./ui";
@@ -35,18 +35,31 @@ export function AmountInput({ flow, available, size = "lg", id }: {
   );
 }
 
-export function RecipientFields({ flow, contacts, circleWallet, idPrefix }: {
+export function RecipientFields({ flow, contacts, circleWallet, idPrefix, onScan }: {
   flow: SendFlow;
   contacts: string[];
   circleWallet?: string;
   idPrefix: string;
+  /** Shows a scan button beside the payment ID field. */
+  onScan?: () => void;
 }) {
   if (flow.usd) {
+    const idField = (
+      <Field id={`${idPrefix}-email`} value={flow.email} onChange={(e) => flow.setEmail(e.target.value)} inputMode="email" type="email"
+        autoComplete="off" autoCapitalize="none" placeholder="Their email, e.g. satoshi@example.com" />
+    );
     return (
       <div className="space-y-2.5">
         <label htmlFor={`${idPrefix}-email`} className="block text-[13px] font-bold text-(--sw-label)">To · Sweep payment ID</label>
-        <Field id={`${idPrefix}-email`} value={flow.email} onChange={(e) => flow.setEmail(e.target.value)} inputMode="email" type="email"
-          autoComplete="off" autoCapitalize="none" placeholder="Their email, e.g. satoshi@example.com" />
+        {onScan ? (
+          <div className="grid grid-cols-[1fr_52px] gap-2">
+            {idField}
+            <button type="button" onClick={onScan} aria-label="Scan QR code"
+              className="h-[52px] rounded-xl border border-(--sw-tint-line) bg-(--sw-tint) text-(--sw-blue) grid place-items-center hover:bg-[#e0e5ff]">
+              <ScanLine className="w-[22px] h-[22px]" />
+            </button>
+          </div>
+        ) : idField}
         {contacts.length > 0 && (
           <div className="flex gap-2 overflow-x-auto [scrollbar-width:none] flex-wrap">
             {contacts.map((c, i) => (
@@ -129,12 +142,8 @@ export function UnregisteredNote({ flow }: { flow: SendFlow }) {
 export function TxPasswordField({ flow, id }: { flow: SendFlow; id: string }) {
   if (flow.bio.active) {
     return (
-      <div className="flex items-center justify-between gap-3">
-        <span className="min-w-0">
-          <span className="block text-[13px] font-bold text-(--sw-label)">Approve with {flow.biometricName}</span>
-          <span className="block text-xs text-(--sw-muted)">You'll be asked when you tap Sweep.</span>
-        </span>
-        <button type="button" onClick={() => flow.bio.setUsePassword(true)} className="text-[13px] font-bold text-(--sw-blue) whitespace-nowrap">Use password instead</button>
+      <div className="flex justify-center">
+        <button type="button" onClick={() => flow.bio.setUsePassword(true)} className="text-[13px] font-bold text-(--sw-blue) whitespace-nowrap py-1">Use password instead</button>
       </div>
     );
   }

@@ -2,8 +2,8 @@ import { secretInputProps } from "@/lib/utils";
 import { BIOMETRIC_NAME, type useBiometricApproval } from "@/lib/biometric";
 
 /**
- * "Approve with Face ID / fingerprint" when this device is set up (with
- * "Use password instead"), otherwise the transaction password field.
+ * Just a "Use password instead" link when this device approves with Face ID /
+ * fingerprint, otherwise the transaction password field.
  */
 export function ApprovalField({ bio, id, value, onChange, placeholder, fieldClass, labelClass }: {
   bio: ReturnType<typeof useBiometricApproval>;
@@ -16,12 +16,8 @@ export function ApprovalField({ bio, id, value, onChange, placeholder, fieldClas
 }) {
   if (bio.active) {
     return (
-      <div className="flex items-center justify-between gap-3 rounded-2xl bg-(--sw-tint) px-4 py-3">
-        <span className="min-w-0">
-          <span className="block text-[13px] font-bold text-(--sw-ink)">Approve with {BIOMETRIC_NAME}</span>
-          <span className="block text-xs text-(--sw-muted)">You'll be asked when you confirm.</span>
-        </span>
-        <button type="button" onClick={() => bio.setUsePassword(true)} className="text-[13px] font-bold text-(--sw-blue) whitespace-nowrap">Use password instead</button>
+      <div className="flex justify-center">
+        <button type="button" onClick={() => bio.setUsePassword(true)} className="text-[13px] font-bold text-(--sw-blue) whitespace-nowrap py-1">Use password instead</button>
       </div>
     );
   }

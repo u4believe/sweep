@@ -181,7 +181,7 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
         if (!res.ok) throw new Error(json.message ?? "Failed to send payment");
         setResult({
           mode, amount: a, received: fmtUsd(a), to: preview?.name || to,
-          kicker: json.credited ? "DELIVERED BY EMAIL" : "HELD UNTIL THEY JOIN",
+          kicker: json.credited ? "DELIVERED BY ID" : "HELD UNTIL THEY JOIN",
           status: json.credited ? "Delivered" : "Awaiting signup",
           newBalance: json.remainingBalance ?? null,
         });
