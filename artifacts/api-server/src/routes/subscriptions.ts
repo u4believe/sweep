@@ -2,7 +2,8 @@
  * Subscription routes — Creator Class (Document 1 of 2).
  *
  * Plan management (creator):
- *   POST /api/subscriptions/plans              — create subscription plan
+ *   POST /api/subscriptions/plans/request-otp  — email the code to publish a plan (2FA accounts only)
+ *   POST /api/subscriptions/plans              — create a plan (email code + authenticator code)
  *   GET  /api/subscriptions/plans              — list creator's own plans
  *
  * Public lookup (subscriber — no auth):
@@ -47,6 +48,7 @@ import {
   sendPassportCreatedEmail,
   sendSubscriptionActivatedEmail,
   sendSubscriptionCancelledEmail,
+  sendSecurityOtpEmail,
   sendSubscriptionBillingSuccessEmail,
   sendCreatorRenewalEmail,
 } from "../lib/email.js";
@@ -58,7 +60,8 @@ import {
   SelfPaymentError,
 } from "../lib/ledger.js";
 import { logger } from "../lib/logger.js";
-import { issueOtp, otpErrorResponse, verifyOtp } from "../lib/otp.js";
+import { consumeOtp, findOtp, issueOtp, otpErrorResponse, verifyOtp } from "../lib/otp.js";
+import { checkUserTotp, hasTotp } from "../lib/two-factor.js";
 
 const router: IRouter = Router();
 
@@ -101,6 +104,27 @@ function advanceBillingDate(from: Date, interval: Interval): Date {
   return next;
 }
 
+// ── POST /api/subscriptions/plans/request-otp ────────────────────────────────
+// Emails the code needed to publish a plan. Only for accounts with 2FA on.
+
+router.post("/plans/request-otp", requireAuth, requireEmailVerified, async (req, res) => {
+  try {
+    const user = (req as any).user as { userId: number };
+    const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.userId)).limit(1);
+    if (!dbUser || !hasTotp(dbUser)) {
+      res.status(403).json({ error: "Two-factor required", code: "TWO_FACTOR_REQUIRED", message: "Turn on two-factor authentication in Settings to publish subscription plans." });
+      return;
+    }
+    const code = await issueOtp(dbUser.id, "plan-create");
+    await sendSecurityOtpEmail(dbUser.email, code, "plan-create");
+    res.json({ sent: true, message: "We emailed you a 6-digit code." });
+  } catch (err: any) {
+    if (otpErrorResponse(res, err)) return;
+    logger.error({ err: err.message }, "[subscriptions] Plan OTP error");
+    res.status(500).json({ error: "Internal server error", message: err.message });
+  }
+});
+
 // ── POST /api/subscriptions/plans ─────────────────────────────────────────────
 
 router.post("/plans", requireAuth, requireEmailVerified, async (req, res) => {
@@ -115,14 +139,15 @@ router.post("/plans", requireAuth, requireEmailVerified, async (req, res) => {
       intervals:     { interval: string; amount: string }[];
     };
 
-    const { paymentEmail, planTitle, intervals, tiers, hasFreeTrial, trialDurationDays, pak } = req.body as {
+    const { paymentEmail, planTitle, intervals, tiers, hasFreeTrial, trialDurationDays, otp, totp } = req.body as {
       paymentEmail?:      string;
       planTitle?:         string;
       intervals?:         { interval: string; amount: string }[];
       tiers?:             TierInput[];
       hasFreeTrial?:      boolean;
       trialDurationDays?: number;
-      pak?:               string;
+      otp?:               string;
+      totp?:              string;
     };
 
     const isTiered = Array.isArray(tiers) && tiers.length > 0;
@@ -178,8 +203,8 @@ router.post("/plans", requireAuth, requireEmailVerified, async (req, res) => {
       }
     }
 
-    if (!pak?.trim()) {
-      res.status(400).json({ error: "Validation", message: "PAK is required" });
+    if (typeof otp !== "string" || !otp.trim() || typeof totp !== "string" || !totp.trim()) {
+      res.status(400).json({ error: "Validation", message: "Enter the code from your email and the code from your authenticator app" });
       return;
     }
     if (hasFreeTrial && (!trialDurationDays || trialDurationDays < 1)) {
@@ -187,19 +212,35 @@ router.post("/plans", requireAuth, requireEmailVerified, async (req, res) => {
       return;
     }
 
-    // Verify PAK
+    // Publishing needs 2FA on, plus an email code and an authenticator code.
+    // The email code is only used up once the authenticator code is right too.
     const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.userId)).limit(1);
-    if (!dbUser?.pakHash) {
-      res.status(403).json({ error: "Forbidden", message: "You must generate a PAK before creating subscription plans" });
+    if (!dbUser || !hasTotp(dbUser)) {
+      res.status(403).json({ error: "Two-factor required", code: "TWO_FACTOR_REQUIRED", message: "Turn on two-factor authentication in Settings to publish subscription plans." });
       return;
     }
-    const pakValid = await bcrypt.compare(pak, dbUser.pakHash);
-    if (!pakValid) {
-      res.status(403).json({ error: "Forbidden", message: "Invalid PAK" });
+    let otpId: number | null;
+    try {
+      otpId = await findOtp(dbUser.id, otp, "plan-create");
+    } catch (err) {
+      if (otpErrorResponse(res, err)) return;
+      throw err;
+    }
+    if (otpId === null) {
+      res.status(401).json({ error: "Invalid code", code: "OTP_INVALID", message: "The email code is incorrect or has expired." });
+      return;
+    }
+    if (!(await checkUserTotp(dbUser, totp))) {
+      res.status(401).json({ error: "Invalid authenticator code", code: "TOTP_INVALID", message: "That authenticator code is incorrect or has already been used." });
+      return;
+    }
+    if (!(await consumeOtp(otpId))) {
+      res.status(401).json({ error: "Invalid code", code: "OTP_INVALID", message: "The email code is incorrect or has expired." });
       return;
     }
 
-    const pakHash = dbUser.pakHash;
+    // Plans record how they were authorized; "dev-api-plan" marks developer-API plans
+    const pakHash = "creator-2fa";
 
     // Generate ONE unique Merchant ID for the entire plan
     let merchantId: string;

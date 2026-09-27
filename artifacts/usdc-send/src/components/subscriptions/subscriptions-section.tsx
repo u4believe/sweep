@@ -82,11 +82,12 @@ export function useMySubscriptions() {
   });
 }
 
-export function SubscriptionsSection({ user, available, onScan, onAddMoney }: {
+export function SubscriptionsSection({ user, available, onScan, onAddMoney, onOpenSettings }: {
   user: { name: string; email: string };
   available: number;
   onScan: () => void;
   onAddMoney: () => void;
+  onOpenSettings?: () => void;
 }) {
   const [view, setView] = useState<View>({ kind: "list", tab: "subscribed" });
   const subs  = useMySubscriptions();
@@ -107,7 +108,7 @@ export function SubscriptionsSection({ user, available, onScan, onAddMoney }: {
   if (view.kind === "create") {
     return (
       <SubView title="New subscription plan" sub="Subscribers are billed automatically from their Sweep balance" onBack={() => { refresh(); toList("selling"); }}>
-        <CreatePlan user={user} />
+        <CreatePlan user={user} onOpenSettings={onOpenSettings} />
       </SubView>
     );
   }

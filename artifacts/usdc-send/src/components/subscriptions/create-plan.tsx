@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Check, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SPAM_HINT, codeAlreadySentMessage } from "@/lib/auth-session";
 import { API_BASE } from "@/lib/api";
 import { authHeaders } from "@/lib/wallet";
 import { merchantQrUrl } from "@/lib/pay-qr";
@@ -35,7 +37,7 @@ const newTier = (name = "", features: string[] = []): Tier => ({ key: ++tierKey,
 const field = "h-12 w-full min-w-0 rounded-xl border border-(--sw-field-line) bg-white px-3.5 text-[15px] font-medium text-(--sw-ink) outline-none placeholder:text-[#9aa4b5] focus:border-(--sw-blue) focus:shadow-[0_0_0_4px_rgb(17_40_245/.1)] transition";
 const kicker = "text-xs font-bold tracking-[0.06em] text-(--sw-faint) uppercase";
 
-export function CreatePlan({ user }: { user: { name: string; email: string } }) {
+export function CreatePlan({ user, onOpenSettings }: { user: { name: string; email: string }; onOpenSettings?: () => void }) {
   const [title,       setTitle]       = useState("");
   const [structure,   setStructure]   = useState<"simple" | "tiered">("simple");
   const [simpleRows,  setSimpleRows]  = useState<Array<{ interval: Interval; price: string }>>([{ interval: "monthly", price: "" }]);
@@ -50,8 +52,19 @@ export function CreatePlan({ user }: { user: { name: string; email: string } }) 
   const [recommended, setRecommended] = useState(1);
   const [trial,       setTrial]       = useState(false);
   const [trialDays,   setTrialDays]   = useState(7);
-  const [pak,         setPak]         = useState("");
-  const [showPak,     setShowPak]     = useState(false);
+  // Publishing needs 2FA: an email code plus an authenticator code
+  const security = useQuery({
+    queryKey: ["/api/security/status"],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE}/api/security/status`, { headers: authHeaders() });
+      return res.ok ? ((await res.json()) as { twoFactorEnabled?: boolean }) : null;
+    },
+  });
+  const twoFactor = !!security.data?.twoFactorEnabled;
+  const [emailCode,   setEmailCode]   = useState("");
+  const [authCode,    setAuthCode]    = useState("");
+  const [codeState,   setCodeState]   = useState<"idle" | "sending" | "sent">("idle");
+  const [codeMsg,     setCodeMsg]     = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const [previewIv,   setPreviewIv]   = useState<Interval | null>(null);
   const [busy,        setBusy]        = useState(false);
   const [error,       setError]       = useState<string | null>(null);
@@ -68,8 +81,23 @@ export function CreatePlan({ user }: { user: { name: string; email: string } }) 
     !title.trim()                                     ? "Name your plan to continue" :
     structure === "simple" ? (!simpleOk ? "Add a price for every interval" : null)
                            : (!tiersOk ? "Name every tier and price every interval" : null);
-  const hint = blocker ?? (pak.trim() ? "Ready to publish" : "Enter your authorization key to publish");
-  const canPublish = !blocker && !!pak.trim() && !busy;
+  const authReady = twoFactor && emailCode.length === 6 && authCode.length === 6;
+  const hint = blocker ?? (!twoFactor ? "Turn on 2FA to publish" : authReady ? "Ready to publish" : "Enter both codes to publish");
+  const canPublish = !blocker && authReady && !busy;
+
+  const sendCode = async () => {
+    setCodeState("sending"); setCodeMsg(null);
+    try {
+      const res  = await fetch(`${API_BASE}/api/subscriptions/plans/request-otp`, { method: "POST", headers: authHeaders(true) });
+      const json = await res.json().catch(() => ({}));
+      if (res.status === 429 && json.retryAfterSec) { setCodeState("sent"); setCodeMsg({ tone: "warn", text: codeAlreadySentMessage(json.retryAfterSec) }); return; }
+      if (!res.ok) throw new Error(json.message ?? "Couldn't send the code");
+      setCodeState("sent"); setEmailCode("");
+      setCodeMsg({ tone: "ok", text: `We emailed a 6-digit code to ${user.email}.` });
+    } catch (e: any) {
+      setCodeState("idle"); setCodeMsg({ tone: "warn", text: e?.message ?? "Couldn't send the code" });
+    }
+  };
 
   const pvList = structure === "simple" ? simpleRows.map((r) => r.interval) : ivs;
   const pvIv   = previewIv && pvList.includes(previewIv) ? previewIv : pvList[0] ?? "monthly";
@@ -118,15 +146,19 @@ export function CreatePlan({ user }: { user: { name: string; email: string } }) 
       const res  = await fetch(`${API_BASE}/api/subscriptions/plans`, {
         method: "POST", headers: authHeaders(true),
         body: JSON.stringify({
-          planTitle, paymentEmail: user.email, pak: pak.trim(),
+          planTitle, paymentEmail: user.email, otp: emailCode, totp: authCode,
           hasFreeTrial: trial, trialDurationDays: trial ? trialDays : undefined,
           ...(tiersBody ? { tiers: tiersBody } : { intervals: simpleRows.map((r) => ({ interval: r.interval, amount: num(r.price).toFixed(2) })) }),
         }),
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.message ?? "Failed to create plan");
+      if (!res.ok) {
+        if (json.code === "TOTP_INVALID") setAuthCode("");
+        if (json.code === "OTP_INVALID" || json.code === "OTP_LOCKED") setEmailCode("");
+        throw new Error(json.message ?? "Failed to create plan");
+      }
       setPublished({ name: planTitle, merchantId: json.plan?.merchantId ?? "" });
-      setPak("");
+      setEmailCode(""); setAuthCode(""); setCodeState("idle"); setCodeMsg(null);
     } catch (e: any) {
       setError(e?.message ?? "Failed to create plan");
     } finally {
@@ -306,21 +338,58 @@ export function CreatePlan({ user }: { user: { name: string; email: string } }) 
             </Section>
 
             <Section n="04" title="Authorize">
-              <Label htmlFor="plan-pak">Authorization key</Label>
-              <div className="relative">
-                <input id="plan-pak" type={showPak ? "text" : "password"} value={pak} onChange={(e) => setPak(e.target.value)}
-                  placeholder="Your payment authorization key" autoComplete="off" className={cn(field, "pr-16 font-mono")} />
-                <button type="button" onClick={() => setShowPak(!showPak)}
-                  className="absolute inset-y-0 right-0 px-3.5 text-[13px] font-bold text-(--sw-blue)">{showPak ? "Hide" : "Show"}</button>
-              </div>
-              <p className="text-xs text-(--sw-muted)">The key you created when you set up your account. It confirms plans you publish are yours.</p>
+              {security.isLoading ? (
+                <p className="text-sm text-(--sw-muted) flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Checking your security settings…</p>
+              ) : !twoFactor ? (
+                <div className="rounded-2xl border border-[#fedf89] bg-[#fffaeb] px-4 py-4 flex flex-col gap-3">
+                  <span className="min-w-0">
+                    <span className="block text-[15px] font-bold text-[#93370d]">Two-factor authentication required</span>
+                    <span className="block text-[13px] text-[#b54708] mt-0.5">
+                      To publish plans, turn on an authenticator app in Settings. Each new plan is confirmed with a code from your email and a code from the app.
+                    </span>
+                  </span>
+                  {onOpenSettings && (
+                    <button type="button" onClick={onOpenSettings}
+                      className="self-start h-10 px-4 rounded-xl bg-[#93370d] text-white text-sm font-bold">Turn on 2FA in Settings</button>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <p className="text-[13px] text-(--sw-muted) -mt-1">Confirm it's you with a code from your email and one from your authenticator app.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="plan-email-code">Email code</Label>
+                      <div className="flex gap-2">
+                        <input id="plan-email-code" value={emailCode} onChange={(e) => setEmailCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                          inputMode="numeric" autoComplete="one-time-code" placeholder="6-digit code"
+                          className={cn(field, "flex-1 tabular-nums tracking-[0.2em] placeholder:tracking-normal")} />
+                        <button type="button" onClick={sendCode} disabled={codeState === "sending"}
+                          className="h-12 px-3.5 rounded-xl border border-(--sw-tint-line) bg-white text-(--sw-blue) text-sm font-bold hover:bg-(--sw-tint) disabled:opacity-50 shrink-0 whitespace-nowrap">
+                          {codeState === "sending" ? <Loader2 className="w-4 h-4 animate-spin" /> : codeState === "sent" ? "Resend" : "Send code"}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="plan-auth-code">Authenticator code</Label>
+                      <input id="plan-auth-code" value={authCode} onChange={(e) => setAuthCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                        inputMode="numeric" autoComplete="one-time-code" placeholder="From your app"
+                        className={cn(field, "tabular-nums tracking-[0.2em] placeholder:tracking-normal")} />
+                    </div>
+                  </div>
+                  {codeMsg && (
+                    <p role="status" className={cn("rounded-xl px-3.5 py-2.5 text-sm font-medium",
+                      codeMsg.tone === "ok" ? "bg-[#ecfdf3] text-[#067647]" : "bg-[#fffaeb] text-[#b54708]")}>{codeMsg.text}</p>
+                  )}
+                  {codeState === "sent" && <p className="text-xs text-(--sw-muted)">{SPAM_HINT}</p>}
+                </>
+              )}
             </Section>
 
             <div className="px-5 sm:px-6 py-5 bg-[#fafbfc] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="min-w-0">
                 {error
                   ? <p role="alert" className="text-sm font-semibold text-[#b42318]">{error}</p>
-                  : <p className={cn("text-sm font-semibold", blocker || !pak.trim() ? "text-(--sw-muted)" : "text-[#067647]")}>{hint}</p>}
+                  : <p className={cn("text-sm font-semibold", blocker || !authReady ? "text-(--sw-muted)" : "text-[#067647]")}>{hint}</p>}
               </div>
               <button type="button" onClick={publish} disabled={!canPublish}
                 className="h-12 px-6 rounded-2xl bg-(--sw-blue) text-white font-bold text-[15px] hover:bg-(--sw-blue-hover) disabled:bg-[#c5ccd8] disabled:cursor-not-allowed flex items-center justify-center gap-2 shrink-0">

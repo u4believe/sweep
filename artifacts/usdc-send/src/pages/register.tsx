@@ -9,7 +9,7 @@ import { OPEN_FUND_KEY } from "@/lib/pay-qr";
 import { finishSignIn, TWO_FACTOR_CHALLENGE_KEY, codeAlreadySentMessage, SPAM_HINT } from "@/lib/auth-session";
 import { GoogleSignInButton, useAuthConfig, type GoogleAuthResult } from "@/components/auth/google-sign-in";
 import { AuthError, NightAuthShell, NightTitle, authPrimary, nightField } from "@/components/auth/auth-shell";
-import { cn } from "@/lib/utils";
+import { cn, secretInputProps } from "@/lib/utils";
 
 // v5 sign-up: account → email code → transaction password → authorization key → done.
 // The email code signs the user in, so steps 3–4 run with a session; anyone who
@@ -340,8 +340,8 @@ export default function Register() {
           {codeNotice && <p role="status" className="rounded-2xl bg-[#fffaeb] text-[#b54708] px-4 py-3 text-sm font-medium">{codeNotice}</p>}
           <label htmlFor="reg-code" className="sr-only">Verification code</label>
           <input id="reg-code" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-            inputMode="numeric" autoComplete="one-time-code" placeholder="••••••" autoFocus
-            className="h-16 rounded-2xl border border-(--sw-field-line) bg-white px-5 text-center text-[28px] font-extrabold tracking-[0.5em] outline-none placeholder:text-[#c5ccd8] focus:border-(--sw-blue) focus:shadow-[0_0_0_4px_rgb(17_40_245/.1)] transition" />
+            inputMode="numeric" autoComplete="one-time-code" placeholder="Enter code" autoFocus
+            className="h-16 rounded-2xl border border-(--sw-field-line) bg-white px-5 text-center text-[28px] font-extrabold tracking-[0.5em] outline-none placeholder:text-[#c5ccd8] placeholder:text-lg placeholder:font-semibold placeholder:tracking-normal focus:border-(--sw-blue) focus:shadow-[0_0_0_4px_rgb(17_40_245/.1)] transition" />
           <button type="submit" disabled={isPending || code.length < 6} className={primary}>
             {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify email"}
           </button>
@@ -360,12 +360,12 @@ export default function Register() {
           <div className="flex flex-col gap-2">
             <label htmlFor="reg-tx1" className={label}>Transaction password</label>
             <input id="reg-tx1" type="password" value={tx1} onChange={(e) => setTx1(e.target.value)}
-              placeholder="At least 6 characters" autoComplete="new-password" autoFocus className={nightField} />
+              placeholder="At least 6 characters" {...secretInputProps} autoFocus className={nightField} />
           </div>
           <div className="flex flex-col gap-2">
             <label htmlFor="reg-tx2" className={label}>Confirm</label>
             <input id="reg-tx2" type="password" value={tx2} onChange={(e) => setTx2(e.target.value)}
-              placeholder="Type it again" autoComplete="new-password"
+              placeholder="Type it again" {...secretInputProps}
               className={cn(nightField, txMismatch && "border-[#f04438] focus:border-[#f04438]")} />
             <span className="text-xs font-semibold text-[#b42318] min-h-4" role="status">{txMismatch ? "Passwords don't match" : ""}</span>
           </div>
@@ -377,7 +377,7 @@ export default function Register() {
 
       {step === "key" && (
         <div className="flex flex-col gap-[18px]">
-          <NightTitle title="Save your authorization key" sub="This 40-character key proves it's you when you publish plans or change your passwords. We can't show it again." />
+          <NightTitle title="Save your authorization key" sub="This 40-character key proves it's you when you change your passwords or security settings. We can't show it again." />
           <AuthError message={error} />
           <div className="bg-(--sw-navy) text-white rounded-[18px] p-5 flex flex-col gap-3.5">
             {pak ? (

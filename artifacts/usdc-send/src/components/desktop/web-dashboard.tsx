@@ -178,7 +178,7 @@ export function WebDashboard({ user, balance, depositAddresses, withdraw, onBala
         )}
 
         {page === "subs" && (
-          <SubscriptionsSection user={user} available={available} onScan={qr.openScan} onAddMoney={() => setFundOpen(true)} />
+          <SubscriptionsSection user={user} available={available} onScan={qr.openScan} onAddMoney={() => setFundOpen(true)} onOpenSettings={() => setPage("settings")} />
         )}
 
         {page === "settings" && (

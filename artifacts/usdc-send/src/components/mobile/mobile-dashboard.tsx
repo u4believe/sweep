@@ -110,7 +110,7 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
 
           {screen === "subs" && (
             <SubScreen title="Subscriptions" onBack={() => setScreen(backTo)} bare>
-              <SubscriptionsSection user={user} available={available} onScan={qr.openScan} onAddMoney={() => setScreen("fund")} />
+              <SubscriptionsSection user={user} available={available} onScan={qr.openScan} onAddMoney={() => setScreen("fund")} onOpenSettings={() => go("settings", "subs")} />
             </SubScreen>
           )}
 
