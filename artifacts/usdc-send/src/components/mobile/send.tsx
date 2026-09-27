@@ -6,12 +6,13 @@ import {
 } from "@/components/sweep/send-parts";
 import { useSendFlow, type SendFlowOptions, type SendMode, type SendStep } from "@/components/sweep/use-send-flow";
 
-export function MobileSend({ contacts, circleWallet, onDone, onStepChange, onScan, ...opts }: SendFlowOptions & {
+export function MobileSend({ contacts, circleWallet, onDone, onBack, onStepChange, onScan, ...opts }: SendFlowOptions & {
   contacts: string[];
   circleWallet?: string;
   onDone: () => void;
   onStepChange: (step: SendStep) => void;
   onScan: () => void;
+  onBack: () => void;
 }) {
   const flow = useSendFlow(opts);
 
@@ -62,7 +63,7 @@ export function MobileSend({ contacts, circleWallet, onDone, onStepChange, onSca
   // ── Form ────────────────────────────────────────────────────────────────────
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <ScreenHeader title="Send money" />
+      <ScreenHeader title="Send money" onBack={onBack} />
       <div className="px-4">
         <Segmented<SendMode> value={flow.mode} onChange={flow.setMode}
           options={[{ value: "usd", label: "Email · USD" }, { value: "usdc", label: "Wallet · USDC" }]} />

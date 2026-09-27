@@ -187,7 +187,7 @@ export function WebDashboard({ user, balance, depositAddresses, withdraw, onBala
       </main>
 
       <AnimatePresence>
-        {fundOpen && <AddMoneyDialog addresses={depositAddresses} onClose={() => setFundOpen(false)} />}
+        {fundOpen && <AddMoneyDialog addresses={depositAddresses} user={{ name: user.name, paymentId: user.email }} onClose={() => setFundOpen(false)} />}
       </AnimatePresence>
       {qr.dialogs}
     </div>
@@ -381,7 +381,11 @@ function HistoryTable({ txs, state, hasMore, loadingMore, onLoadMore }: {
 
 // ── Add money dialog ──────────────────────────────────────────────────────────
 
-function AddMoneyDialog({ addresses, onClose }: { addresses: Record<string, string>; onClose: () => void }) {
+function AddMoneyDialog({ addresses, user, onClose }: {
+  addresses: Record<string, string>;
+  user: { name: string; paymentId: string };
+  onClose: () => void;
+}) {
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     closeRef.current?.focus();
@@ -405,7 +409,7 @@ function AddMoneyDialog({ addresses, onClose }: { addresses: Record<string, stri
             <X className="w-5 h-5" />
           </button>
         </div>
-        <AddMoney addresses={addresses} inset />
+        <AddMoney addresses={addresses} user={user} inset />
       </motion.div>
     </motion.div>
   );

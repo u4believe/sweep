@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { History, Repeat, ScanLine, Send } from "lucide-react";
+import { History, LayoutGrid, QrCode, Repeat, ScanLine, Send, Settings, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FullBalance, UnifiedTx } from "@/lib/wallet";
 import {
@@ -31,6 +31,7 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
   const [backTo,   setBackTo]   = useState<Screen>("home");
   const [sendStep, setSendStep] = useState<SendStep>("form");
   const [payTo,    setPayTo]    = useState(initialPayTo ? { id: initialPayTo, n: 1 } : null);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   const qr = usePayQr({
     name: user.name, paymentId: user.email,
@@ -65,7 +66,7 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
             <HomeScreen
               user={user} balance={balance}
               txs={txs.slice(0, 5)} historyState={history}
-              go={(s) => go(s, "home")} onScan={qr.openScan}
+              go={(s) => go(s, "home")} onScan={qr.openScan} onMore={() => setMoreOpen(true)}
             />
           )}
 
@@ -87,13 +88,14 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
               withdraw={withdraw}
               onSent={onBalanceChanged}
               onDone={() => setScreen("home")}
+              onBack={() => setScreen("home")}
               onStepChange={setSendStep}
               onScan={qr.openScan}
               prefillTo={payTo}
             />
           )}
 
-          {screen === "fund" && <FundScreen addresses={depositAddresses} />}
+          {screen === "fund" && <FundScreen addresses={depositAddresses} user={{ name: user.name, paymentId: user.email }} onBack={() => setScreen("home")} />}
 
           {screen === "me" && (
             <MeScreen
@@ -114,12 +116,24 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
             </SubScreen>
           )}
 
-          {screen === "settings" && <SubScreen title="Settings" onBack={() => setScreen("me")} bare>{slots.settings}</SubScreen>}
+          {screen === "settings" && <SubScreen title="Settings" onBack={() => setScreen(backTo === "home" ? "home" : "me")} bare>{slots.settings}</SubScreen>}
           {screen === "support"  && <SubScreen title="Support"  onBack={() => setScreen("me")} bare>{slots.support}</SubScreen>}
         </motion.div>
       </AnimatePresence>
 
       {qr.dialogs}
+
+      <AnimatePresence>
+        {moreOpen && (
+          <MoreSheet onClose={() => setMoreOpen(false)} items={[
+            { label: "History",       icon: <History className="w-5 h-5" />,  onClick: () => go("history", "home") },
+            { label: "Recurring",     icon: <Repeat className="w-5 h-5" />,   onClick: () => go("recurring", "home") },
+            { label: "Subscriptions", icon: <Wallet className="w-5 h-5" />,   onClick: () => go("subs", "home") },
+            { label: "My QR code",    icon: <QrCode className="w-5 h-5" />,   onClick: qr.openMyQr },
+            { label: "Settings",      icon: <Settings className="w-5 h-5" />, onClick: () => go("settings", "home") },
+          ]} />
+        )}
+      </AnimatePresence>
 
       {showTabs && (
         <nav aria-label="Main" className="flex-none grid grid-cols-4 gap-1.5 px-3 pt-2.5 pb-[max(env(safe-area-inset-bottom),14px)] bg-white border-t border-(--sw-line)">
@@ -141,13 +155,14 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
 
 // ── Home ──────────────────────────────────────────────────────────────────────
 
-function HomeScreen({ user, balance, txs, historyState, go, onScan }: {
+function HomeScreen({ user, balance, txs, historyState, go, onScan, onMore }: {
   user: MobileDashboardProps["user"];
   balance: FullBalance | undefined;
   txs: UnifiedTx[];
   historyState: HistoryState;
   go: (s: Screen) => void;
   onScan: () => void;
+  onMore: () => void;
 }) {
   const { hidden: hide, toggle: toggleHide } = useHiddenBalance();
 
@@ -159,7 +174,7 @@ function HomeScreen({ user, balance, txs, historyState, go, onScan }: {
     { label: "Sweep",     icon: <img src="/sweep-mark-blue.svg" alt="" className="w-[22px]" />, onClick: () => go("send") },
     { label: "Scan",      icon: <ScanLine className="w-[22px] h-[22px]" />, onClick: onScan },
     { label: "Recurring", icon: <Repeat className="w-[22px] h-[22px]" />,   onClick: () => go("recurring") },
-    { label: "History",   icon: <History className="w-[22px] h-[22px]" />,  onClick: () => go("history") },
+    { label: "More",      icon: <LayoutGrid className="w-[22px] h-[22px]" />, onClick: onMore },
   ];
 
   return (
@@ -265,12 +280,16 @@ function HistoryScreen({ txs, onBack, hasMore, loadingMore, onLoadMore, state }:
 
 // ── Add money ─────────────────────────────────────────────────────────────────
 
-function FundScreen({ addresses }: { addresses: Record<string, string> }) {
+function FundScreen({ addresses, user, onBack }: {
+  addresses: Record<string, string>;
+  user: { name: string; paymentId: string };
+  onBack: () => void;
+}) {
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <ScreenHeader title="Add money" />
+      <ScreenHeader title="Add money" onBack={onBack} />
       <div className="flex-1 overflow-y-auto min-h-0 px-4 pb-5">
-        <AddMoney addresses={addresses} />
+        <AddMoney addresses={addresses} user={user} />
       </div>
     </div>
   );
@@ -341,5 +360,40 @@ function SubScreen({ title, onBack, toolbar, bare, children }: {
         {bare ? children : <Card className="p-4">{children}</Card>}
       </div>
     </div>
+  );
+}
+
+// ── More (bottom sheet from the home quick actions) ───────────────────────────
+
+function MoreSheet({ items, onClose }: {
+  items: Array<{ label: string; icon: ReactNode; onClick: () => void }>;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}
+      onClick={onClose} className="fixed inset-0 z-40 bg-[rgb(11_18_32/.4)] flex flex-col justify-end">
+      <motion.div role="dialog" aria-modal="true" aria-labelledby="more-title"
+        initial={{ y: 40 }} animate={{ y: 0 }} exit={{ y: 40 }} transition={{ duration: 0.18 }}
+        onClick={(e) => e.stopPropagation()}
+        className="sweep-ui bg-white rounded-t-[28px] px-4 pt-2.5 pb-[max(env(safe-area-inset-bottom),30px)] flex flex-col gap-3.5">
+        <span aria-hidden className="self-center w-10 h-[5px] rounded-full bg-[#d0d5dd]" />
+        <h2 id="more-title" className="font-extrabold text-lg tracking-[-0.02em] px-1">More</h2>
+        <div className="grid grid-cols-3 gap-2.5">
+          {items.map((it) => (
+            <button key={it.label} type="button" onClick={() => { onClose(); it.onClick(); }}
+              className="flex flex-col items-center gap-2 px-1 py-3.5 rounded-[18px] border border-(--sw-line) text-xs font-semibold text-(--sw-label) hover:border-[#c9d0fd] active:scale-[.98] transition">
+              <span className="w-11 h-11 rounded-[14px] bg-(--sw-tint) text-(--sw-blue) grid place-items-center">{it.icon}</span>
+              {it.label}
+            </button>
+          ))}
+        </div>
+      </motion.div>
+    </motion.div>
   );
 }

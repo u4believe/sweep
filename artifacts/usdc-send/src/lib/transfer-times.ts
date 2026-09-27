@@ -1,34 +1,30 @@
-// Measured on each network (testnet): how long until a crypto deposit is credited
-// ("Completed") and until a withdrawal lands. Deposits show up on the dashboard as
-// pending well before that. Update these when timings change (e.g. on mainnet).
+// Measured on each network (testnet). Update these when timings change (e.g. on mainnet).
+//   arrival:    a crypto deposit shows up on the dashboard (as pending)
+//   completion: the deposit is credited ("Completed")
+//   withdrawal: a withdrawal is completed
 
-/** Minutes until a deposit is credited to the balance. */
-const DEPOSIT_MIN: Record<string, number> = {
-  "ARC-TESTNET":  1,
-  "BASE-SEPOLIA": 6,
-  "ARB-SEPOLIA":  4,
-  "OP-SEPOLIA":   4,
-  "MATIC-AMOY":   1,
-  "AVAX-FUJI":    1,
-  "SOL-DEVNET":   1,
+const DEPOSIT: Record<string, { arrival: string; completion: string }> = {
+  "ARC-TESTNET":  { arrival: "Within 15s", completion: "~30s" },
+  "AVAX-FUJI":    { arrival: "Within 15s", completion: "~30s" },
+  "SOL-DEVNET":   { arrival: "Within 15s", completion: "~30s" },
+  "BASE-SEPOLIA": { arrival: "Within 20s", completion: "~6 min" },
+  "ARB-SEPOLIA":  { arrival: "Within 20s", completion: "~4 min" },
+  "OP-SEPOLIA":   { arrival: "Within 20s", completion: "~4 min" },
+  "MATIC-AMOY":   { arrival: "Within 30s", completion: "~1 min" },
 };
 
-/** Minutes until a withdrawal is completed. Chains without a measurement show no estimate. */
-const WITHDRAWAL_MIN: Record<string, number> = {
-  "ARC-TESTNET":      1,
-  "BASE-SEPOLIA":     1,
-  "ARB-SEPOLIA":      1,
-  "OP-SEPOLIA":       1,
-  "MATIC-AMOY":       1,
-  "AVAX-FUJI":        1,
-  "UNICHAIN-SEPOLIA": 1,
-  "SOL-DEVNET":       1,
+/** Chains without a measurement show no estimate. */
+const WITHDRAWAL: Record<string, string> = {
+  "ARC-TESTNET":      "~1 min",
+  "BASE-SEPOLIA":     "~1 min",
+  "ARB-SEPOLIA":      "~1 min",
+  "OP-SEPOLIA":       "~1 min",
+  "MATIC-AMOY":       "~1 min",
+  "AVAX-FUJI":        "~1 min",
+  "UNICHAIN-SEPOLIA": "~1 min",
+  "SOL-DEVNET":       "~1 min",
 };
 
-/** Deposits appear on the dashboard (as pending) within this many seconds. */
-export const DEPOSIT_SHOWS_UP = "Within 30 seconds";
-
-const about = (min: number | undefined) => (min ? `About ${min} min` : null);
-
-export const depositCreditTime   = (chainKey: string) => about(DEPOSIT_MIN[chainKey]);
-export const withdrawalArriveTime = (chainKey: string) => about(WITHDRAWAL_MIN[chainKey]);
+export const depositArrival    = (chainKey: string) => DEPOSIT[chainKey]?.arrival ?? null;
+export const depositCompletion = (chainKey: string) => DEPOSIT[chainKey]?.completion ?? null;
+export const withdrawalTime    = (chainKey: string) => WITHDRAWAL[chainKey] ?? null;

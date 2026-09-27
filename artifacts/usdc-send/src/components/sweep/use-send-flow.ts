@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { API_BASE } from "@/lib/api";
 import { authHeaders, EVM_ADDR_RE, SOL_ADDR_RE, WITHDRAWAL_CHAINS, type WithdrawalChain } from "@/lib/wallet";
 import { errorMessage, fmtUsd, shortAddr } from "./ui";
-import { withdrawalArriveTime } from "@/lib/transfer-times";
+import { withdrawalTime } from "@/lib/transfer-times";
 import { biometricError, getApproval, useBiometricApproval, BIOMETRIC_NAME } from "@/lib/biometric";
 
 // Send logic shared by the mobile Send screen and the desktop "Sweep money" panel:
@@ -93,8 +93,8 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
   const hint    = err ? (touched ? err : "") : "Ready to sweep";
 
   // Measured per chain (lib/transfer-times.ts); none shown where we haven't measured.
-  const arrives = usd ? null : withdrawalArriveTime(chain.key);
-  const arrivesRow = arrives ? [{ k: "Arrives", v: arrives }] : [];
+  const eta     = usd ? null : withdrawalTime(chain.key);
+  const arrivesRow = eta ? [{ k: "Estimated time", v: eta }] : [];
 
   const summary = usd
     ? [
@@ -103,7 +103,7 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
         { k: "They get", v: a ? fmtUsd(a) : "—" },
       ]
     : [
-        { k: "Network fee", v: fmtUsd(chain.platformFee) },
+        { k: "Platform fee", v: fmtUsd(chain.platformFee) },
         { k: "Minimum",     v: fmtUsd(chain.minWithdrawal) },
         { k: "Deducted",    v: a ? fmtUsd(a) : "—" },
         { k: "They get",    v: net ? `${net.toFixed(2)} USDC` : "—" },
@@ -115,7 +115,7 @@ export function useSendFlow({ available, userEmail, hasTransactionPassword, with
     : [
         { k: "Network",     v: chain.label },
         { k: "Address",     v: shortAddr(to) },
-        { k: "Network fee", v: fmtUsd(chain.platformFee) },
+        { k: "Platform fee", v: fmtUsd(chain.platformFee) },
         { k: "They get",    v: `${net.toFixed(2)} USDC` },
         ...arrivesRow,
       ];
