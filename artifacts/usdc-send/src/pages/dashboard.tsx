@@ -20,6 +20,7 @@ import type { FullBalance } from "@/lib/wallet";
 import { takeOpenFund, takePayTo } from "@/lib/pay-qr";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/settings/settings-section";
+import { forgetUnless2fa } from "@/lib/biometric";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -165,6 +166,12 @@ export default function Dashboard() {
     if (!isUserLoading && isUserError) setLocation("/login");
   }, [isUserLoading, isUserError, setLocation]);
 
+  // Face ID / fingerprint needs 2FA: without it, this device's passkey is gone server-side too.
+  const twoFactorOn = (user as any)?.twoFactorEnabled;
+  useEffect(() => {
+    if (user) forgetUnless2fa(!!twoFactorOn);
+  }, [user, twoFactorOn]);
+
   if (isUserLoading || !user) return <AppSplash />;
 
   if (user && !(user as any).emailVerified) {
@@ -185,7 +192,7 @@ export default function Dashboard() {
   };
 
   const shell: DashboardShellProps = {
-    user: { name: user.name, email: user.email, hasTransactionPassword: hasTxnPwd, circleWalletAddress: circleWallet },
+    user: { name: user.name, email: user.email, hasTransactionPassword: hasTxnPwd, circleWalletAddress: circleWallet, twoFactorEnabled: !!(user as any).twoFactorEnabled },
     balance: bal,
     depositAddresses,
     withdraw: withdrawCryptoMutation,

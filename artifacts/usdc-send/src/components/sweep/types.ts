@@ -4,7 +4,7 @@ import type { WithdrawMutation } from "./use-send-flow";
 
 /** Inputs shared by the mobile and desktop dashboard shells. */
 export interface DashboardShellProps {
-  user: { name: string; email: string; hasTransactionPassword: boolean; circleWalletAddress?: string | null };
+  user: { name: string; email: string; hasTransactionPassword: boolean; circleWalletAddress?: string | null; twoFactorEnabled: boolean };
   balance: FullBalance | undefined;
   depositAddresses: Record<string, string>;
   withdraw: WithdrawMutation;

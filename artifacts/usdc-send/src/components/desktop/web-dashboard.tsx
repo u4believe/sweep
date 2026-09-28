@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import type { UnifiedTx } from "@/lib/wallet";
 import {
   ActivityList, AnimatedUsd, Card, CopyIcon, OutlineButton, Segmented, StatusPill, TxDetails,
-  fmtUsd, historyFilter, txView, useHiddenBalance, whenLabel, type HistoryFilter,
+  WarnBadge, fmtUsd, historyFilter, txView, useHiddenBalance, whenLabel, type HistoryFilter,
 } from "@/components/sweep/ui";
 import { AddMoney } from "@/components/sweep/deposit-addresses";
 import { useDashboardData, type HistoryState } from "@/components/sweep/use-dashboard-data";
@@ -85,7 +85,7 @@ export function WebDashboard({ user, balance, depositAddresses, withdraw, onBala
           <NavItem label="P2P" soon />
           <NavItem label="Subscriptions" count={count(subsActive)} active={page === "subs"} onClick={() => setPage("subs")} />
           <div className="h-3" />
-          <NavItem label="Settings" active={page === "settings"} onClick={() => setPage("settings")} />
+          <NavItem label="Settings" warn={!user.twoFactorEnabled} active={page === "settings"} onClick={() => setPage("settings")} />
           <NavItem label="Support" active={page === "support"} onClick={() => setPage("support")} />
 
           <div className="mt-auto pt-4 space-y-2">
@@ -196,9 +196,11 @@ export function WebDashboard({ user, balance, depositAddresses, withdraw, onBala
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
-function NavItem({ label, count, active, soon, onClick }: {
+function NavItem({ label, count, warn, active, soon, onClick }: {
   label: string;
   count?: string;
+  /** Warning sign (two-factor authentication is off). */
+  warn?: boolean;
   active?: boolean;
   soon?: boolean;
   onClick?: () => void;
@@ -216,6 +218,7 @@ function NavItem({ label, count, active, soon, onClick }: {
       className={cn("flex items-center justify-between px-3 py-[11px] rounded-xl text-sm font-bold text-left transition-colors",
         active ? "bg-(--sw-tint) text-(--sw-blue)" : "text-(--sw-label) hover:bg-[#f3f5fb]")}>
       <span>{label}</span>
+      {warn && <WarnBadge />}
       {count && <span className="text-xs font-semibold text-(--sw-faint)">{count}</span>}
     </button>
   );

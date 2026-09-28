@@ -99,6 +99,31 @@ export async function biometricLogin(ticket: string, optionsJSON: any): Promise<
   return json;
 }
 
+/** Google sign-in with 2FA: Face ID / fingerprint options for this sign-in, or null (use the code). */
+export async function googleBiometricOptions(challenge: string): Promise<any | null> {
+  if (!enrolledCredentialId()) return null;
+  const res = await fetch(`${API_BASE}/api/auth/2fa/login-biometric/options`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ challenge }),
+  }).catch(() => null);
+  return res?.ok ? res.json() : null;
+}
+
+/** Finish that Google sign-in with Face ID / fingerprint. */
+export async function googleBiometricLogin(challenge: string, optionsJSON: any): Promise<{ token: string }> {
+  const response = await startAuthentication({ optionsJSON });
+  const res  = await fetch(`${API_BASE}/api/auth/2fa/verify-login-biometric`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ challenge, response }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(json.message ?? "Not recognised"), { code: json.code });
+  return json;
+}
+
+/** Face ID / fingerprint needs 2FA: forget this device's passkey when the account has none. */
+export function forgetUnless2fa(twoFactorEnabled: boolean) {
+  if (!twoFactorEnabled) rememberCredential(null);
+}
+
 /**
  * For approval screens: Face ID / fingerprint when this device is set up, with
  * "Use password instead" as the fallback.

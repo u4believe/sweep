@@ -33,7 +33,7 @@
 import { Router, type IRouter } from "express";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
-import { db, usersTable, otpCodesTable, subscriptionPassportsTable } from "@workspace/db";
+import { db, usersTable, otpCodesTable, subscriptionPassportsTable, webauthnCredentialsTable } from "@workspace/db";
 import { hashEmail } from "../lib/escrow.js";
 import { eq, and, gt, ne, sql } from "drizzle-orm";
 import { endAllSessions, requireAuth, requireEmailVerified, sessionToken } from "../lib/auth.js";
@@ -708,7 +708,9 @@ router.post("/2fa/disable", requireAuth, async (req, res) => {
       totpEnabledAt: null,
       totpLastStep: null,
     }).where(eq(usersTable.id, userId));
-    logger.info({ userId }, "[security] Authenticator 2FA disabled");
+    // Face ID / fingerprint requires 2FA, so it goes too.
+    await db.delete(webauthnCredentialsTable).where(eq(webauthnCredentialsTable.userId, userId));
+    logger.info({ userId }, "[security] Authenticator 2FA disabled (and Face ID / fingerprint removed)");
     res.json({ success: true, message: "Two-factor authentication is off." });
   } catch (err: any) {
     if (otpErrorResponse(res, err)) return;

@@ -54,6 +54,14 @@ export function readLoginChallenge(token: unknown): { userId: number; jti: strin
   return { userId: payload.userId, jti: payload.jti };
 }
 
+/** Checks a challenge without using up one of its attempts (for fetching Face ID options). */
+export function peekLoginChallenge(token: unknown): { userId: number; jti: string } {
+  if (typeof token !== "string") throw new Error("Missing challenge");
+  const payload = verifyScopedToken<{ userId: number }>(CHALLENGE_SCOPE, token);
+  if ((attempts.get(payload.jti)?.count ?? 0) >= MAX_CHALLENGE_ATTEMPTS) throw new Error("Too many attempts — please sign in again");
+  return { userId: payload.userId, jti: payload.jti };
+}
+
 export function consumeLoginChallenge(jti: string): void {
   attempts.set(jti, { count: MAX_CHALLENGE_ATTEMPTS, expiresAt: Date.now() + 5 * 60_000 });
 }

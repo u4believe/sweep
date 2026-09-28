@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 import { API_BASE } from "@/lib/api";
 import { finishSignIn, TWO_FACTOR_CHALLENGE_KEY, codeAlreadySentMessage, SPAM_HINT } from "@/lib/auth-session";
-import { BIOMETRIC_NAME, biometricError, biometricLogin } from "@/lib/biometric";
+import { BIOMETRIC_NAME, biometricError, biometricLogin, enrolledCredentialId, googleBiometricLogin, googleBiometricOptions } from "@/lib/biometric";
 import { GoogleSignInButton, useAuthConfig, type GoogleAuthResult } from "@/components/auth/google-sign-in";
 import { TotpInput } from "@/components/auth/totp-input";
 import {
@@ -39,6 +39,9 @@ export default function Login() {
   const [codeNotice, setCodeNotice]   = useState("");
   // Password was right and this account has Face ID / fingerprint: finish with it
   const [bioTicket, setBioTicket]     = useState<{ ticket: string; options: any } | null>(null);
+  // Google sign-in with 2FA on a device with Face ID / fingerprint: try that before the code
+  // undefined while checking; null = use the authenticator code
+  const [googleBio, setGoogleBio]     = useState<any | null | undefined>(undefined);
   const [error, setError]             = useState("");
 
   const searchParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
@@ -52,6 +55,14 @@ export default function Login() {
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const otpRefs       = useRef<(HTMLInputElement | null)[]>([]);
 
+  // Google 2FA step: offer Face ID / fingerprint first when this device has it set up
+  useEffect(() => {
+    if (step !== "google-2fa" || !challenge) return;
+    let live = true;
+    googleBiometricOptions(challenge).then((o) => { if (live) setGoogleBio(o); });
+    return () => { live = false; };
+  }, [step, challenge]);
+
   useEffect(() => {
     if (step === "otp") {
       setTimeout(() => otpRefs.current[0]?.focus(), 50);
@@ -64,12 +75,29 @@ export default function Login() {
     setOtp(["", "", "", "", "", ""]);
     setTotp("");
     setChallenge(null);
+    setGoogleBio(null);
     try { sessionStorage.removeItem(TWO_FACTOR_CHALLENGE_KEY); } catch { /* storage unavailable */ }
+  };
+
+  const handleGoogleBiometric = async () => {
+    if (!challenge || !googleBio) return;
+    setError(""); setIsPending(true);
+    try {
+      const { token } = await googleBiometricLogin(challenge, googleBio);
+      finishSignIn(token, queryClient);
+    } catch (err: any) {
+      setIsPending(false);
+      if (err?.code === "CHALLENGE_INVALID") { backToCredentials(err.message); return; }
+      setGoogleBio(null);
+      setTotp("");
+      setError(`${err?.code === "BIOMETRIC_FAILED" ? `${BIOMETRIC_NAME} wasn't recognised.` : biometricError(err)} Enter your authenticator code instead.`);
+    }
   };
 
   const handleGoogleResult = (r: GoogleAuthResult) => {
     if (r.kind === "session") { finishSignIn(r.token, queryClient); return; }
     setChallenge(r.challenge);
+    setGoogleBio(undefined);
     setTotp("");
     setError("");
     setStep("google-2fa");
@@ -125,6 +153,8 @@ export default function Login() {
         setUserId(json.userId);
         setRequiresTotp(!!json.requiresTotp);
         setSentEmail(email.toLowerCase().trim());
+        // Face ID / fingerprint lives on the device it was set up on — elsewhere go straight to the codes
+        if (!enrolledCredentialId()) { await fallbackToCode(null, json.ticket); return; }
         setBioTicket({ ticket: json.ticket, options: json.options });
         setStep("biometric");
         return;
@@ -171,12 +201,12 @@ export default function Login() {
   };
 
   // ── Face ID / fingerprint ─────────────────────────────────────────────────
-  const fallbackToCode = async (reason: string | null) => {
-    if (!bioTicket) return;
+  const fallbackToCode = async (reason: string | null, ticket = bioTicket?.ticket) => {
+    if (!ticket) return;
     setIsPending(true);
     try {
       const res  = await fetch(`${API_BASE}/api/auth/login/code`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket: bioTicket.ticket }),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket }),
       });
       const json = await res.json().catch(() => ({}));
       setBioTicket(null);
@@ -327,7 +357,7 @@ export default function Login() {
                 {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : `Continue with ${BIOMETRIC_NAME}`}
               </button>
               <button type="button" onClick={() => fallbackToCode(null)} disabled={isPending}
-                className="self-center text-sm font-bold text-(--sw-blue) disabled:opacity-50">Use email code instead</button>
+                className="self-center text-sm font-bold text-(--sw-blue) disabled:opacity-50">Use email and authenticator codes instead</button>
               {back}
             </div>
           )}
@@ -381,7 +411,24 @@ export default function Login() {
             </form>
           )}
 
-          {step === "google-2fa" && (
+          {step === "google-2fa" && googleBio && (
+            <div className="flex flex-col gap-[18px]">
+              <NightTitle title="Confirm it's you" sub={`Use ${BIOMETRIC_NAME} to finish signing in with Google.`} />
+              {errorBox}
+              <button type="button" onClick={handleGoogleBiometric} disabled={isPending} className={authPrimary} autoFocus>
+                {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : `Continue with ${BIOMETRIC_NAME}`}
+              </button>
+              <button type="button" onClick={() => { setGoogleBio(null); setError(""); }} disabled={isPending}
+                className="self-center text-sm font-bold text-(--sw-blue) disabled:opacity-50">Use authenticator code instead</button>
+              {back}
+            </div>
+          )}
+
+          {step === "google-2fa" && googleBio === undefined && enrolledCredentialId() && (
+            <div className="grid place-items-center py-10"><Loader2 className="w-6 h-6 animate-spin text-(--sw-blue)" /></div>
+          )}
+
+          {step === "google-2fa" && (googleBio === null || (googleBio === undefined && !enrolledCredentialId())) && (
             <form onSubmit={handleGoogle2fa} className="flex flex-col gap-3">
               <NightTitle title="Two-factor authentication" sub="Enter the 6-digit code from your authenticator app to finish signing in with Google." />
               {errorBox}

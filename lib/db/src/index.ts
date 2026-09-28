@@ -54,6 +54,9 @@ export async function runStartupMigrations(): Promise<void> {
         last_used_at  timestamp
       );
       CREATE INDEX IF NOT EXISTS webauthn_credentials_user_idx ON webauthn_credentials(user_id);
+      -- Face ID / fingerprint requires 2FA: accounts without it lose their passkeys.
+      DELETE FROM webauthn_credentials w USING users u
+       WHERE w.user_id = u.id AND (u.totp_secret_enc IS NULL OR u.totp_enabled_at IS NULL);
     `);
 
     await client.query(`

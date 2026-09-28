@@ -4,7 +4,7 @@ import { db, usersTable, otpCodesTable, escrowsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
 import { endAllSessions, requireAuth, sessionToken } from "../lib/auth.js";
 import { googleClientId, verifyGoogleCredential } from "../lib/google.js";
-import { checkUserTotp, consumeLoginChallenge, hasTotp, issueLoginChallenge, readLoginChallenge } from "../lib/two-factor.js";
+import { checkUserTotp, consumeLoginChallenge, hasTotp, issueLoginChallenge, peekLoginChallenge, readLoginChallenge } from "../lib/two-factor.js";
 import { isTotpConfigured } from "../lib/totp.js";
 import { hashEmail } from "../lib/escrow.js";
 import { claimPendingEscrows } from "../lib/ledger.js";
@@ -319,10 +319,10 @@ router.post("/login", async (req, res) => {
       })();
     }
 
-    // Face ID / fingerprint set up? Offer it instead of the codes; the email code
-    // is only sent if the user falls back (POST /login/code).
+    // Face ID / fingerprint set up (it requires 2FA)? Offer it instead of the codes;
+    // the email + authenticator codes are only needed if the user falls back (POST /login/code).
     const rp = rpFor(req.headers.origin);
-    if (rp && (await listCredentials(user.id)).length) {
+    if (rp && hasTotp(user) && (await listCredentials(user.id)).length) {
       const ticket  = issueLoginTicket(user.id);
       const options = await authenticationOptions(user.id, `login:${ticket}`, rp);
       res.json({ requiresBiometric: true, ticket, options, userId: user.id, requiresTotp: hasTotp(user) });
@@ -348,9 +348,13 @@ router.post("/login/biometric", async (req, res) => {
       res.status(401).json({ error: "Not recognised", code: "BIOMETRIC_FAILED", message: "Face ID / fingerprint wasn't recognised. Use the email code instead." });
       return;
     }
-    readLoginTicket(ticket, true);
     const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
     if (!user) { res.status(401).json({ error: "Unauthorized", message: "Please log in again." }); return; }
+    if (!hasTotp(user)) {
+      res.status(401).json({ error: "Not available", code: "BIOMETRIC_FAILED", message: "Face ID / fingerprint needs two-factor authentication. Use the email code instead." });
+      return;
+    }
+    readLoginTicket(ticket, true);
     req.log.info({ userId }, "[auth] Logged in with Face ID / fingerprint");
     res.json(sessionResponse(user));
   } catch (error: any) {
@@ -612,6 +616,55 @@ router.post("/2fa/verify-login", async (req, res) => {
     res.json(sessionResponse(user));
   } catch (error: any) {
     req.log.error({ err: error }, "2FA login error");
+    res.status(500).json({ error: "Internal server error", message: error.message });
+  }
+});
+
+// ─── POST /api/auth/2fa/login-biometric/options ──────────────────────────────
+// Google sign-in on an account with 2FA + Face ID / fingerprint: the challenge for
+// the device's passkey. 404 means use the authenticator code.
+router.post("/2fa/login-biometric/options", async (req, res) => {
+  try {
+    let ch;
+    try {
+      ch = peekLoginChallenge(req.body?.challenge);
+    } catch {
+      res.status(401).json({ error: "Unauthorized", code: "CHALLENGE_INVALID", message: "This sign-in has expired. Please sign in again." });
+      return;
+    }
+    const rp = rpFor(req.headers.origin);
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, ch.userId)).limit(1);
+    const options = rp && user && hasTotp(user) ? await authenticationOptions(user.id, `google-login:${ch.jti}`, rp) : null;
+    if (!options) { res.status(404).json({ error: "Not set up", message: "Use your authenticator code." }); return; }
+    res.json(options);
+  } catch (error: any) {
+    req.log.error({ err: error }, "Google biometric options error");
+    res.status(500).json({ error: "Internal server error", message: error.message });
+  }
+});
+
+// ─── POST /api/auth/2fa/verify-login-biometric ───────────────────────────────
+// Completes that Google sign-in with Face ID / fingerprint instead of the code.
+router.post("/2fa/verify-login-biometric", async (req, res) => {
+  try {
+    const { challenge, response } = req.body ?? {};
+    let ch;
+    try {
+      ch = readLoginChallenge(challenge);
+    } catch (e: any) {
+      res.status(401).json({ error: "Unauthorized", code: "CHALLENGE_INVALID", message: e?.message?.startsWith("Too many") ? e.message : "This sign-in has expired. Please sign in again." });
+      return;
+    }
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, ch.userId)).limit(1);
+    if (!user || !hasTotp(user) || !(await verifyAuthentication(user.id, `google-login:${ch.jti}`, response))) {
+      res.status(401).json({ error: "Not recognised", code: "BIOMETRIC_FAILED", message: "Face ID / fingerprint wasn't recognised. Use your authenticator code instead." });
+      return;
+    }
+    consumeLoginChallenge(ch.jti);
+    req.log.info({ userId: user.id }, "[auth] Google sign-in finished with Face ID / fingerprint");
+    res.json(sessionResponse(user));
+  } catch (error: any) {
+    req.log.error({ err: error }, "Google biometric login error");
     res.status(500).json({ error: "Internal server error", message: error.message });
   }
 });

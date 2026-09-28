@@ -345,7 +345,17 @@ export function SummaryRows({ rows, className }: { rows: Array<{ k: string; v: R
   );
 }
 
-export function MenuGroup({ rows }: { rows: Array<{ k: string; v?: string; onClick: () => void }> }) {
+/** Small amber "!" shown on Me / Settings until two-factor authentication is on. */
+export function WarnBadge({ className }: { className?: string }) {
+  return (
+    <span role="img" aria-label="Two-factor authentication is off" title="Turn on two-factor authentication"
+      className={cn("inline-grid place-items-center w-[18px] h-[18px] rounded-full bg-[#f79009] text-white text-[11px] font-extrabold leading-none shrink-0", className)}>
+      !
+    </span>
+  );
+}
+
+export function MenuGroup({ rows }: { rows: Array<{ k: string; v?: string; warn?: boolean; onClick: () => void }> }) {
   return (
     <Card className="rounded-[20px] overflow-hidden">
       {rows.map((r, i) => (
@@ -353,6 +363,7 @@ export function MenuGroup({ rows }: { rows: Array<{ k: string; v?: string; onCli
           className={cn("w-full flex items-center gap-2.5 px-[18px] py-[17px] text-left hover:bg-[#f8f9fc] transition-colors",
             i > 0 && "border-t border-[#f0f2f6]")}>
           <span className="flex-1 font-semibold text-base">{r.k}</span>
+          {r.warn && <WarnBadge />}
           {r.v && <span className="text-[13px] font-medium text-(--sw-muted)">{r.v}</span>}
           <ChevronRight className="w-4 h-4 text-(--sw-faint)" />
         </button>

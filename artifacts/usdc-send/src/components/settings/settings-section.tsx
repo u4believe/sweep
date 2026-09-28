@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BIOMETRIC_NAME, biometricError, enrolledCredentialId, forgetIfMissing, listDevices, registerThisDevice, removeDevice, useBiometricSupported } from "@/lib/biometric";
+import { BIOMETRIC_NAME, biometricError, enrolledCredentialId, forgetIfMissing, forgetUnless2fa, listDevices, registerThisDevice, removeDevice, useBiometricSupported } from "@/lib/biometric";
 import QRCode from "qrcode";
-import { Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { cn, secretInputProps, secretTextProps } from "@/lib/utils";
 import { API_BASE } from "@/lib/api";
 import { authHeaders } from "@/lib/wallet";
@@ -184,7 +184,11 @@ export function SettingsSection({ security, account, onUpdated, onLogout, securi
   });
   const tfaOff = () => run(async () => {
     try { await api("/2fa/disable", { otp, ...(usePak ? { pak: pak.trim() } : { totp }) }); } catch (e) { setTotp(""); throw e; }
-    done("Two-factor authentication is off.");
+    // Face ID / fingerprint needs 2FA — the server removed it, so forget it here too
+    const hadBiometric = (devices.data ?? []).length > 0;
+    forgetUnless2fa(false);
+    await devices.refetch();
+    done(hadBiometric ? `Two-factor authentication is off, and so is ${BIOMETRIC_NAME}.` : "Two-factor authentication is off.");
   });
 
   const deleteRequest = () => run(async () => {
@@ -347,7 +351,7 @@ export function SettingsSection({ security, account, onUpdated, onLogout, securi
           )}
           {view === "tfa-off" && (
             <>
-              <StepTitle title="Turn off two-factor" sub="Confirm with the code we emailed you and your authenticator app." />
+              <StepTitle title="Turn off two-factor" sub={`Confirm with the code we emailed you and your authenticator app.${(devices.data ?? []).length ? ` This also turns off ${BIOMETRIC_NAME}, which needs two-factor.` : ""}`} />
               {noticeBox}{errorBox}
               <CodeField id="set-otp" label="Email code" value={otp} onChange={setOtp} />
               {usePak ? keyField() : <CodeField id="set-totp" label="Authenticator code" value={totp} onChange={setTotp} />}
@@ -416,6 +420,7 @@ export function SettingsSection({ security, account, onUpdated, onLogout, securi
           )}
         </>} />
       <Row title="Two-factor authentication"
+        tag={{ text: "Recommended", tone: "tint" }}
         sub={security.twoFactorEnabled ? "Authenticator code on sign-in, password changes and new plans" : totpUnavailable ? "Not available right now" : "Add an authenticator-app code when you sign in"}
         action={totpUnavailable && !security.twoFactorEnabled ? null
           : <Switch on={!!security.twoFactorEnabled} busy={busy} label="Two-factor authentication"
@@ -423,8 +428,11 @@ export function SettingsSection({ security, account, onUpdated, onLogout, securi
       <Row title={BIOMETRIC_NAME}
         sub={bioSupported === false
           ? "Not available on this device or browser"
+          : !security.twoFactorEnabled ? "Turn on two-factor authentication first"
           : thisDevice ? "On for this device — log in and approve payments without codes or passwords" : "Log in and approve payments with this device's Face ID or fingerprint"}
-        action={bioSupported ? <Switch on={!!thisDevice} busy={busy || devices.isLoading} label={BIOMETRIC_NAME} onToggle={toggleBiometric} /> : null}
+        action={bioSupported
+          ? <Switch on={!!thisDevice && !!security.twoFactorEnabled} busy={busy || devices.isLoading || !security.twoFactorEnabled} label={BIOMETRIC_NAME} onToggle={toggleBiometric} />
+          : null}
         footer={otherDevices.length > 0 && (
           <p className="text-xs text-(--sw-faint)">
             Also on {otherDevices.length} other device{otherDevices.length === 1 ? "" : "s"}.{" "}
@@ -459,6 +467,20 @@ export function SettingsSection({ security, account, onUpdated, onLogout, securi
         </p>
       )}
       {error && <p role="alert" className="rounded-2xl bg-[#fef3f2] text-[#b42318] px-4 py-3 text-sm font-medium">{error}</p>}
+      {!security.twoFactorEnabled && !totpUnavailable && (
+        <div role="note" className="rounded-2xl bg-[#fffaeb] border border-[#fedf89] px-4 py-3.5 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-[#dc6803] shrink-0 mt-0.5" aria-hidden />
+          <div className="flex-1 min-w-0 flex flex-col gap-2">
+            <span className="text-sm text-[#93370d]">
+              <strong className="font-bold">Turn on two-factor authentication</strong> to protect your account. It's also needed for {BIOMETRIC_NAME}.
+            </span>
+            <button type="button" onClick={tfaStart} disabled={busy}
+              className="self-start text-[13px] font-bold text-white bg-[#dc6803] hover:bg-[#b54708] px-3.5 py-2 rounded-xl disabled:opacity-60">
+              Turn on two-factor
+            </button>
+          </div>
+        </div>
+      )}
       <div className={cn("grid grid-cols-1 gap-5 items-start", !securityOnly && account && "xl:grid-cols-2")}>
         {securityGroup}
         {!securityOnly && accountGroup}
@@ -478,17 +500,20 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-type Tone = "ok" | "warn" | "muted";
-const TONE: Record<Tone, string> = { ok: "text-[#067647] bg-[#ecfdf3]", warn: "text-[#b54708] bg-[#fffaeb]", muted: "text-[#475467] bg-[#f2f4f7]" };
+type Tone = "ok" | "warn" | "muted" | "tint";
+const TONE: Record<Tone, string> = { ok: "text-[#067647] bg-[#ecfdf3]", warn: "text-[#b54708] bg-[#fffaeb]", muted: "text-[#475467] bg-[#f2f4f7]", tint: "text-(--sw-blue) bg-(--sw-tint)" };
 
-function Row({ title, sub, badge, action, footer, titleClass }: {
-  title: string; sub?: ReactNode; badge?: { text: string; tone: Tone }; action?: ReactNode; footer?: ReactNode; titleClass?: string;
+function Row({ title, tag, sub, badge, action, footer, titleClass }: {
+  title: string; tag?: { text: string; tone: Tone }; sub?: ReactNode; badge?: { text: string; tone: Tone }; action?: ReactNode; footer?: ReactNode; titleClass?: string;
 }) {
   return (
     <div className="px-[18px] sm:px-5 py-4 flex flex-col gap-1.5">
       <div className="flex items-center gap-3">
         <span className="flex flex-col flex-1 min-w-0 gap-0.5">
-          <span className={cn("font-bold text-[15px]", titleClass)}>{title}</span>
+          <span className={cn("font-bold text-[15px]", titleClass)}>
+            {title}
+            {tag && <span className={cn("ml-2 align-[2px] text-[11px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap", TONE[tag.tone])}>{tag.text}</span>}
+          </span>
           {sub && <span className="text-[13px] text-(--sw-muted) min-w-0">{sub}</span>}
         </span>
         {badge && <span className={cn("text-xs font-bold px-2.5 py-1 rounded-full whitespace-nowrap shrink-0", TONE[badge.tone])}>{badge.text}</span>}

@@ -4,7 +4,7 @@ import { History, LayoutGrid, QrCode, Repeat, ScanLine, Send, Settings, Wallet }
 import { cn } from "@/lib/utils";
 import type { FullBalance, UnifiedTx } from "@/lib/wallet";
 import {
-  ActivityList, Card, CopyIcon, MenuGroup, OutlineButton, ScreenHeader, Segmented, fmtUsd, historyFilter, useHiddenBalance,
+  ActivityList, Card, CopyIcon, MenuGroup, OutlineButton, ScreenHeader, Segmented, WarnBadge, fmtUsd, historyFilter, useHiddenBalance,
   type HistoryFilter,
 } from "@/components/sweep/ui";
 import { AddMoney } from "@/components/sweep/deposit-addresses";
@@ -141,9 +141,10 @@ export function MobileDashboard({ user, balance, depositAddresses, withdraw, onB
             const active = TAB_OF[screen] === t;
             return (
               <button key={t} type="button" onClick={() => setScreen(t)} aria-current={active ? "page" : undefined}
-                className={cn("py-2.5 rounded-xl text-[13px] font-bold transition-colors",
+                className={cn("py-2.5 rounded-xl text-[13px] font-bold transition-colors flex items-center justify-center gap-1",
                   active ? "bg-(--sw-tint) text-(--sw-blue)" : "text-(--sw-muted)")}>
                 {label}
+                {t === "me" && !user.twoFactorEnabled && <WarnBadge className="w-4 h-4 text-[10px]" />}
               </button>
             );
           })}
@@ -332,7 +333,7 @@ function MeScreen({ user, recurringActive, subsActive, go, onLogout, onMyQr }: {
       ]} />
       <MenuGroup rows={[
         { k: "Contact support", onClick: () => go("support") },
-        { k: "Settings", v: "Security", onClick: () => go("settings") },
+        { k: "Settings", v: user.twoFactorEnabled ? "Security" : "Turn on 2FA", warn: !user.twoFactorEnabled, onClick: () => go("settings") },
       ]} />
 
       <button type="button" onClick={onLogout}
